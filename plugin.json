@@ -1,0 +1,9 @@
+{
+  "name": "writing-assistant",
+  "description": "AI-powered split-pane writing editor with context and LLM assistance",
+  "type": "webview",
+  "cmd": "node",
+  "args": ["index.js"],
+  "port": 3456,
+  "triggers": ["/write"]
+}

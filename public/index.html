@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Writing Assistant</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+
+    <div class="pane" id="pane-context">
+      <div class="pane-header">
+        Context
+        <button class="pane-collapse-btn" id="context-toggle" title="Collapse">←</button>
+      </div>
+      <textarea
+        id="context"
+        placeholder="Paste your reference material, notes, sources…"
+        spellcheck="false"
+      ></textarea>
+    </div>
+
+    <div class="divider" id="divider"></div>
+
+    <!--
+      The working pane uses CodeMirror 6 instead of a textarea.
+      #editor-wrapper is where CM6 mounts the .cm-editor element.
+      Ghost text suggestions appear as non-editable inline spans
+      right after the cursor — press Tab to accept, Escape to dismiss.
+    -->
+    <div class="pane" id="pane-work">
+      <div class="pane-header">
+        Working Text
+        <span class="agent-status" id="agent-status">Pi</span>
+        <button class="settings-open" id="settings-open" title="Model and access" aria-label="Model and access">⚙</button>
+      </div>
+      <div id="editor-wrapper"></div>
+    </div>
+
+  </div>
+
+  <!-- Selection popover (rewrite variants) -->
+  <div id="popover" class="popover hidden">
+    <input
+      type="text"
+      id="popover-input"
+      placeholder="What should change? (Enter to generate)"
+      autocomplete="off"
+    >
+    <div id="popover-variants" class="popover-variants"></div>
+  </div>
+
+  <dialog id="settings-dialog" class="settings-dialog">
+    <form method="dialog" id="settings-form">
+      <header>
+        <div>
+          <span>Pi</span>
+          <h2>Model and access</h2>
+        </div>
+        <button value="cancel" class="dialog-close" aria-label="Close">×</button>
+      </header>
+
+      <section>
+        <h3>Default model</h3>
+        <div class="settings-grid">
+          <label>Provider<select id="agent-provider"></select></label>
+          <label>Model<select id="agent-model"></select></label>
+          <label>Reasoning<select id="agent-thinking"></select></label>
+        </div>
+        <p class="settings-hint" id="model-hint"></p>
+      </section>
+
+      <section>
+        <h3>API keys</h3>
+        <div class="key-entry">
+          <select id="key-provider" aria-label="API key provider"></select>
+          <input id="api-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false">
+          <button type="button" id="key-add">Add</button>
+        </div>
+        <div class="configured-keys" id="configured-keys"></div>
+        <p class="settings-error" id="settings-error" role="alert"></p>
+      </section>
+
+      <footer>
+        <button value="cancel">Cancel</button>
+        <button value="default" id="settings-save" class="primary">Save</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

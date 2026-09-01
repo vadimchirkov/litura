@@ -1,0 +1,17 @@
+{
+  "name": "writing-assistant",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "build": "esbuild src/app.js --bundle --outfile=public/app.js --format=iife",
+    "check": "node --check index.js && node --check pi.js && npm run build && node selfcheck.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "codemirror": "^6.0.1",
+    "esbuild": "^0.25.0"
+  }
+}
