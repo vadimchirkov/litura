@@ -1,6 +1,8 @@
 {
-  "name": "writing-assistant",
+  "name": "litura",
   "version": "1.0.0",
+  "description": "A local AI-assisted editor for sharper, more human writing",
+  "license": "MIT",
   "type": "module",
   "main": "index.js",
   "scripts": {

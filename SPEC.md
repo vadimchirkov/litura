@@ -1,4 +1,4 @@
-# Writing Assistant — Spec
+# Litura — Spec
 
 ## Overview
 
@@ -101,7 +101,7 @@ Standalone local web app. The left pane holds **context** (reference material, n
 ## File Structure
 
 ```
-writing-assistant/
+litura/
 ├── SPEC.md          ← this file
 ├── README.md
 ├── package.json

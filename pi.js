@@ -103,9 +103,11 @@ async function resolveModel(selection) {
   return { rt, model, selection: selectionFor(model) };
 }
 
-const request = (systemPrompt, userPrompt) => ({
+// Either a single user turn or a whole transcript — the chat needs the latter.
+const request = (systemPrompt, userPrompt, history) => ({
   systemPrompt,
-  messages: [{ role: 'user', content: userPrompt, timestamp: Date.now() }],
+  messages: (history ?? [{ role: 'user', content: userPrompt }])
+    .map(message => ({ role: message.role, content: message.content, timestamp: Date.now() })),
 });
 
 const options = (selection, maxTokens, signal) => ({
@@ -127,11 +129,11 @@ export async function completeText({ systemPrompt, userPrompt, selection, maxTok
   return response.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('').trim();
 }
 
-export async function streamText({ systemPrompt, userPrompt, selection, maxTokens = 2000, signal, onText }) {
+export async function streamText({ systemPrompt, userPrompt, messages, selection, maxTokens = 2000, signal, onText }) {
   const resolved = await resolveModel(selection);
   const stream = resolved.rt.streamSimple(
     resolved.model,
-    request(systemPrompt, userPrompt),
+    request(systemPrompt, userPrompt, messages),
     options(resolved.selection, maxTokens, signal),
   );
   for await (const event of stream) {

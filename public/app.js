@@ -3883,25 +3883,25 @@
     given position.
     */
     static widget(spec) {
-      let side = Math.max(-1e4, Math.min(1e4, spec.side || 0)), block = !!spec.block;
-      side += block && !spec.inlineOrder ? side > 0 ? 3e8 : -4e8 : side > 0 ? 1e8 : -1e8;
-      return new PointDecoration(spec, side, side, block, spec.widget || null, false);
+      let side = Math.max(-1e4, Math.min(1e4, spec.side || 0)), block2 = !!spec.block;
+      side += block2 && !spec.inlineOrder ? side > 0 ? 3e8 : -4e8 : side > 0 ? 1e8 : -1e8;
+      return new PointDecoration(spec, side, side, block2, spec.widget || null, false);
     }
     /**
     Create a replace decoration which replaces the given range with
     a widget, or simply hides it.
     */
     static replace(spec) {
-      let block = !!spec.block, startSide, endSide;
+      let block2 = !!spec.block, startSide, endSide;
       if (spec.isBlockGap) {
         startSide = -5e8;
         endSide = 4e8;
       } else {
-        let { start, end } = getInclusive(spec, block);
-        startSide = (start ? block ? -3e8 : -1 : 5e8) - 1;
-        endSide = (end ? block ? 2e8 : 1 : -6e8) + 1;
+        let { start, end } = getInclusive(spec, block2);
+        startSide = (start ? block2 ? -3e8 : -1 : 5e8) - 1;
+        endSide = (end ? block2 ? 2e8 : 1 : -6e8) + 1;
       }
-      return new PointDecoration(spec, startSide, endSide, block, spec.widget || null, true);
+      return new PointDecoration(spec, startSide, endSide, block2, spec.widget || null, true);
     }
     /**
     Create a line decoration, which can add DOM attributes to the
@@ -3959,11 +3959,11 @@
   LineDecoration.prototype.mapMode = MapMode.TrackBefore;
   LineDecoration.prototype.point = true;
   var PointDecoration = class _PointDecoration extends Decoration {
-    constructor(spec, startSide, endSide, block, widget, isReplace) {
+    constructor(spec, startSide, endSide, block2, widget, isReplace) {
       super(startSide, endSide, widget, spec);
-      this.block = block;
+      this.block = block2;
       this.isReplace = isReplace;
-      this.mapMode = !block ? MapMode.TrackDel : startSide <= 0 ? MapMode.TrackBefore : MapMode.TrackAfter;
+      this.mapMode = !block2 ? MapMode.TrackDel : startSide <= 0 ? MapMode.TrackBefore : MapMode.TrackAfter;
     }
     // Only relevant when this.block == true
     get type() {
@@ -3984,13 +3984,13 @@
     }
   };
   PointDecoration.prototype.point = true;
-  function getInclusive(spec, block = false) {
+  function getInclusive(spec, block2 = false) {
     let { inclusiveStart: start, inclusiveEnd: end } = spec;
     if (start == null)
       start = spec.inclusive;
     if (end == null)
       end = spec.inclusive;
-    return { start: start !== null && start !== void 0 ? start : block, end: end !== null && end !== void 0 ? end : block };
+    return { start: start !== null && start !== void 0 ? start : block2, end: end !== null && end !== void 0 ? end : block2 };
   }
   function widgetsEq(a, b) {
     return a == b || !!(a && b && a.compare(b));
@@ -5528,11 +5528,11 @@
     coordsIn(pos, side) {
       return this.coordsInWidget(pos, side, false);
     }
-    coordsInWidget(pos, side, block) {
+    coordsInWidget(pos, side, block2) {
       let custom = this.widget.coordsAt(this.dom, pos, side);
       if (custom)
         return custom;
-      if (block) {
+      if (block2) {
         return flattenRect(this.dom.getBoundingClientRect(), this.length ? pos == 0 : side <= 0);
       } else {
         let rects = this.dom.getClientRects(), rect = null;
@@ -6988,15 +6988,15 @@
     }
     return EditorSelection.range(from + line.from, to + line.from);
   }
-  function posAtCoordsImprecise(view, contentRect, block, x, y) {
+  function posAtCoordsImprecise(view, contentRect, block2, x, y) {
     let into = Math.round((x - contentRect.left) * view.defaultCharacterWidth);
-    if (view.lineWrapping && block.height > view.defaultLineHeight * 1.5) {
+    if (view.lineWrapping && block2.height > view.defaultLineHeight * 1.5) {
       let textHeight = view.viewState.heightOracle.textHeight;
-      let line = Math.floor((y - block.top - (view.defaultLineHeight - textHeight) * 0.5) / textHeight);
+      let line = Math.floor((y - block2.top - (view.defaultLineHeight - textHeight) * 0.5) / textHeight);
       into += line * view.viewState.heightOracle.lineLength;
     }
-    let content2 = view.state.sliceDoc(block.from, block.to);
-    return block.from + findColumn(content2, into, view.state.tabSize);
+    let content2 = view.state.sliceDoc(block2.from, block2.to);
+    return block2.from + findColumn(content2, into, view.state.tabSize);
   }
   function blockAt(view, pos, side) {
     let line = view.lineBlockAt(pos);
@@ -7144,39 +7144,39 @@
   };
   function posAtCoords(view, coords, precise, scanY) {
     let content2 = view.contentDOM.getBoundingClientRect(), docTop = content2.top + view.viewState.paddingTop;
-    let { x, y } = coords, yOffset = y - docTop, block;
+    let { x, y } = coords, yOffset = y - docTop, block2;
     for (; ; ) {
       if (yOffset < 0)
         return new PosAssoc(0, 1);
       if (yOffset > view.viewState.docHeight)
         return new PosAssoc(view.state.doc.length, -1);
-      block = view.elementAtHeight(yOffset);
+      block2 = view.elementAtHeight(yOffset);
       if (scanY == null)
         break;
-      if (block.type == BlockType.Text) {
-        if (scanY < 0 ? block.to < view.viewport.from : block.from > view.viewport.to)
+      if (block2.type == BlockType.Text) {
+        if (scanY < 0 ? block2.to < view.viewport.from : block2.from > view.viewport.to)
           break;
-        let rect = view.docView.coordsAt(scanY < 0 ? block.from : block.to, scanY > 0 ? -1 : 1);
+        let rect = view.docView.coordsAt(scanY < 0 ? block2.from : block2.to, scanY > 0 ? -1 : 1);
         if (rect && (scanY < 0 ? rect.top <= yOffset + docTop : rect.bottom >= yOffset + docTop))
           break;
       }
       let halfLine = view.viewState.heightOracle.textHeight / 2;
-      yOffset = scanY > 0 ? block.bottom + halfLine : block.top - halfLine;
+      yOffset = scanY > 0 ? block2.bottom + halfLine : block2.top - halfLine;
     }
-    if (view.viewport.from >= block.to || view.viewport.to <= block.from) {
+    if (view.viewport.from >= block2.to || view.viewport.to <= block2.from) {
       if (precise)
         return null;
-      if (block.type == BlockType.Text) {
-        let pos = posAtCoordsImprecise(view, content2, block, x, y);
-        return new PosAssoc(pos, pos == block.from ? 1 : -1);
+      if (block2.type == BlockType.Text) {
+        let pos = posAtCoordsImprecise(view, content2, block2, x, y);
+        return new PosAssoc(pos, pos == block2.from ? 1 : -1);
       }
     }
-    if (block.type != BlockType.Text)
-      return yOffset < (block.top + block.bottom) / 2 ? new PosAssoc(block.from, 1) : new PosAssoc(block.to, -1);
-    let line = view.docView.lineAt(block.from, 2);
-    if (!line || line.length != block.length)
-      line = view.docView.lineAt(block.from, -2);
-    return new InlineCoordsScan(view, x, y, view.textDirectionAt(block.from)).scanTile(line, block.from);
+    if (block2.type != BlockType.Text)
+      return yOffset < (block2.top + block2.bottom) / 2 ? new PosAssoc(block2.from, 1) : new PosAssoc(block2.to, -1);
+    let line = view.docView.lineAt(block2.from, 2);
+    if (!line || line.length != block2.length)
+      line = view.docView.lineAt(block2.from, -2);
+    return new InlineCoordsScan(view, x, y, view.textDirectionAt(block2.from)).scanTile(line, block2.from);
   }
   var InlineCoordsScan = class {
     constructor(view, x, y, baseDir) {
@@ -9128,15 +9128,15 @@
       this.nodes.push(line);
       return line;
     }
-    addBlock(block) {
+    addBlock(block2) {
       this.enterLine();
-      let deco = block.deco;
+      let deco = block2.deco;
       if (deco && deco.startSide > 0 && !this.isCovered)
         this.ensureLine();
-      this.nodes.push(block);
-      this.writtenTo = this.pos = this.pos + block.length;
+      this.nodes.push(block2);
+      this.writtenTo = this.pos = this.pos + block2.length;
       if (deco && deco.endSide > 0)
-        this.covering = block;
+        this.covering = block2;
     }
     addLineDeco(height, breaks, length) {
       let line = this.ensureLine();
@@ -9336,8 +9336,8 @@
     }
     updateViewportLines() {
       this.viewportLines = [];
-      this.heightMap.forEachLine(this.viewport.from, this.viewport.to, this.heightOracle.setDoc(this.state.doc), 0, 0, (block) => {
-        this.viewportLines.push(scaleBlock(block, this.scaler));
+      this.heightMap.forEachLine(this.viewport.from, this.viewport.to, this.heightOracle.setDoc(this.state.doc), 0, 0, (block2) => {
+        this.viewportLines.push(scaleBlock(block2, this.scaler));
       });
     }
     update(update, scrollTarget = null) {
@@ -9494,13 +9494,13 @@
         let { head } = scrollTarget.range;
         if (head < viewport.from || head > viewport.to) {
           let viewHeight = Math.min(this.editorHeight, this.pixelViewport.bottom - this.pixelViewport.top);
-          let block = map.lineAt(head, QueryType.ByPos, oracle, 0, 0), topPos;
+          let block2 = map.lineAt(head, QueryType.ByPos, oracle, 0, 0), topPos;
           if (scrollTarget.y == "center")
-            topPos = (block.top + block.bottom) / 2 - viewHeight / 2;
+            topPos = (block2.top + block2.bottom) / 2 - viewHeight / 2;
           else if (scrollTarget.y == "start" || scrollTarget.y == "nearest" && head < viewport.from)
-            topPos = block.top;
+            topPos = block2.top;
           else
-            topPos = block.bottom - viewHeight;
+            topPos = block2.bottom - viewHeight;
           viewport = new Viewport(map.lineAt(topPos - 1e3 / 2, QueryType.ByHeight, oracle, 0, 0).from, map.lineAt(topPos + viewHeight + 1e3 / 2, QueryType.ByHeight, oracle, 0, 0).to);
         }
       }
@@ -9687,8 +9687,8 @@
       return base2 * this.scaleY;
     }
     scrollAnchorAt(scrollOffset) {
-      let block = this.lineBlockAtHeight(scrollOffset + 8);
-      return block.from >= this.viewport.from || this.viewportLines[0].top - scrollOffset > 200 ? block : this.viewportLines[0];
+      let block2 = this.lineBlockAtHeight(scrollOffset + 8);
+      return block2.from >= this.viewport.from || this.viewportLines[0].top - scrollOffset > 200 ? block2 : this.viewportLines[0];
     }
     elementAtHeight(height) {
       return scaleBlock(this.heightMap.blockAt(this.scaler.fromDOM(height), this.heightOracle, 0, 0), this.scaler);
@@ -9818,11 +9818,11 @@
       return this.scale == other.scale && this.viewports.length == other.viewports.length && this.viewports.every((vp, i) => vp.from == other.viewports[i].from && vp.to == other.viewports[i].to);
     }
   };
-  function scaleBlock(block, scaler) {
+  function scaleBlock(block2, scaler) {
     if (scaler.scale == 1)
-      return block;
-    let bTop = scaler.toDOM(block.top), bBottom = scaler.toDOM(block.bottom);
-    return new BlockInfo(block.from, block.length, bTop, bBottom - bTop, Array.isArray(block._content) ? block._content.map((b) => scaleBlock(b, scaler)) : block._content);
+      return block2;
+    let bTop = scaler.toDOM(block2.top), bBottom = scaler.toDOM(block2.bottom);
+    return new BlockInfo(block2.from, block2.length, bTop, bBottom - bTop, Array.isArray(block2._content) ? block2._content.map((b) => scaleBlock(b, scaler)) : block2._content);
   }
   var theme = /* @__PURE__ */ Facet.define({ combine: (strs) => strs.join(" ") });
   var darkTheme = /* @__PURE__ */ Facet.define({ combine: (values) => values.indexOf(true) > -1 });
@@ -11097,9 +11097,9 @@
               scrollAnchorPos = -1;
               scrollAnchorHeight = this.viewState.heightMap.height;
             } else {
-              let block = this.viewState.scrollAnchorAt(scrollOffset);
-              scrollAnchorPos = block.from;
-              scrollAnchorHeight = block.top;
+              let block2 = this.viewState.scrollAnchorAt(scrollOffset);
+              scrollAnchorPos = block2.from;
+              scrollAnchorHeight = block2.top;
             }
           }
           this.updateState = 1;
@@ -16140,18 +16140,18 @@
     if (state.readOnly)
       return false;
     let changes = [], ranges = [];
-    for (let block of selectedLineBlocks(state)) {
-      if (forward ? block.to == state.doc.length : block.from == 0)
+    for (let block2 of selectedLineBlocks(state)) {
+      if (forward ? block2.to == state.doc.length : block2.from == 0)
         continue;
-      let nextLine = state.doc.lineAt(forward ? block.to + 1 : block.from - 1);
+      let nextLine = state.doc.lineAt(forward ? block2.to + 1 : block2.from - 1);
       let size = nextLine.length + 1;
       if (forward) {
-        changes.push({ from: block.to, to: nextLine.to }, { from: block.from, insert: nextLine.text + state.lineBreak });
-        for (let r of block.ranges)
+        changes.push({ from: block2.to, to: nextLine.to }, { from: block2.from, insert: nextLine.text + state.lineBreak });
+        for (let r of block2.ranges)
           ranges.push(EditorSelection.range(Math.min(state.doc.length, r.anchor + size), Math.min(state.doc.length, r.head + size)));
       } else {
-        changes.push({ from: nextLine.from, to: block.from }, { from: block.to, insert: state.lineBreak + nextLine.text });
-        for (let r of block.ranges)
+        changes.push({ from: nextLine.from, to: block2.from }, { from: block2.to, insert: state.lineBreak + nextLine.text });
+        for (let r of block2.ranges)
           ranges.push(EditorSelection.range(r.anchor - size, r.head - size));
       }
     }
@@ -16171,11 +16171,11 @@
     if (state.readOnly)
       return false;
     let changes = [];
-    for (let block of selectedLineBlocks(state)) {
+    for (let block2 of selectedLineBlocks(state)) {
       if (forward)
-        changes.push({ from: block.from, insert: state.doc.slice(block.from, block.to) + state.lineBreak });
+        changes.push({ from: block2.from, insert: state.doc.slice(block2.from, block2.to) + state.lineBreak });
       else
-        changes.push({ from: block.to, insert: state.lineBreak + state.doc.slice(block.from, block.to) });
+        changes.push({ from: block2.to, insert: state.lineBreak + state.doc.slice(block2.from, block2.to) });
     }
     let changeSet = state.changes(changes);
     dispatch(state.update({
@@ -16201,9 +16201,9 @@
     let selection = updateSel(state.selection, (range) => {
       let dist2 = void 0;
       if (view.lineWrapping) {
-        let block = view.lineBlockAt(range.head), pos = view.coordsAtPos(range.head, range.assoc || 1);
+        let block2 = view.lineBlockAt(range.head), pos = view.coordsAtPos(range.head, range.assoc || 1);
         if (pos)
-          dist2 = block.bottom + view.documentTop - pos.bottom + view.defaultLineHeight / 2;
+          dist2 = block2.bottom + view.documentTop - pos.bottom + view.defaultLineHeight / 2;
       }
       return view.moveVertically(range, true, dist2);
     }).map(changes);
@@ -16389,15 +16389,178 @@
     { key: "Ctrl-m", mac: "Shift-Alt-m", run: toggleTabFocusMode }
   ].concat(standardKeymap);
 
+  // review.js
+  var TELL_WORDS_STRONG = [
+    "delve",
+    "delves",
+    "delving",
+    "tapestry",
+    "testament",
+    "underscore",
+    "underscores",
+    "underscoring",
+    "leverage",
+    "leverages",
+    "leveraging",
+    "multifaceted",
+    "realm",
+    "interplay",
+    "seamless",
+    "seamlessly",
+    "groundbreaking",
+    "nestled"
+  ];
+  var TELL_WORDS_WEAK = [
+    "crucial",
+    "pivotal",
+    "vibrant",
+    "robust",
+    "foster",
+    "fosters",
+    "fostering",
+    "enhance",
+    "enhances",
+    "enhancing",
+    "showcase",
+    "showcases",
+    "showcasing",
+    "garner",
+    "bolster",
+    "utilize",
+    "utilizes",
+    "moreover",
+    "furthermore",
+    "notably",
+    "transformative",
+    "innovative",
+    "boasts",
+    "renowned",
+    "breathtaking",
+    "stunning"
+  ];
+  var TELL_PHRASES = [
+    /\bin today'?s [a-z-]+ world\b/i,
+    /\bat the end of the day\b/i,
+    /\bexperts? (?:agree|say|believe)\b/i,
+    /\bstudies show\b/i,
+    /\bit is important to note\b/i,
+    /\bnot (?:just|only)\b[^.!?]{0,60}\bbut\b/i,
+    /\b(?:serves|stands) as a\b/i,
+    /\bplays? a (?:vital|crucial|pivotal|key|significant) role\b/i,
+    /\bat its core\b/i,
+    /\bthe real question is\b/i,
+    /\blet'?s (?:dive|explore|break this down)\b/i,
+    /\bhere'?s what you need to know\b/i,
+    /\ba testament to\b/i,
+    /\bevolving landscape\b/i,
+    /\bin order to\b/i,
+    /\bdue to the fact that\b/i
+  ];
+  var WORD_RE = /\p{L}[\p{L}\p{N}'’-]*/gu;
+  function isLatinScript(text) {
+    const letters = text.match(/\p{L}/gu) ?? [];
+    if (!letters.length) return true;
+    return letters.filter((ch) => /[\p{Script=Latin}]/u.test(ch)).length / letters.length > 0.5;
+  }
+  function splitAllSentences(text) {
+    return text.split(/(?<=[.!?…])\s+|\n+/).map((part) => part.trim()).filter(Boolean);
+  }
+  function styleMetrics(text) {
+    const words = (text.match(WORD_RE) ?? []).map((word) => word.toLowerCase());
+    const sentences = splitAllSentences(text);
+    const lengths = sentences.map((sentence) => (sentence.match(WORD_RE) ?? []).length).filter(Boolean);
+    const mean = lengths.length ? lengths.reduce((a, b) => a + b, 0) / lengths.length : 0;
+    const variance = lengths.length > 1 ? lengths.reduce((a, b) => a + (b - mean) ** 2, 0) / lengths.length : 0;
+    const burstiness = mean ? Math.sqrt(variance) / mean : 0;
+    const window2 = 50;
+    let diversity;
+    if (words.length <= window2) {
+      diversity = words.length ? new Set(words).size / words.length : 0;
+    } else {
+      let sum = 0;
+      for (let i = 0; i + window2 <= words.length; i++) {
+        sum += new Set(words.slice(i, i + window2)).size / window2;
+      }
+      diversity = sum / (words.length - window2 + 1);
+    }
+    let repetition = 0;
+    if (words.length >= 3) {
+      const grams = [];
+      for (let i = 0; i + 3 <= words.length; i++) grams.push(words.slice(i, i + 3).join(" "));
+      repetition = 1 - new Set(grams).size / grams.length;
+    }
+    const strong = words.filter((word) => TELL_WORDS_STRONG.includes(word)).length;
+    const weak = words.filter((word) => TELL_WORDS_WEAK.includes(word)).length;
+    const phrases = TELL_PHRASES.filter((pattern) => pattern.test(text)).length;
+    const tells = strong + weak + phrases;
+    const tellDensity = words.length ? (strong * 2 + weak + phrases * 4) / words.length : 0;
+    return { words: words.length, sentences: lengths.length, burstiness, diversity, repetition, tells, tellDensity };
+  }
+  var ANCHORS = { burstinessHuman: 0.6, diversityLow: 0.3, diversityHigh: 0.72, repetitionMax: 0.18, tellMax: 0.05 };
+  var WEIGHTS = { tells: 0.45, burstiness: 0.25, diversity: 0.17, repetition: 0.13 };
+  function styleScore(text) {
+    const metrics = styleMetrics(text);
+    if (!metrics.words) return { ...metrics, score: 0, structural: false };
+    const clamp = (value) => Math.max(0, Math.min(1, value));
+    const lexical = clamp(metrics.tellDensity / ANCHORS.tellMax);
+    const structural = metrics.words >= 40 && metrics.sentences >= 3;
+    if (!structural) {
+      return { ...metrics, score: Math.round(100 * lexical), structural };
+    }
+    const raw = WEIGHTS.tells * lexical + WEIGHTS.burstiness * clamp((ANCHORS.burstinessHuman - metrics.burstiness) / ANCHORS.burstinessHuman) + WEIGHTS.diversity * clamp((ANCHORS.diversityHigh - metrics.diversity) / (ANCHORS.diversityHigh - ANCHORS.diversityLow)) + WEIGHTS.repetition * clamp(metrics.repetition / ANCHORS.repetitionMax);
+    return { ...metrics, score: Math.round(100 * raw), structural };
+  }
+  function completedSentences(document2) {
+    return [...document2.matchAll(/[^.!?…\n]*[.!?…]+["'»”’)\]]*/g)].map((match) => ({ text: match[0].trim(), from: match.index, to: match.index + match[0].length })).filter((sentence) => sentence.text.length > 0);
+  }
+  function locateFindings(document2, findings, occupied = []) {
+    const taken = occupied.map(({ from, to }) => ({ from, to }));
+    const located = [];
+    for (const finding of findings) {
+      let from = document2.indexOf(finding.quote);
+      while (from >= 0 && taken.some((range2) => from < range2.to && from + finding.quote.length > range2.from)) {
+        from = document2.indexOf(finding.quote, from + 1);
+      }
+      if (from < 0) continue;
+      const range = { ...finding, from, to: from + finding.quote.length };
+      taken.push(range);
+      located.push(range);
+    }
+    return located.sort((a, b) => a.from - b.from);
+  }
+
+  // markdown.js
+  var ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  var escapeHtml = (text) => text.replace(/[&<>"']/g, (char) => ESCAPES[char]);
+  var MARK = "\0";
+  var PLACEHOLDER = new RegExp(`${MARK}(\\d+)${MARK}`, "g");
+  var IS_PLACEHOLDER = new RegExp(`^${MARK}\\d+${MARK}$`);
+  function inline(text) {
+    return text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, label, href) => /^https?:\/\//i.test(href) ? `<a href="${href}" target="_blank" rel="noreferrer noopener">${label}</a>` : whole).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>").replace(/(^|[^_\w])_([^_\n]+)_(?![\w_])/g, "$1<em>$2</em>");
+  }
+  function block(text) {
+    if (!text) return "";
+    if (IS_PLACEHOLDER.test(text)) return text;
+    const lines = text.split("\n");
+    if (lines.every((line) => /^\s*[-*+]\s+/.test(line))) {
+      return `<ul>${lines.map((line) => `<li>${inline(line.replace(/^\s*[-*+]\s+/, ""))}</li>`).join("")}</ul>`;
+    }
+    if (lines.every((line) => /^\s*\d+[.)]\s+/.test(line))) {
+      return `<ol>${lines.map((line) => `<li>${inline(line.replace(/^\s*\d+[.)]\s+/, ""))}</li>`).join("")}</ol>`;
+    }
+    const heading2 = lines.length === 1 && text.match(/^#{1,6}\s+(.+)$/);
+    if (heading2) return `<p class="md-heading">${inline(heading2[1])}</p>`;
+    return `<p>${inline(text)}</p>`;
+  }
+  function renderMarkdown(source) {
+    const stash = [];
+    const keep = (html) => `${MARK}${stash.push(html) - 1}${MARK}`;
+    const text = escapeHtml(String(source ?? "")).replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, body) => keep(`<pre><code>${body.replace(/\n$/, "")}</code></pre>`)).replace(/`([^`\n]+)`/g, (_, body) => keep(`<code>${body}</code>`));
+    return text.split(/\n{2,}/).map((part) => block(part.trim())).join("").replace(PLACEHOLDER, (_, index) => stash[Number(index)]);
+  }
+
   // src/app.js
-  var contextEl = document.getElementById("context");
-  var paneCtx = document.getElementById("pane-context");
   var editorWrap = document.getElementById("editor-wrapper");
-  var dividerEl = document.getElementById("divider");
-  var contextToggle = document.getElementById("context-toggle");
-  var popover = document.getElementById("popover");
-  var popInput = document.getElementById("popover-input");
-  var popVars = document.getElementById("popover-variants");
   var settingsOpen = document.getElementById("settings-open");
   var settingsDialog = document.getElementById("settings-dialog");
   var settingsForm = document.getElementById("settings-form");
@@ -16411,6 +16574,14 @@
   var settingsError = document.getElementById("settings-error");
   var modelHint = document.getElementById("model-hint");
   var agentStatusEl = document.getElementById("agent-status");
+  var reviewButton = document.getElementById("review-button");
+  var chatStream = document.getElementById("chat-stream");
+  var chatInput = document.getElementById("chat-input");
+  var chatChip = document.getElementById("chat-chip");
+  var chatChipText = document.getElementById("chat-chip-text");
+  var chatChipClear = document.getElementById("chat-chip-clear");
+  var chatClear = document.getElementById("chat-clear");
+  var scoreEl = document.getElementById("style-score");
   var thinkingNames = { off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
   var agentInfo = { available: false, providers: [], models: [], authProviders: [] };
   var agentSelection = null;
@@ -16567,18 +16738,6 @@
     agentStatusEl.textContent = "Pi error";
     console.error("[pi]", error.message);
   });
-  function setCollapsed(collapsed) {
-    paneCtx.classList.toggle("collapsed", collapsed);
-    localStorage.setItem("wa-ctx-collapsed", collapsed ? "1" : "");
-  }
-  if (localStorage.getItem("wa-ctx-collapsed")) setCollapsed(true);
-  contextToggle.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setCollapsed(true);
-  });
-  paneCtx.addEventListener("click", () => {
-    if (paneCtx.classList.contains("collapsed")) setCollapsed(false);
-  });
   var GhostWidget = class extends WidgetType {
     constructor(text) {
       super();
@@ -16588,10 +16747,16 @@
       return other.text === this.text;
     }
     toDOM() {
-      const span = document.createElement("span");
-      span.className = "cm-ghost";
-      span.textContent = this.text;
-      return span;
+      const panel = document.createElement("div");
+      panel.className = "cm-suggest";
+      const body = document.createElement("span");
+      body.className = "cm-suggest-text";
+      body.textContent = this.text;
+      const hint = document.createElement("span");
+      hint.className = "cm-suggest-hint";
+      hint.textContent = "Tab";
+      panel.append(body, hint);
+      return panel;
     }
     ignoreEvent() {
       return true;
@@ -16610,16 +16775,16 @@
       }
       return val;
     },
-    // Render ghost widget right after the cursor
+    // Render as a block panel below the line — never inside the writer's sentence
     provide: (f) => EditorView.decorations.from(f, (ghost) => {
       if (!ghost) return Decoration.none;
-      const w = Decoration.widget({ widget: new GhostWidget(ghost.text), side: 1 });
-      return Decoration.set([w.range(ghost.pos)]);
+      const w = Decoration.widget({ widget: new GhostWidget(ghost.text), side: 1, block: true });
+      return Decoration.set([w.range(ghost.line)]);
     })
   });
   function ghostShow(view, text) {
     const pos = view.state.selection.main.head;
-    view.dispatch({ effects: setGhostFx.of({ text, pos }) });
+    view.dispatch({ effects: setGhostFx.of({ text, pos, line: view.state.doc.lineAt(pos).to }) });
   }
   function ghostClear(view) {
     view.dispatch({ effects: clearGhostFx.of(null) });
@@ -16636,10 +16801,160 @@
     save();
     return true;
   }
+  var setReviewFx = StateEffect.define();
+  var addReviewFx = StateEffect.define();
+  var reviewFindings = [];
+  var findingSeq = 0;
+  var slopMark = (finding) => Decoration.mark({
+    class: "cm-slop",
+    attributes: {
+      "data-slop-id": String(finding.id),
+      title: `${finding.pattern}: ${finding.reason}`
+    }
+  }).range(finding.from, finding.to);
+  var reviewField = StateField.define({
+    create: () => Decoration.none,
+    update(decorations2, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(setReviewFx)) return Decoration.set(effect.value.map(slopMark), true);
+        if (effect.is(addReviewFx)) return decorations2.update({ add: effect.value.map(slopMark), sort: true });
+      }
+      if (!tr.docChanged) return decorations2;
+      const edited = [];
+      tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => edited.push([fromB, toB]));
+      return decorations2.map(tr.changes).update({
+        filter: (from, to) => !edited.some(([a, b]) => a < to && b > from)
+      });
+    },
+    provide: (field) => EditorView.decorations.from(field)
+  });
+  function findingRange(id) {
+    let found = null;
+    workView.state.field(reviewField).between(0, workView.state.doc.length, (from, to, deco) => {
+      if (deco.spec.attributes["data-slop-id"] === String(id)) {
+        found = { from, to };
+        return false;
+      }
+    });
+    return found;
+  }
+  function currentRanges() {
+    const ranges = [];
+    workView.state.field(reviewField).between(0, workView.state.doc.length, (from, to) => {
+      ranges.push({ from, to });
+    });
+    return ranges;
+  }
+  function syncReviewLabel() {
+    const count = workView.state.field(reviewField).size;
+    reviewButton.classList.toggle("has-findings", count > 0);
+    reviewButton.textContent = count ? `${count} suggestion${count === 1 ? "" : "s"}` : "Review slop";
+  }
+  function clearReview() {
+    reviewFindings = [];
+    checkedSentences.clear();
+    workView.dispatch({ effects: setReviewFx.of([]) });
+    syncReviewLabel();
+  }
+  function mergeFindings(rawFindings) {
+    const located = locateFindings(workView.state.doc.toString(), rawFindings || [], currentRanges()).map((finding) => ({ ...finding, id: findingSeq++ }));
+    if (!located.length) return 0;
+    reviewFindings.push(...located);
+    workView.dispatch({ effects: addReviewFx.of(located) });
+    return located.length;
+  }
+  async function reviewRequest(body) {
+    const data = await api("/review", {
+      method: "POST",
+      body: JSON.stringify({ agent: currentAgent(), ...body })
+    });
+    return mergeFindings(data.findings);
+  }
+  async function runReview() {
+    const document2 = workView.state.doc.toString();
+    if (!document2.trim()) {
+      clearReview();
+      return;
+    }
+    reviewButton.disabled = true;
+    reviewButton.textContent = "Reviewing\u2026";
+    clearReview();
+    try {
+      const added = await reviewRequest({ document: document2 });
+      for (const sentence of completedSentences(workView.state.doc.toString())) {
+        checkedSentences.add(sentence.text);
+      }
+      if (added) syncReviewLabel();
+      else reviewButton.textContent = "No slop found";
+    } catch (error) {
+      console.error("[/review]", error.message);
+      reviewButton.textContent = "Review failed";
+    } finally {
+      reviewButton.disabled = false;
+    }
+  }
+  reviewButton.addEventListener("click", runReview);
+  var AUTO_REVIEW_DELAY = 1500;
+  var AUTO_REVIEW_MIN = 25;
+  var AUTO_REVIEW_THRESHOLD = 20;
+  var checkedSentences = /* @__PURE__ */ new Set();
+  var autoReviewTimer = null;
+  var autoReviewBusy = false;
+  function syncStyleScore() {
+    const text = workView.state.doc.toString();
+    const { score, structural } = styleScore(text);
+    if (!text.trim() || !isLatinScript(text)) {
+      scoreEl.textContent = "";
+      return;
+    }
+    scoreEl.textContent = `${score}`;
+    scoreEl.title = structural ? `Local AI-tell score ${score}/100 (0 = clean). Computed in the browser, no model call.` : `Local AI-tell score ${score}/100, wording only \u2014 too short to judge rhythm or variety.`;
+    scoreEl.classList.toggle("warn", score >= 40);
+  }
+  function autoReviewSchedule() {
+    clearTimeout(autoReviewTimer);
+    autoReviewTimer = setTimeout(autoReviewRun, AUTO_REVIEW_DELAY);
+  }
+  function autoReviewPending(state) {
+    const cursor = state.selection.main.head;
+    return completedSentences(state.doc.toString()).filter((sentence) => sentence.text.length >= AUTO_REVIEW_MIN && !checkedSentences.has(sentence.text) && // Strictly inside → the writer is still working on it. Resting at the
+    // closing punctuation means the sentence is finished, so check it.
+    !(cursor > sentence.from && cursor < sentence.to) && worthReviewing(sentence.text));
+  }
+  function worthReviewing(text) {
+    if (!isLatinScript(text)) return true;
+    return styleScore(text).score >= AUTO_REVIEW_THRESHOLD;
+  }
+  async function autoReviewRun() {
+    if (autoReviewBusy || reviewButton.disabled) return;
+    const pending = autoReviewPending(workView.state);
+    if (!pending.length) return;
+    autoReviewBusy = true;
+    for (const sentence of pending) checkedSentences.add(sentence.text);
+    try {
+      if (await reviewRequest({
+        document: workView.state.doc.toString(),
+        target: pending.map((sentence) => sentence.text).join("\n\n")
+      })) syncReviewLabel();
+    } catch (error) {
+      for (const sentence of pending) checkedSentences.delete(sentence.text);
+      console.error("[/review auto]", error.message);
+    } finally {
+      autoReviewBusy = false;
+    }
+  }
   var suggestTimer = null;
   var suggestAbort = null;
   var SUGGEST_DELAY = 900;
   var SUGGEST_MIN = 15;
+  function atParagraphEnd(state) {
+    const sel = state.selection.main;
+    if (!sel.empty) return false;
+    const line = state.doc.lineAt(sel.head);
+    if (sel.head !== line.to) return false;
+    if (line.number === state.doc.lines) return true;
+    return state.doc.line(line.number + 1).text.trim() === "";
+  }
   function suggestSchedule() {
     clearTimeout(suggestTimer);
     if (suggestAbort) {
@@ -16648,12 +16963,14 @@
     }
     const doc2 = workView.state.doc.toString();
     if (doc2.trim().length < SUGGEST_MIN) return;
+    if (!atParagraphEnd(workView.state)) return;
     suggestTimer = setTimeout(suggestFetch, SUGGEST_DELAY);
   }
   async function suggestFetch() {
     const view = workView;
     const state = view.state;
     if (state.readOnly) return;
+    if (!atParagraphEnd(state)) return;
     const doc2 = state.doc.toString();
     const pos = state.selection.main.head;
     const line = state.doc.lineAt(pos);
@@ -16664,7 +16981,6 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          context: contextEl.value,
           document: doc2,
           cursor: pos,
           agent: currentAgent()
@@ -16676,6 +16992,7 @@
         return;
       }
       const data = await res.json();
+      if (data.suggestion && styleMetrics(data.suggestion).tells > 0) return;
       if (data.suggestion && view.state.doc.toString() === doc2 && view.state.selection.main.head === pos && !view.state.readOnly) {
         ghostShow(view, data.suggestion);
       }
@@ -16714,7 +17031,6 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          context: contextEl.value,
           document: view.state.doc.toString(),
           idea,
           agent: currentAgent()
@@ -16761,151 +17077,263 @@
       save();
     }
   }
-  var savedSel = null;
-  var instructionHistory = JSON.parse(localStorage.getItem("wa-instructions") || "[]");
-  function escHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  var CHAT_PLACEHOLDER = "Ask anything, or select text to rewrite";
+  var DELTA_MATERIAL = 5;
+  var attached = null;
+  var activeFinding = null;
+  var chatHistory = [];
+  var chatAbort = null;
+  function chatEl(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== void 0) node.textContent = text;
+    return node;
   }
-  function saveInstruction(text) {
-    if (!text.trim()) return;
-    instructionHistory = instructionHistory.filter((h) => h !== text);
-    instructionHistory.unshift(text);
-    instructionHistory = instructionHistory.slice(0, 50);
-    localStorage.setItem("wa-instructions", JSON.stringify(instructionHistory));
+  var chatAtBottom = () => chatStream.scrollHeight - chatStream.scrollTop - chatStream.clientHeight < 48;
+  function chatScroll(stick) {
+    if (stick) chatStream.scrollTop = chatStream.scrollHeight;
   }
-  function updateHistoryDisplay(filter = "") {
-    popVars.innerHTML = "";
-    if (!filter) return;
-    const filtered = instructionHistory.filter(
-      (h) => h.toLowerCase().includes(filter.toLowerCase())
-    );
-    if (filtered.length === 0) {
-      popVars.innerHTML = '<div class="history-empty">new idea\u2026</div>';
-    } else {
-      filtered.forEach((h) => {
-        const item = document.createElement("div");
-        item.className = "history-item";
-        item.textContent = h;
-        item.addEventListener("click", () => {
-          popInput.value = h;
-          generate();
-        });
-        popVars.appendChild(item);
-      });
-    }
+  function chatAdd(node) {
+    const stick = chatAtBottom();
+    chatStream.append(node);
+    chatScroll(stick);
+    chatClear.hidden = false;
+    return node;
   }
-  function openPopover(x, y) {
-    popover.classList.remove("hidden");
-    popInput.value = "";
-    popVars.innerHTML = "";
-    const pw = 380, gap = 10;
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const ph = popover.offsetHeight || 52;
-    let left = x - pw / 2;
-    let top2 = y - ph - gap;
-    if (left + pw > vw - 8) left = vw - pw - 8;
-    if (left < 8) left = 8;
-    if (top2 < 8) top2 = y + gap;
-    popover.style.left = `${left}px`;
-    popover.style.top = `${top2}px`;
+  function attach(range, finding = null) {
+    attached = range;
+    activeFinding = finding;
+    chatChip.classList.remove("hidden");
+    chatChipText.textContent = range.text;
+    chatChipText.title = range.text;
+    chatInput.placeholder = "Describe the change";
+    chatInput.focus();
   }
-  function closePopover() {
-    popover.classList.add("hidden");
-    savedSel = null;
+  function detach() {
+    attached = null;
+    activeFinding = null;
+    chatChip.classList.add("hidden");
+    chatInput.placeholder = CHAT_PLACEHOLDER;
   }
-  function replaceSelection(text) {
-    if (!savedSel) return;
-    const { from, to } = savedSel;
+  function attachedRange() {
+    if (!attached) return null;
+    if (!activeFinding) return attached;
+    return findingRange(activeFinding.id) ?? attached;
+  }
+  function applyText(text, card) {
+    const range = attachedRange();
+    if (!range) return;
     workView.dispatch({
-      changes: { from, to, insert: text },
-      selection: { anchor: from + text.length }
+      changes: { from: range.from, to: range.to, insert: text },
+      selection: { anchor: range.from + text.length }
     });
     workView.focus();
     save();
+    detach();
+    card?.classList.add("is-applied");
+    card?.parentElement?.classList.add("is-spent");
   }
-  async function generate() {
-    if (!savedSel) return;
-    const instruction = popInput.value.trim();
-    saveInstruction(instruction);
-    popVars.innerHTML = `
-    <div class="spinner">
-      <div class="spinner-icon"></div>
-      Generating variants\u2026
-    </div>`;
+  function findingCard(finding) {
+    const card = chatEl("div", "chat-card");
+    card.append(
+      chatEl("strong", "", finding.pattern),
+      chatEl("span", "", finding.reason),
+      chatEl("small", "", finding.fix)
+    );
+    return card;
+  }
+  function variantCards(variants) {
+    const doc2 = workView.state.doc.toString();
+    const range = attachedRange();
+    const measurable = isLatinScript(doc2) && range;
+    const base2 = measurable ? styleScore(doc2).score : null;
+    const scored = variants.map((text) => ({
+      text,
+      score: measurable ? styleScore(doc2.slice(0, range.from) + text + doc2.slice(range.to)).score : null
+    }));
+    if (measurable) scored.sort((a, b) => a.score - b.score);
+    const wrap = chatEl("div", "chat-variants");
+    scored.forEach(({ text, score }, index) => {
+      const card = chatEl("div", "variant-card");
+      const label = chatEl("div", "variant-label", `Option ${index + 1}`);
+      if (score !== null) {
+        const move = score - base2;
+        const tone = move <= -DELTA_MATERIAL ? " is-better" : move >= DELTA_MATERIAL ? " is-worse" : "";
+        const delta = chatEl("span", `variant-delta${tone}`, `${base2} \u2192 ${score}`);
+        delta.title = "Local AI-tell score for the whole draft if you pick this variant";
+        label.append(delta);
+      }
+      card.append(label, chatEl("div", "", text));
+      card.addEventListener("click", () => {
+        if (!wrap.classList.contains("is-spent")) applyText(text, card);
+      });
+      wrap.append(card);
+    });
+    return wrap;
+  }
+  function skeletonCards(count = 3) {
+    const wrap = chatEl("div", "chat-variants");
+    for (let i = 0; i < count; i++) {
+      const card = chatEl("div", "variant-card is-loading");
+      card.setAttribute("aria-busy", "true");
+      card.append(
+        chatEl("div", "skeleton skeleton-label"),
+        chatEl("div", "skeleton skeleton-line"),
+        chatEl("div", "skeleton skeleton-line is-short")
+      );
+      wrap.append(card);
+    }
+    return wrap;
+  }
+  async function requestVariants(instruction) {
+    const range = attachedRange();
+    if (!range) return;
+    const placeholder2 = chatAdd(skeletonCards());
+    chatAbort?.abort();
+    chatAbort = new AbortController();
     try {
       const res = await fetch("/rewrite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: chatAbort.signal,
         body: JSON.stringify({
-          context: contextEl.value,
           document: workView.state.doc.toString(),
-          selected: savedSel.text,
+          selected: range.text,
           instruction,
           agent: currentAgent()
         })
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
-      popVars.innerHTML = "";
-      data.variants.forEach((v, i) => {
-        const card = document.createElement("div");
-        card.className = "variant-card";
-        card.innerHTML = `<div class="variant-label">Option ${i + 1}</div><div>${escHtml(v)}</div>`;
-        card.addEventListener("click", () => {
-          replaceSelection(v);
-          closePopover();
-        });
-        popVars.appendChild(card);
-      });
-      const rect = popover.getBoundingClientRect();
-      if (rect.bottom > window.innerHeight - 8) {
-        const newTop = Math.max(8, parseInt(popover.style.top) - (rect.bottom - window.innerHeight + 8));
-        popover.style.top = `${newTop}px`;
+      const stick = chatAtBottom();
+      placeholder2.replaceWith(variantCards(data.variants));
+      chatScroll(stick);
+    } catch (error) {
+      if (error.name === "AbortError") {
+        placeholder2.remove();
+        return;
       }
-    } catch (err) {
-      console.error("[/rewrite]", err);
-      popVars.innerHTML = `<div class="error-msg">Error: ${escHtml(err.message)}</div>`;
+      console.error("[/rewrite]", error);
+      placeholder2.replaceWith(chatEl("div", "chat-error", error.message));
     }
   }
-  popover.addEventListener("mousedown", (e) => {
-    if (e.target !== popInput) e.preventDefault();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (popover.classList.contains("hidden")) return;
-    if (document.activeElement === popInput) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === "Backspace") {
-      popInput.value = popInput.value.slice(0, -1);
-      updateHistoryDisplay(popInput.value);
-      e.preventDefault();
-    } else if (e.key.length === 1) {
-      popInput.value += e.key;
-      updateHistoryDisplay(popInput.value);
-      e.preventDefault();
-    }
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      closePopover();
+  function openFinding(finding) {
+    const range = findingRange(finding.id);
+    if (!range) return;
+    attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding);
+    workView.dispatch({ selection: { anchor: range.from, head: range.to } });
+    chatAdd(findingCard(finding));
+    requestVariants(
+      `Fix ${finding.pattern}: ${finding.fix.replace(/\.?$/, ".")} Preserve facts, voice, and specific details; add no new claims.`
+    );
+  }
+  async function chatSend() {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    chatInput.value = "";
+    chatResize();
+    chatAdd(chatEl("div", "chat-message is-user", text));
+    if (attached) {
+      requestVariants(text);
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      if (!popover.classList.contains("hidden")) {
-        e.preventDefault();
-        generate();
+    chatHistory.push({ role: "user", content: text });
+    const reply = chatAdd(chatEl("div", "chat-message is-agent"));
+    reply.append(chatEl("span", "chat-caret"));
+    chatAbort?.abort();
+    chatAbort = new AbortController();
+    let answer = "";
+    try {
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: chatAbort.signal,
+        body: JSON.stringify({
+          messages: chatHistory,
+          document: workView.state.doc.toString(),
+          agent: currentAgent()
+        })
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Server error ${res.status}`);
+      for await (const chunk of sseChunks(res)) {
+        if (chunk.error) throw new Error(chunk.error);
+        const stick = chatAtBottom();
+        answer += chunk.text ?? "";
+        reply.textContent = answer;
+        chatScroll(stick);
+      }
+      reply.classList.add("is-markdown");
+      reply.innerHTML = renderMarkdown(answer);
+      chatHistory.push({ role: "assistant", content: answer });
+    } catch (error) {
+      if (error.name === "AbortError") {
+        reply.remove();
+        return;
+      }
+      console.error("[/chat]", error);
+      reply.replaceWith(chatEl("div", "chat-error", error.message));
+    }
+  }
+  async function* sseChunks(res) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6);
+        if (payload === "[DONE]") return;
+        try {
+          yield JSON.parse(payload);
+        } catch {
+        }
       }
     }
-  });
-  document.addEventListener("mousedown", (e) => {
-    if (!popover.classList.contains("hidden") && !popover.contains(e.target)) closePopover();
-  });
-  popInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      generate();
+  }
+  function chatResize() {
+    chatInput.style.height = "auto";
+    chatInput.style.height = `${Math.min(chatInput.scrollHeight, 160)}px`;
+  }
+  chatInput.placeholder = CHAT_PLACEHOLDER;
+  chatInput.addEventListener("input", chatResize);
+  chatInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      chatSend();
+    } else if (event.key === "Escape") {
+      if (chatAbort && !chatAbort.signal.aborted) {
+        chatAbort.abort();
+        return;
+      }
+      detach();
+      workView.focus();
     }
   });
-  popInput.addEventListener("input", () => updateHistoryDisplay(popInput.value));
+  chatChipClear.addEventListener("click", () => {
+    detach();
+    chatInput.focus();
+  });
+  chatClear.addEventListener("click", () => {
+    chatAbort?.abort();
+    chatStream.replaceChildren();
+    chatHistory = [];
+    chatClear.hidden = true;
+    detach();
+    chatInput.focus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      const sel = workView.state.selection.main;
+      if (!sel.empty) attach({ from: sel.from, to: sel.to, text: workView.state.sliceDoc(sel.from, sel.to) });
+      else chatInput.focus();
+    }
+  });
   var isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   var editorTheme = EditorView.theme({
     // Root element — fills the #editor-wrapper flex container
@@ -16942,18 +17370,42 @@
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
       background: isDark ? "rgba(122, 160, 197, 0.25) !important" : "rgba(91, 127, 165, 0.2) !important"
     },
-    // ── Ghost text ─────────────────────────────────────────────────────────────
+    // ── Suggestion panel ───────────────────────────────────────────────────────
     //
-    //  Rendered as a non-editable <span> injected after the cursor by the
-    //  GhostWidget.  Muted colour + slightly lower opacity signals "not yours
-    //  yet".  Press Tab to make it real, Escape to dismiss.
+    //  A block widget below the current line, never inside the writer's own
+    //  sentence — nothing is added to the document until Tab is pressed.
+    //  Tab accepts, Escape dismisses.
     //
-    ".cm-ghost": {
-      color: "var(--muted)",
-      opacity: "0.6",
+    ".cm-suggest": {
+      display: "flex",
+      alignItems: "baseline",
+      gap: "10px",
+      margin: "6px 0 2px",
+      padding: "8px 12px",
+      borderLeft: "2px solid var(--accent)",
+      borderRadius: "0 var(--r-sm) var(--r-sm) 0",
+      background: "var(--surface-2)",
+      color: "var(--text-2)",
       pointerEvents: "none",
-      userSelect: "none",
-      fontStyle: "normal"
+      userSelect: "none"
+    },
+    ".cm-suggest-text": { flex: "1" },
+    ".cm-suggest-hint": {
+      flexShrink: "0",
+      padding: "1px 6px",
+      borderRadius: "var(--r-xs)",
+      background: "var(--surface-3)",
+      color: "var(--muted)",
+      fontFamily: "var(--ui-font)",
+      fontSize: "11px",
+      letterSpacing: ".02em"
+    },
+    ".cm-slop": {
+      textDecorationLine: "underline",
+      textDecorationStyle: "wavy",
+      textDecorationColor: "var(--accent)",
+      textUnderlineOffset: "3px",
+      cursor: "pointer"
     },
     // Slightly dim the content while /idea is streaming
     "&.streaming .cm-content": { opacity: "0.8" },
@@ -17007,6 +17459,7 @@
         keymap.of([...historyKeymap, ...defaultKeymap]),
         // Ghost text state + decoration provider
         ghostField,
+        reviewField,
         // Read-only compartment — toggled during /idea streaming
         readonlyComp.of(EditorState.readOnly.of(false)),
         // Word wrap (essential for prose)
@@ -17015,26 +17468,33 @@
         placeholder("Start writing..."),
         // Visual theme
         editorTheme,
-        // Right-click with selection → rewrite popover
+        // Both gestures attach the passage to the composer instead of opening a
+        // window — one place for context, one place for answers.
         EditorView.domEventHandlers({
+          click(event, view) {
+            const mark = event.target.closest?.(".cm-slop");
+            if (!mark) return false;
+            const finding = reviewFindings.find((item) => item.id === Number(mark.dataset.slopId));
+            if (!finding) return false;
+            openFinding(finding);
+            return true;
+          },
           contextmenu(event, view) {
             const sel = view.state.selection.main;
             if (sel.empty) return false;
             event.preventDefault();
-            savedSel = {
-              from: sel.from,
-              to: sel.to,
-              text: view.state.sliceDoc(sel.from, sel.to)
-            };
-            openPopover(event.clientX, event.clientY);
+            attach({ from: sel.from, to: sel.to, text: view.state.sliceDoc(sel.from, sel.to) });
             return true;
           }
         }),
         // Save on every edit + schedule a suggestion
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
+            if (reviewFindings.length) syncReviewLabel();
             save();
             suggestSchedule();
+            autoReviewSchedule();
+            syncStyleScore();
           }
         })
       ]
@@ -17043,33 +17503,7 @@
   });
   function save() {
     localStorage.setItem("wa-working", workView.state.doc.toString());
-    localStorage.setItem("wa-context", contextEl.value);
   }
-  contextEl.addEventListener("input", save);
-  var dragging = false;
-  var dragStartX = 0;
-  var dragStartW = 0;
-  dividerEl.addEventListener("mousedown", (e) => {
-    dragging = true;
-    dragStartX = e.clientX;
-    dragStartW = paneCtx.offsetWidth;
-    dividerEl.classList.add("dragging");
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  });
-  document.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
-    const dx = e.clientX - dragStartX;
-    const total = document.querySelector(".app").offsetWidth - dividerEl.offsetWidth;
-    const newW = Math.max(180, Math.min(total - 180, dragStartW + dx));
-    paneCtx.style.flex = "none";
-    paneCtx.style.width = `${newW}px`;
-  });
-  document.addEventListener("mouseup", () => {
-    if (!dragging) return;
-    dragging = false;
-    dividerEl.classList.remove("dragging");
-    document.body.style.cursor = document.body.style.userSelect = "";
-  });
   workView.focus();
+  syncStyleScore();
 })();

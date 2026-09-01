@@ -1,6 +1,6 @@
 {
-  "name": "writing-assistant",
-  "description": "AI-powered split-pane writing editor with context and LLM assistance",
+  "name": "litura",
+  "description": "AI-assisted editor for sharper, more human writing",
   "type": "webview",
   "cmd": "node",
   "args": ["index.js"],
