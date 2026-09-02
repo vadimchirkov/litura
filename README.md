@@ -1,28 +1,20 @@
 # Litura
 
-Litura is a local, AI-assisted editor for making prose sharper and less generic without taking control away from its author. The name comes from Latin: a correction, erasure, or visible revision in a manuscript.
+Litura is a local writing editor that finds weak or generic prose and suggests clearer alternatives. It never changes the draft until you choose a replacement.
 
-![Litura editor highlighting generic writing patterns](docs/screenshot.png)
+![Litura editor highlighting writing problems](docs/screenshot.png)
 
-## What it does
+## What you can do
 
-- Keeps one focused working document in a distraction-free CodeMirror editor.
-- Shows a local AI-tell score for predominantly Latin-script drafts. The score is a writing heuristic, not an authorship detector.
-- Reviews likely problem sentences as you finish them and can review the full document on demand.
-- Highlights named, checkable prose and structure problems, including vague attribution, filler, buried points, broken paragraph promises, and abrupt topic shifts.
-- Generates three replace-in-place alternatives for a highlighted finding or selected passage. Nothing changes until you choose an option.
-- Provides a compact chat for discussing the whole draft.
-- Suggests short continuations below the current line; press `Tab` to accept or `Escape` to dismiss.
-- Expands a line beginning with `/idea ...` directly inside the document.
-- Uses [Pi](https://github.com/badlogic/pi-mono) for provider discovery, credentials, model selection, and reasoning levels.
+- Write in a focused plain-text editor.
+- Review the draft for vague wording, filler, buried points, broken paragraph promises, and abrupt topic shifts.
+- Click an underlined passage to see three replacements.
+- Right-click selected text to request a specific change. Press `Cmd/Ctrl+K` to attach the selection to the chat.
+- Discuss the whole draft in the chat.
+- Accept a short continuation with `Tab`, or dismiss it with `Escape`.
+- Type `/idea <instruction>` and press `Enter` to expand an idea in place.
 
-Right-click a selection to attach it to the composer, or press `Cmd/Ctrl+K` to attach the current selection or focus the chat.
-
-## Data and model access
-
-The draft and selected model are stored in browser local storage. Chat history is kept only in memory and is cleared on reload. Litura does not store documents on the server.
-
-Model-backed actions send the current draft and the relevant instruction or selection to the provider you choose. API keys are managed by Pi rather than stored in browser local storage. `style.md` is added to every generation and review request.
+The number in the toolbar is a local writing score for English and other predominantly Latin-script drafts. It is a heuristic, not an AI detector.
 
 ## Run locally
 
@@ -35,9 +27,17 @@ npm install
 npm start
 ```
 
-Open [http://127.0.0.1:3456](http://127.0.0.1:3456). Use the gear button to choose a provider, model, and reasoning level or to add an API key. Litura also discovers credentials already stored by Pi and supported provider environment variables.
+Open [http://127.0.0.1:3456](http://127.0.0.1:3456). Use the gear button to choose a provider, model, and reasoning level or to add an API key. Litura can also use credentials already available to Pi.
 
-Optional environment defaults:
+## Privacy
+
+The draft and model selection stay in browser local storage. Chat history is cleared when the page reloads. When you use an AI feature, Litura sends the current draft and your instruction to the selected provider. Pi manages API keys.
+
+## Writing style
+
+All AI features follow [style.md](style.md). Edit it to change the voice and writing rules. Litura reads the file again for every request.
+
+Optional defaults:
 
 ```bash
 PI_PROVIDER=anthropic
@@ -47,8 +47,6 @@ PORT=3456
 STYLE_FILE=./style.md
 ```
 
-Edit `style.md` to describe the voice, facts, and constraints Litura should preserve. The file is read again for each model request, so changes apply without restarting the server.
-
 ## Development
 
 ```bash
@@ -56,9 +54,9 @@ npm run build
 npm run check
 ```
 
-The server uses Node's native HTTP module. The browser UI is vanilla JavaScript with CodeMirror 6 and is bundled with esbuild. Source changes belong in `src/app.js`; `public/app.js` is generated.
+The app uses Node's native HTTP server, vanilla JavaScript, CodeMirror 6, Pi, and esbuild. Edit `src/app.js`, not the generated `public/app.js`.
 
-See [SPEC.md](SPEC.md) for product behavior, API contracts, and implementation boundaries.
+See [SPEC.md](SPEC.md) for product behavior and API details.
 
 ## License
 
