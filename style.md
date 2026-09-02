@@ -105,6 +105,27 @@ appear together.
 - Uneven rhythm. Real writing alternates short and long sentences; AI drifts
   toward an even mid-length cadence.
 
+## Keep the reader oriented
+
+Open each paragraph or section by setting expectations for what follows, then
+keep that promise. Carry its central terms through the sentences that develop
+them; do not announce a subject and quietly switch to another.
+
+Put familiar information before new information when that makes the connection
+between sentences easier to follow. A paragraph may hold one subject steady,
+pick up the previous sentence's new information as the next subject, or preview
+several subjects and develop them in order. Use whichever movement fits the
+material rather than forcing one pattern everywhere.
+
+Make a unit's main point once, near its beginning or its end. Do not bury it in
+the middle or repeat it as a recap. For argumentative and explanatory writing,
+show the reader the problem and its cost before presenting the point or
+solution, and let the ending resolve the problem opened at the start.
+
+These are diagnostics, not templates. Do not force essay structure onto a short
+answer, a list, reference material, dialogue, or a passage whose deliberate
+disorientation is part of its voice.
+
 ## Removing tells is only half the job
 
 Text stripped of AI patterns can still read as flat. Where the genre allows —

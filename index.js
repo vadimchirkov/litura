@@ -286,17 +286,24 @@ const server = http.createServer(async (req, res) => {
 
       const scope = target
         ? 'Audit ONLY the passages under PASSAGES TO AUDIT. The draft is context you must read but must not flag. ' +
-          'Every quote you return must be copied from the passages, not from the rest of the draft. '
+          'Every quote you return must be copied from the passages, not from the rest of the draft. ' +
+          'For structure, flag only a local connection problem visible in those passages; reserve paragraph- or document-level findings for a full review. '
         : '';
 
       const system = buildSystemPrompt(
-        'You are a sharp human editor auditing a draft for generic AI-slop patterns. ' +
+        'You are a sharp human editor auditing a draft for writing and structure problems. ' +
         scope +
         'Detect only; do not rewrite the draft, score it, or guess who wrote it. ' +
         'Flag only strong, checkable examples such as throat-clearing, vague attribution, empty puffery, ' +
         'faux insight, generic filler, binary contrast, robotic rhythm, repetitive recap, or dramatic fragmentation. ' +
+        'Also flag strong reader-structure problems when the genre and available text support the diagnosis: ' +
+        'an opening that sets expectations the passage does not fulfill, a missing or buried point, ' +
+        'an abrupt old-to-new information break, central terms that disappear or arrive unannounced, ' +
+        'an explanatory introduction with no concrete problem or stakes, or an ending that does not resolve its opening problem. ' +
+        'Treat constant-topic, linking, and preview-and-develop progressions as valid alternatives, not rules to impose together. ' +
         'Do not flag an isolated em dash, polished grammar, formal vocabulary, proper names, quotations, or intentional voice. ' +
         'Preserve unusual details, humor, uncertainty, bluntness, cadence, and useful roughness. ' +
+        'Return a structural finding only when replacing its quoted passage can materially improve it without moving or inventing surrounding content. ' +
         'Return ONLY a JSON array of at most 8 objects with string fields quote, pattern, reason, fix. ' +
         'quote must be a short exact contiguous quote copied from the draft. fix is a brief direction, not a rewrite. ' +
         'Use the language of the draft for pattern, reason, and fix. Return [] when there are no strong findings.'

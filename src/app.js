@@ -346,7 +346,7 @@ function currentRanges() {
 function syncReviewLabel() {
   const count = workView.state.field(reviewField).size;
   reviewButton.classList.toggle('has-findings', count > 0);
-  reviewButton.textContent = count ? `${count} suggestion${count === 1 ? '' : 's'}` : 'Review slop';
+  reviewButton.textContent = count ? `${count} suggestion${count === 1 ? '' : 's'}` : 'Review';
 }
 
 function clearReview() {
