@@ -6,15 +6,13 @@ Litura is a local, AI-assisted text editor for making prose sharper and less gen
 
 ## What it does
 
-- Keeps one focused working document in a distraction-free CodeMirror editor.
-- Shows a local AI-tell score for predominantly Latin-script drafts. The score is a writing heuristic, not an authorship detector.
-- Reviews likely problem sentences as you finish them and can review the full document on demand.
+- Keeps focus on working document in a distraction-free editor.
+- Shows an AI score for texts. 
+- Reviews sentences as you finish them and can review the full document on demand.
 - Highlights named, checkable prose and structure problems, including vague attribution, filler, buried points, broken paragraph promises, and abrupt topic shifts.
 - Generates three replace-in-place alternatives for a highlighted finding or selected passage. Nothing changes until you choose an option.
 - Provides a compact chat for discussing the whole draft.
 - Suggests short continuations below the current line; press `Tab` to accept or `Escape` to dismiss.
-- Expands a line beginning with `/idea ...` directly inside the document.
-- Uses [Pi](https://github.com/badlogic/pi-mono) for provider discovery, credentials, model selection, and reasoning levels.
 
 Right-click a selection to attach it to the composer, or press `Cmd/Ctrl+K` to attach the current selection or focus the chat.
 
@@ -22,7 +20,6 @@ Right-click a selection to attach it to the composer, or press `Cmd/Ctrl+K` to a
 
 The draft and selected model are stored in browser local storage. Chat history is kept only in memory and is cleared on reload. Litura does not store documents on the server.
 
-Model-backed actions send the current draft and the relevant instruction or selection to the provider you choose. API keys are managed by Pi rather than stored in browser local storage. `style.md` is added to every generation and review request.
 
 ## Run locally
 
