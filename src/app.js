@@ -55,6 +55,18 @@ const autoReviewEl  = document.getElementById('auto-review');
 // and the suggestion under it — hidden behind the cards.
 let chatHeight = 140;
 
+// ─── Stored state across versions ──────────────────────────────────────────
+// Bumped by hand, only when the shape of stored findings or chat turns changes
+// — not on every release, or a patch would throw away a writer's review. The
+// draft (`wa-working`, mirrored to draft.md) is never cleared here: it is the
+// only state the writer cannot regenerate.
+const STORAGE_SCHEMA = '1';
+if (localStorage.getItem('wa-schema') !== STORAGE_SCHEMA) {
+  localStorage.removeItem('wa-findings');
+  localStorage.removeItem('wa-chat');
+  localStorage.setItem('wa-schema', STORAGE_SCHEMA);
+}
+
 const thinkingNames = { off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum' };
 let agentInfo = { available: false, providers: [], models: [], authProviders: [] };
 let agentSelection = null;

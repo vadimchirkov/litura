@@ -4,14 +4,15 @@
  * Split-pane editor with LLM assistance via Pi
  *
  * Usage:
+ *   npx litura        (in the folder holding your draft)
  *   node index.js
  */
 
 import http  from 'http';
 import fs    from 'fs';
 import path  from 'path';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { build } from 'esbuild';
 import { completeText, getAgentStatus, removeProviderApiKey, saveProviderApiKey, streamText } from './pi.js';
 import {
   markSelection, parseVariants, selectionSlot, trimOverlap, variantLimit,
@@ -21,25 +22,77 @@ import { requestReview } from './review-model.js';
 import { buildReviewTask, buildReviewUser, reviewCodesForPass } from './review-prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MANIFEST = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+const VERSION = MANIFEST.version;
 
-// ─── Bundle frontend (CodeMirror 6 → public/app.js) ────────────────────────
-try {
-  await build({
-    entryPoints: [path.join(__dirname, 'src/app.js')],
-    bundle:      true,
-    outfile:     path.join(__dirname, 'public/app.js'),
-    format:      'iife',
-    logLevel:    'warning',
-  });
-  console.log('[build] Frontend bundled ✓');
-} catch (e) {
-  console.error('[build] Frontend build failed — server will serve stale bundle.\n', e.message);
+// ─── CLI ───────────────────────────────────────────────────────────────────
+// Both flags run before the bundler and the server: they answer and exit.
+if (process.argv.includes('--version') || process.argv.includes('-v')) {
+  console.log(VERSION);
+  process.exit(0);
 }
 
-const PORT       = parseInt(process.env.PORT || '3456', 10);
-const STYLE_FILE = process.env.STYLE_FILE || path.join(__dirname, 'style.md');
-const DRAFT_FILE = process.env.DRAFT_FILE || path.join(__dirname, 'draft.md');
-const PUBLIC     = path.join(__dirname, 'public');
+// Litura opens no connection of its own — every request it makes belongs to a
+// model call the writer asked for. So the update check is a command you run,
+// not something that happens quietly at startup.
+if (process.argv.includes('--check-update')) {
+  const name = MANIFEST.name;
+  // A 404 is the registry answering, not failing: an unpublished build asking
+  // about itself. Say so instead of reporting version "undefined".
+  const latest = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`)
+    .then(async response => {
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`registry returned ${response.status}`);
+      return (await response.json()).version;
+    })
+    .catch(error => {
+      console.error(`[update] npm registry unreachable — ${error.message}`);
+      process.exit(1);
+    });
+  if (latest === null) {
+    console.log(`Litura ${VERSION} — ${name} is not published; nothing to compare against.`);
+    process.exit(0);
+  }
+  // Stated, not judged: a local build can legitimately run ahead of the
+  // registry, and ranking two versions correctly is a semver dependency.
+  console.log(latest === VERSION
+    ? `Litura ${VERSION} — same as the published release.`
+    : `Published: ${name}@${latest}. Running: ${VERSION}.\n` +
+      `  npx ${name}       — always runs the published release\n` +
+      `  npm i -g ${name}  — if you installed it globally`);
+  process.exit(0);
+}
+
+// ─── Bundle frontend (CodeMirror 6 → public/app.js) ────────────────────────
+// Only in a source checkout. The published package ships public/app.js already
+// built and has no esbuild, so src/ missing is the signal to skip.
+if (fs.existsSync(path.join(__dirname, 'src/app.js'))) {
+  try {
+    const { build } = await import('esbuild');
+    await build({
+      entryPoints: [path.join(__dirname, 'src/app.js')],
+      bundle:      true,
+      outfile:     path.join(__dirname, 'public/app.js'),
+      format:      'iife',
+      logLevel:    'warning',
+    });
+    console.log('[build] Frontend bundled ✓');
+  } catch (e) {
+    console.error('[build] Frontend build failed — server will serve stale bundle.\n', e.message);
+  }
+}
+
+const PORT = parseInt(process.env.PORT || '3456', 10);
+const PUBLIC = path.join(__dirname, 'public');
+
+// Draft and style live in the folder Litura was started from, not inside the
+// install directory — `npx litura` in a notes folder edits that folder. The
+// bundled style.md is the fallback when the folder has none of its own.
+const CWD        = process.cwd();
+const DRAFT_FILE = process.env.DRAFT_FILE || path.join(CWD, 'draft.md');
+const STYLE_FILE = process.env.STYLE_FILE
+  || [path.join(CWD, 'style.md'), path.join(__dirname, 'style.md')].find(p => fs.existsSync(p))
+  || path.join(CWD, 'style.md');
 
 // ─── Style guide ───────────────────────────────────────────────────────────
 let styleWarnedOnce = false;
@@ -119,9 +172,13 @@ const MIME = {
 function serveStatic(res, filePath) {
   const ext  = path.extname(filePath);
   const mime = MIME[ext] || 'text/plain';
+  // Fonts never change under a given name; the bundle changes with every
+  // update, and a tab holding a stale app.js against a new server is the
+  // classic post-upgrade bug. Revalidate it on each load.
+  const cache = ext === '.woff2' ? 'public, max-age=31536000, immutable' : 'no-cache';
   try {
     const data = fs.readFileSync(filePath);
-    res.writeHead(200, { 'Content-Type': mime });
+    res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': cache });
     res.end(data);
   } catch {
     res.writeHead(404);
@@ -439,6 +496,35 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Litura → http://127.0.0.1:${PORT}`);
-});
+function openBrowser(url) {
+  const [cmd, args] = process.platform === 'darwin' ? ['open', [url]]
+    : process.platform === 'win32'                  ? ['cmd', ['/c', 'start', '', url]]
+    :                                                 ['xdg-open', [url]];
+  spawn(cmd, args, { stdio: 'ignore', detached: true })
+    .on('error', () => {})   // no browser to open — the URL is already printed
+    .unref();
+}
+
+// A stale Litura, or anything else, may hold 3456. Walk up rather than die.
+function listen(port, attempt = 0) {
+  // A failed attempt leaves its handlers queued; without this the next success
+  // fires every one of them and announces a port nothing is bound to.
+  server.removeAllListeners('error');
+  server.removeAllListeners('listening');
+
+  server.once('error', (error) => {
+    if (error.code === 'EADDRINUSE' && attempt < 10) return listen(port + 1, attempt + 1);
+    console.error(`[server] ${error.message}`);
+    process.exit(1);
+  });
+  server.once('listening', () => {
+    const url = `http://127.0.0.1:${port}`;
+    console.log(`Litura → ${url}`);
+    console.log(`Draft  → ${DRAFT_FILE}`);
+    console.log(`Style  → ${STYLE_FILE}`);
+    if (!process.env.LITURA_NO_OPEN) openBrowser(url);
+  });
+  server.listen(port, '127.0.0.1');
+}
+
+listen(PORT);

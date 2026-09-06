@@ -200,7 +200,7 @@ When no model is selected, the review, rewrite, and chat actions re-check Pi sta
 | State | Location | Lifetime |
 |---|---|---|
 | Working document | `localStorage["wa-working"]` | Until browser storage is cleared |
-| Working document mirror | `DRAFT_FILE` (default `<project>/draft.md`) | Until the file is deleted |
+| Working document mirror | `DRAFT_FILE` (default `<cwd>/draft.md`) | Until the file is deleted |
 | Agent selection | `localStorage["wa-agent"]` | Until browser storage is cleared |
 | Chat history | `localStorage["wa-chat"]`, last 20 turns | Until `Clear` or browser storage is cleared |
 | Findings | `localStorage["wa-findings"]` | Until a new review, `Clear`, or browser storage is cleared |
@@ -331,11 +331,27 @@ Each review pass validates diagnostic codes against its assigned levels and chec
 | `PI_PROVIDER` | Preferred Pi provider ID | Selected from authenticated models |
 | `PI_MODEL` | Preferred Pi model ID | Selected from authenticated models |
 | `PI_THINKING_LEVEL` | Preferred reasoning level | `medium` |
-| `PORT` | Local HTTP port | `3456` |
-| `STYLE_FILE` | Writing style guide path | `<project>/style.md` |
-| `DRAFT_FILE` | Draft mirror path | `<project>/draft.md` |
+| `PORT` | Local HTTP port; the next free port up to +10 is used if taken | `3456` |
+| `STYLE_FILE` | Writing style guide path | `<cwd>/style.md`, else the bundled `style.md` |
+| `DRAFT_FILE` | Draft mirror path | `<cwd>/draft.md` |
+| `LITURA_NO_OPEN` | Set to skip opening the browser at startup | unset |
 
-## 9. Checks
+## 9. Distribution and updates
+
+Litura is published to npm and run as `npx litura` from the folder holding the draft. For a bare package name npm re-resolves the registry manifest on every run, so starting Litura is the update; a global install (`npm i -g`) shadows that check and has to be updated by hand.
+
+`litura --version` prints the running version. `litura --check-update` prints the published version next to it. Neither the server nor the browser contacts the registry on its own: the check runs only when the command asks for it.
+
+| Survives an update | Mechanism |
+|---|---|
+| Draft | `wa-working` and `DRAFT_FILE` are never cleared by the app |
+| Style guide | `STYLE_FILE` is only ever read; the bundled `style.md` is a fallback, not a template that gets written |
+| Model selection and API keys | `wa-agent`; credentials stay in Pi's own store |
+| Findings and chat | Dropped when `STORAGE_SCHEMA` in `src/app.js` is bumped, which happens only when their stored shape changes |
+
+`index.html`, `style.css`, and `app.js` are served `no-cache` so an open tab picks up the new bundle on reload instead of running a stale one against a new API. Fonts are immutable.
+
+## 10. Checks
 
 ```bash
 npm run build
@@ -349,7 +365,7 @@ npm run check:deep
 
 The model checks are regression tests, not an independent accuracy benchmark. Set `DEEP_REPORT=results.json` to save individual findings and failures. See [review-evaluation.md](docs/review-evaluation.md) for source provenance, development results, limitations, and the manual browser smoke check. There is no automated browser end-to-end suite.
 
-## 10. Current boundaries
+## 11. Current boundaries
 
 Litura currently supports one browser-local plain-text document. It does not include:
 

@@ -1,19 +1,48 @@
 {
-  "name": "litura",
-  "version": "1.0.0",
+  "name": "litura-app",
+  "version": "0.1.0",
   "description": "A local AI-assisted editor for sharper, more human writing",
+  "keywords": ["writing", "editor", "ai", "prose", "markdown", "local"],
   "license": "MIT",
+  "author": "Vadim Chirkov",
+  "homepage": "https://github.com/vadimchirkov/litura#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vadimchirkov/litura.git"
+  },
+  "bugs": "https://github.com/vadimchirkov/litura/issues",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "litura": "index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.js",
+    "pi.js",
+    "markdown.js",
+    "review.js",
+    "review-model.js",
+    "review-prompt.js",
+    "public",
+    "style.md",
+    "SPEC.md",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "start": "node index.js",
     "build": "esbuild src/app.js --bundle --outfile=public/app.js --format=iife",
     "check": "node --check index.js && node --check pi.js && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js",
-    "check:deep": "node deepcheck.js"
+    "check:deep": "node deepcheck.js",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.2",
-    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2"
+  },
+  "devDependencies": {
     "codemirror": "^6.0.1",
     "esbuild": "^0.25.0"
   }

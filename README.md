@@ -21,12 +21,22 @@ Right-click a selection to attach it to the composer, or press `Cmd/Ctrl+K` to a
 
 The draft, findings, conversation, and selected model are stored in browser local storage and survive a reload.
 
-The draft is also mirrored to `draft.md` in the project directory, so it survives cleared browser storage and opens in any editor. The browser copy stays authoritative while the app runs; if the file changes underneath it, Litura says so and offers to load it rather than merging or overwriting silently. Nothing leaves the machine except what a model request sends to the selected provider.
+The draft is also mirrored to `draft.md` in the folder Litura was started from, so it survives cleared browser storage and opens in any editor. The browser copy stays authoritative while the app runs; if the file changes underneath it, Litura says so and offers to load it rather than merging or overwriting silently. Nothing leaves the machine except what a model request sends to the selected provider.
 
 
-## Run locally
+## Run
 
 Litura requires Node.js 20 or newer.
+
+```bash
+npx litura-app
+```
+
+Run it in the folder that holds your writing: Litura edits `draft.md` there and reads a `style.md` next to it if one exists. The browser opens on [http://127.0.0.1:3456](http://127.0.0.1:3456), or the next free port if that one is taken.
+
+The npm package is `litura-app` — `litura` belongs to an unrelated project. The command it installs is `litura`.
+
+To work on Litura itself:
 
 ```bash
 git clone https://github.com/vadimchirkov/litura.git
@@ -35,7 +45,21 @@ npm install
 npm start
 ```
 
-Open [http://127.0.0.1:3456](http://127.0.0.1:3456). Use the gear button to choose a provider, model, and reasoning level or to add an API key. Litura also discovers credentials already stored by Pi and supported provider environment variables.
+## Updating
+
+Running `npx litura-app` is the update: for a bare package name npm re-resolves the registry on every run, so each start picks up the latest release. The exceptions are a global install, which shadows that check and needs `npm i -g litura-app`, and a clone, which needs `git pull`.
+
+```bash
+npx litura-app --check-update
+```
+
+prints the published version next to the running one. Litura opens no connection on its own — the check happens only when you run it, and nothing else phones home.
+
+An update leaves your draft, your `style.md`, and your model settings alone. Stored findings and chat history are dropped only when a release changes their format.
+
+## Configuring
+
+Use the gear button to choose a provider, model, and reasoning level or to add an API key. Litura also discovers credentials already stored by Pi and supported provider environment variables.
 
 Optional environment defaults:
 

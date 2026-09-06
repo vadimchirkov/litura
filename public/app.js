@@ -16593,6 +16593,12 @@
   var chatPanel = document.getElementById("chat");
   var autoReviewEl = document.getElementById("auto-review");
   var chatHeight = 140;
+  var STORAGE_SCHEMA = "1";
+  if (localStorage.getItem("wa-schema") !== STORAGE_SCHEMA) {
+    localStorage.removeItem("wa-findings");
+    localStorage.removeItem("wa-chat");
+    localStorage.setItem("wa-schema", STORAGE_SCHEMA);
+  }
   var thinkingNames = { off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
   var agentInfo = { available: false, providers: [], models: [], authProviders: [] };
   var agentSelection = null;

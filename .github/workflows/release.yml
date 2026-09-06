@@ -1,0 +1,48 @@
+name: Check and release
+
+# Every push runs the checks. Only a v* tag publishes — so a release is a tag,
+# and nothing else can reach the registry.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # npm trusted publishing — no token stored in secrets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1+; setup-node pins whatever the Node
+      # release shipped with.
+      - run: npm install -g npm@^11
+
+      - run: npm ci
+
+      # Runs the same checks as local development. The Pi section asserts the
+      # shape of the model list, not its contents, so it passes without any
+      # provider credentials.
+      - run: npm run check
+
+      # A hand-made tag can disagree with package.json; publishing 0.1.0 as
+      # v0.2.0 is not recoverable, so fail before the publish rather than after.
+      - name: Tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          test "$tag" = "$pkg" || { echo "tag v$tag != package.json $pkg"; exit 1; }
+
+      - name: Publish to npm
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm publish
