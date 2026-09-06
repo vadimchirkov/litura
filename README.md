@@ -57,6 +57,8 @@ prints the published version next to the running one.
 
 Settings has an `Ask npm about new versions` switch, off by default. Turn it on and Litura asks once a day and shows a badge in the header when a newer version is published; the badge links to the changelog rather than installing anything. Left off, Litura opens no connection of its own.
 
+Releases are cut by tag: `npm version <patch|minor|major>`, then `git push` and `git push --tags`. GitHub Actions runs the checks, verifies the tag matches `package.json`, and publishes.
+
 An update leaves your draft, your `style.md`, and your model settings alone. Stored findings and chat history are dropped only when a release changes their format.
 
 ## Configuring

@@ -349,7 +349,7 @@ In the browser, `Ask npm about new versions` in settings is off by default and s
 
 ### Releasing
 
-A release is a tag. `npm version <patch|minor|major>` refuses a dirty tree, bumps `package.json`, commits, and tags; `git push --follow-tags` then triggers `.github/workflows/release.yml`, which runs `npm run check`, verifies the tag matches `package.json`, and publishes with npm trusted publishing (OIDC, no stored token). Every other push runs the checks without publishing. `npm run check` passes without provider credentials: the Pi section asserts the shape of the model list, not its contents.
+A release is a tag. `npm version <patch|minor|major>` refuses a dirty tree, bumps `package.json`, commits, and tags. Push the branch and the tag as two pushes — `git push && git push --tags` — rather than `--follow-tags`: pushing v0.1.0 together with its branch produced a run for the branch only. The tag push triggers `.github/workflows/release.yml`, which runs `npm run check`, verifies the tag matches `package.json`, and publishes with npm trusted publishing (OIDC, no stored token). Every other push runs the checks without publishing. `npm run check` passes without provider credentials: the Pi section asserts the shape of the model list, not its contents.
 
 ### What survives
 
