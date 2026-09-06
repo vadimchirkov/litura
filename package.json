@@ -1,8 +1,15 @@
 {
   "name": "litura-app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A local AI-assisted editor for sharper, more human writing",
-  "keywords": ["writing", "editor", "ai", "prose", "markdown", "local"],
+  "keywords": [
+    "writing",
+    "editor",
+    "ai",
+    "prose",
+    "markdown",
+    "local"
+  ],
   "license": "MIT",
   "author": "Vadim Chirkov",
   "homepage": "https://github.com/vadimchirkov/litura#readme",
