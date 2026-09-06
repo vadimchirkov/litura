@@ -5,8 +5,10 @@ number carries breaking changes.
 
 ## Unreleased
 
-- Settings can ask npm about new versions once a day, off by default; when a newer version is published the header shows a badge linking to this file.
-- Releases are cut by tag: `npm version` then `git push --follow-tags`, with GitHub Actions running the checks and publishing.
+## 0.2.0 — 2026-09-06
+
+- Settings can ask npm about new versions once a day, off by default. When a newer version is published the header shows a badge linking to this file; the badge links rather than installs, so updating stays a command you run. Left off, Litura opens no connection of its own.
+- Releases are cut by tag, with GitHub Actions running the checks and publishing over OIDC.
 
 ## 0.1.0 — 2026-09-06
 
