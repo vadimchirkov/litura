@@ -21,7 +21,7 @@ Right-click a selection to attach it to the composer, or press `Cmd/Ctrl+K` to a
 
 The draft, findings, conversation, and selected model are stored in browser local storage and survive a reload.
 
-The draft is also mirrored to `draft.md` in the folder Litura was started from, so it survives cleared browser storage and opens in any editor. The browser copy stays authoritative while the app runs; if the file changes underneath it, Litura says so and offers to load it rather than merging or overwriting silently. Nothing leaves the machine except what a model request sends to the selected provider.
+The draft is also mirrored to `draft.md` in the folder Litura was started from, so it survives cleared browser storage and opens in any editor. The browser copy stays authoritative while the app runs; if the file changes underneath it, Litura says so and offers to load it rather than merging or overwriting silently. Nothing leaves the machine except what a model request sends to the selected provider — and, if you switch it on in settings, a once-a-day question to the npm registry about new versions.
 
 
 ## Run
@@ -53,7 +53,9 @@ Running `npx litura-app` is the update: for a bare package name npm re-resolves 
 npx litura-app --check-update
 ```
 
-prints the published version next to the running one. Litura opens no connection on its own — the check happens only when you run it, and nothing else phones home.
+prints the published version next to the running one.
+
+Settings has an `Ask npm about new versions` switch, off by default. Turn it on and Litura asks once a day and shows a badge in the header when a newer version is published; the badge links to the changelog rather than installing anything. Left off, Litura opens no connection of its own.
 
 An update leaves your draft, your `style.md`, and your model settings alone. Stored findings and chat history are dropped only when a release changes their format.
 

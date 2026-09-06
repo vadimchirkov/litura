@@ -20,6 +20,12 @@
         <span class="wordmark">Litura</span>
         <span class="style-score" id="style-score" title="Local AI-tell score (0 = clean). Computed in the browser, no model call."></span>
         <button class="review-button" id="review-button" title="Review writing and structure">Review</button>
+        <!-- Only ever shown when the writer opted into the check and a newer
+             version exists. It links to the changelog, not to an installer:
+             updating is a command the writer runs. -->
+        <a class="update-badge" id="update-badge" hidden
+           href="https://github.com/vadimchirkov/litura/blob/main/CHANGELOG.md"
+           target="_blank" rel="noreferrer"></a>
         <span class="agent-status" id="agent-status">Pi</span>
         <button class="settings-open" id="settings-open" title="Model and access" aria-label="Model and access">⚙</button>
       </div>
@@ -79,6 +85,15 @@
           <input type="checkbox" id="auto-review" checked>
           <span>Check sentences as I finish them<small>Off means only the Review button spends a model call.</small></span>
         </label>
+      </section>
+
+      <section>
+        <h3>Updates</h3>
+        <label class="settings-check">
+          <input type="checkbox" id="update-check">
+          <span>Ask npm about new versions<small>Off by default, once a day when on. It is the only request Litura makes that no writing of yours asked for.</small></span>
+        </label>
+        <p class="settings-hint" id="update-status"></p>
       </section>
 
       <section>

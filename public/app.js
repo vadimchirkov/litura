@@ -16592,6 +16592,9 @@
   var scoreEl = document.getElementById("style-score");
   var chatPanel = document.getElementById("chat");
   var autoReviewEl = document.getElementById("auto-review");
+  var updateCheckEl = document.getElementById("update-check");
+  var updateBadge = document.getElementById("update-badge");
+  var updateStatus = document.getElementById("update-status");
   var chatHeight = 140;
   var STORAGE_SCHEMA = "1";
   if (localStorage.getItem("wa-schema") !== STORAGE_SCHEMA) {
@@ -17001,6 +17004,38 @@
     autoReviewOn = autoReviewEl.checked;
     localStorage.setItem("wa-autoreview", autoReviewOn ? "on" : "off");
   });
+  var UPDATE_INTERVAL = 24 * 60 * 60 * 1e3;
+  var updateCheckOn = localStorage.getItem("wa-updatecheck") === "on";
+  updateCheckEl.checked = updateCheckOn;
+  function renderUpdate({ current, latest, error }) {
+    const stale = Boolean(latest) && latest !== current;
+    updateBadge.hidden = !stale;
+    if (stale) {
+      updateBadge.textContent = `${latest} available`;
+      updateBadge.title = `Running ${current}. Restart with npx to pick it up; a global install needs npm i -g.`;
+    }
+    updateStatus.textContent = error ? `Running ${current} \u2014 npm could not be reached.` : stale ? `Running ${current}; npm publishes ${latest}.` : latest ? `Running ${current} \u2014 the published version.` : `Running ${current}.`;
+  }
+  async function refreshUpdate({ force = false } = {}) {
+    let cached = null;
+    try {
+      cached = JSON.parse(localStorage.getItem("wa-update") || "null");
+    } catch {
+    }
+    const check = updateCheckOn && (force || !(cached && Date.now() - cached.at < UPDATE_INTERVAL));
+    try {
+      const info = await api(`/api/version${check ? "?check=1" : ""}`);
+      if (info.latest) localStorage.setItem("wa-update", JSON.stringify({ latest: info.latest, at: Date.now() }));
+      renderUpdate({ ...info, latest: info.latest ?? (updateCheckOn ? cached?.latest : void 0) });
+    } catch {
+    }
+  }
+  updateCheckEl.addEventListener("change", () => {
+    updateCheckOn = updateCheckEl.checked;
+    localStorage.setItem("wa-updatecheck", updateCheckOn ? "on" : "off");
+    refreshUpdate({ force: updateCheckOn });
+  });
+  refreshUpdate();
   function syncStyleScore() {
     const text = workView.state.doc.toString();
     const { score, structural } = styleScore(text);

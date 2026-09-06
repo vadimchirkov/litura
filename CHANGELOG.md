@@ -5,6 +5,9 @@ number carries breaking changes.
 
 ## Unreleased
 
+- Settings can ask npm about new versions once a day, off by default; when a newer version is published the header shows a badge linking to this file.
+- Releases are cut by tag: `npm version` then `git push --follow-tags`, with GitHub Actions running the checks and publishing.
+
 ## 0.1.0 — 2026-09-06
 
 First npm release, published as `litura-app`; the command it installs is `litura`.

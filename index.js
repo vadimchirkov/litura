@@ -25,6 +25,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const VERSION = MANIFEST.version;
 
+// Ask npm what it publishes. `null` means the package is not published at all
+// — a local build asking about itself — which is not the same as a failure.
+async function latestPublished(name = MANIFEST.name) {
+  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`registry returned ${response.status}`);
+  return (await response.json()).version;
+}
+
 // ─── CLI ───────────────────────────────────────────────────────────────────
 // Both flags run before the bundler and the server: they answer and exit.
 if (process.argv.includes('--version') || process.argv.includes('-v')) {
@@ -37,18 +46,10 @@ if (process.argv.includes('--version') || process.argv.includes('-v')) {
 // not something that happens quietly at startup.
 if (process.argv.includes('--check-update')) {
   const name = MANIFEST.name;
-  // A 404 is the registry answering, not failing: an unpublished build asking
-  // about itself. Say so instead of reporting version "undefined".
-  const latest = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`)
-    .then(async response => {
-      if (response.status === 404) return null;
-      if (!response.ok) throw new Error(`registry returned ${response.status}`);
-      return (await response.json()).version;
-    })
-    .catch(error => {
-      console.error(`[update] npm registry unreachable — ${error.message}`);
-      process.exit(1);
-    });
+  const latest = await latestPublished(name).catch(error => {
+    console.error(`[update] npm registry unreachable — ${error.message}`);
+    process.exit(1);
+  });
   if (latest === null) {
     console.log(`Litura ${VERSION} — ${name} is not published; nothing to compare against.`);
     process.exit(0);
@@ -207,6 +208,19 @@ function readBody(req) {
 // ─── Server ────────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost`);
+
+  // Which version is running, and — only when the browser asks with ?check=1,
+  // which it does only if the writer turned the check on — which is published.
+  // A registry that is down is reported, not retried: this is a nicety.
+  if (req.method === 'GET' && url.pathname === '/api/version') {
+    const payload = { name: MANIFEST.name, current: VERSION };
+    if (url.searchParams.get('check') === '1') {
+      try { payload.latest = await latestPublished(); }
+      catch (error) { payload.error = error.message; }
+    }
+    sendJson(res, 200, payload);
+    return;
+  }
 
   if (req.method === 'GET' && url.pathname === '/api/agent/status') {
     sendJson(res, 200, await getAgentStatus());

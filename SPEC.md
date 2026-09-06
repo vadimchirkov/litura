@@ -205,6 +205,8 @@ When no model is selected, the review, rewrite, and chat actions re-check Pi sta
 | Chat history | `localStorage["wa-chat"]`, last 20 turns | Until `Clear` or browser storage is cleared |
 | Findings | `localStorage["wa-findings"]` | Until a new review, `Clear`, or browser storage is cleared |
 | Automatic review setting | `localStorage["wa-autoreview"]` | Until browser storage is cleared |
+| Update-check setting | `localStorage["wa-updatecheck"]`, off unless set to `on` | Until browser storage is cleared |
+| Last seen published version | `localStorage["wa-update"]` as `{ latest, at }`, reused for 24 hours | Until browser storage is cleared |
 | Checked sentences | Browser memory | Until reload or a full review reset |
 | API credentials | Pi credential storage or environment | Managed by Pi |
 
@@ -265,6 +267,7 @@ All bodies and non-streaming responses are JSON unless noted.
 | `GET` | `/style.css`, `/app.js`, `/fonts/*` | Static assets |
 | `GET` | `/draft` | Current contents of the draft file as `{ text, path }` |
 | `PUT` | `/draft` | Overwrite the draft file with `{ text }` |
+| `GET` | `/api/version` | `{ name, current }`; with `?check=1` also `latest` from the npm registry, or `error` if it is unreachable |
 | `GET` | `/api/agent/status` | Providers, models, auth status, and default selection |
 | `POST` | `/api/agent/credentials` | Save a provider API key through Pi |
 | `DELETE` | `/api/agent/credentials` | Remove a stored provider credential |
@@ -338,9 +341,17 @@ Each review pass validates diagnostic codes against its assigned levels and chec
 
 ## 9. Distribution and updates
 
-Litura is published to npm and run as `npx litura` from the folder holding the draft. For a bare package name npm re-resolves the registry manifest on every run, so starting Litura is the update; a global install (`npm i -g`) shadows that check and has to be updated by hand.
+Litura is published to npm as `litura-app`; the command it installs is `litura`. It runs as `npx litura-app` from the folder holding the draft. For a bare package name npm re-resolves the registry manifest on every run, so starting Litura is the update; a global install (`npm i -g`) shadows that check and has to be updated by hand.
 
-`litura --version` prints the running version. `litura --check-update` prints the published version next to it. Neither the server nor the browser contacts the registry on its own: the check runs only when the command asks for it.
+`litura --version` prints the running version. `litura --check-update` prints the published version next to it, and reports an unpublished package rather than comparing against nothing. Neither flag ranks the two versions: a local build legitimately runs ahead of the registry, and ordering semver correctly would be a dependency.
+
+In the browser, `Ask npm about new versions` in settings is off by default and stored in `wa-updatecheck`. Off, the browser calls `/api/version` without `?check=1` and the server contacts nothing. On, it asks at most once every 24 hours, caches the answer in `wa-update`, and shows a header badge linking to the changelog when the published version differs from the running one. Switching it off hides the badge rather than leaving a stale one.
+
+### Releasing
+
+A release is a tag. `npm version <patch|minor|major>` refuses a dirty tree, bumps `package.json`, commits, and tags; `git push --follow-tags` then triggers `.github/workflows/release.yml`, which runs `npm run check`, verifies the tag matches `package.json`, and publishes with npm trusted publishing (OIDC, no stored token). Every other push runs the checks without publishing. `npm run check` passes without provider credentials: the Pi section asserts the shape of the model list, not its contents.
+
+### What survives
 
 | Survives an update | Mechanism |
 |---|---|

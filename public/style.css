@@ -251,6 +251,21 @@ html, body {
 .style-score:empty { margin-left: auto; }
 .style-score.warn { color: var(--accent); }
 
+/* Available update — quiet on purpose. Nothing is broken, and the writer is
+   mid-sentence; this must not compete with the draft. */
+.update-badge {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  color: var(--text-2);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.update-badge:hover { background: var(--fill-hover); color: var(--text); }
+.update-badge[hidden] { display: none; }
+
 /* Secondary pill button — ChatGPT's action/secondary style */
 .review-button {
   display: inline-flex;

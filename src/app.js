@@ -49,6 +49,9 @@ const chatClear     = document.getElementById('chat-clear');
 const scoreEl       = document.getElementById('style-score');
 const chatPanel     = document.getElementById('chat');
 const autoReviewEl  = document.getElementById('auto-review');
+const updateCheckEl = document.getElementById('update-check');
+const updateBadge   = document.getElementById('update-badge');
+const updateStatus  = document.getElementById('update-status');
 
 // How much of the editor the floating panel covers. Measured, because the
 // panel grows with its content: a fixed guess leaves the line being typed —
@@ -546,6 +549,52 @@ autoReviewEl.addEventListener('change', () => {
   autoReviewOn = autoReviewEl.checked;
   localStorage.setItem('wa-autoreview', autoReviewOn ? 'on' : 'off');
 });
+
+// ─── Update check ──────────────────────────────────────────────────────────
+// Off unless the writer turns it on. Every other request Litura sends is one
+// they started, and a background call to npm on every launch would quietly
+// make that untrue. Once a day is generous for a package that `npx` already
+// updates on its own — the badge is for the globally installed case.
+const UPDATE_INTERVAL = 24 * 60 * 60 * 1000;
+let updateCheckOn = localStorage.getItem('wa-updatecheck') === 'on';
+updateCheckEl.checked = updateCheckOn;
+
+function renderUpdate({ current, latest, error }) {
+  const stale = Boolean(latest) && latest !== current;
+  updateBadge.hidden = !stale;
+  if (stale) {
+    updateBadge.textContent = `${latest} available`;
+    updateBadge.title = `Running ${current}. Restart with npx to pick it up; a global install needs npm i -g.`;
+  }
+  updateStatus.textContent =
+    error  ? `Running ${current} — npm could not be reached.` :
+    stale  ? `Running ${current}; npm publishes ${latest}.` :
+    latest ? `Running ${current} — the published version.` :
+             `Running ${current}.`;
+}
+
+async function refreshUpdate({ force = false } = {}) {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem('wa-update') || 'null'); } catch {}
+  const check = updateCheckOn && (force || !(cached && Date.now() - cached.at < UPDATE_INTERVAL));
+  try {
+    const info = await api(`/api/version${check ? '?check=1' : ''}`);
+    if (info.latest) localStorage.setItem('wa-update', JSON.stringify({ latest: info.latest, at: Date.now() }));
+    // A cached answer still counts while it is fresh, but only while the check
+    // is on: switching it off hides the badge instead of leaving a stale one.
+    renderUpdate({ ...info, latest: info.latest ?? (updateCheckOn ? cached?.latest : undefined) });
+  } catch {
+    // The server that just served this page is not worth an error card.
+  }
+}
+
+updateCheckEl.addEventListener('change', () => {
+  updateCheckOn = updateCheckEl.checked;
+  localStorage.setItem('wa-updatecheck', updateCheckOn ? 'on' : 'off');
+  refreshUpdate({ force: updateCheckOn });
+});
+
+refreshUpdate();
 
 // Live local readout. Pure string work, so it can run on every keystroke.
 function syncStyleScore() {
