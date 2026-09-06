@@ -6,6 +6,8 @@ is not already in the draft or the user's material.
 
 Pattern list adapted from Wikipedia's "Signs of AI writing" (WikiProject AI
 Cleanup), which catalogues tells found in real AI edits.
+Additional copy-pattern categories are inspired by the MIT-licensed
+[anti-slop](https://github.com/miqdadbadjuber/anti-slop) project.
 
 ## Patterns to avoid
 
@@ -58,6 +60,14 @@ short sentence for emphasis is fine.
 **Stacked qualifiers.** could potentially possibly, might arguably, in some
 cases it may. Keep a qualifier only when the meaning needs it.
 
+**Mind-reading objects.** A dashboard may show or filter; it does not
+understand, want, believe, care, or decide. Name the person making the choice,
+unless the verb describes an ordinary product action.
+
+**Manufactured emphasis.** Several ALL-CAPS words, repeated scare quotes, or
+decorative emoji do not make a weak sentence stronger. Preserve real dialogue,
+titles, acronyms, and one deliberate accent.
+
 **Generic positive endings.** "The future looks bright", "exciting times
 ahead", "a step in the right direction". End on the last concrete fact.
 
@@ -85,6 +95,8 @@ appear together.
 - One "however" or "additionally". The tell is the pile-up.
 - One short sentence used for emphasis.
 - Repetition that builds deliberate rhythm.
+- Passive voice when the actor is unknown or beside the point.
+- Ordinary product verbs such as "the report shows" or "the form submits".
 - "Honestly" or "look" inside a sentence, as opposed to a staged opener.
 - Missing citations. Most writing is unsourced.
 - Scope notes, safety warnings, real corrections, and answers to named

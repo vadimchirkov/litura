@@ -2,9 +2,46 @@ import assert from 'node:assert/strict';
 import { getAgentStatus } from './pi.js';
 import { renderMarkdown } from './markdown.js';
 import {
-  completedSentences, isLatinScript, locateFindings,
-  parseReviewResponse, styleMetrics, styleScore, trimOverlap,
+  completedSentences, isLatinScript, locateFindings, markSelection, mergeReviewFindings,
+  parseReviewResponse, parseVariants, selectionSlot, styleMetrics, styleScore, trimOverlap,
+  validateReviewFindings, variantLimit, SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
 } from './review.js';
+
+// ── Rewrite scope ──
+// The marked span is what the model must replace; an unmarked draft is what
+// made it rewrite the whole thing.
+{
+  const doc = 'Studies show that teams ship faster. Studies show that morale rises.';
+  assert.equal(
+    markSelection(doc, 'Studies show that', 37),
+    `Studies show that teams ship faster. ${SELECT_OPEN}Studies show that${SELECT_CLOSE} morale rises.`,
+  );
+  // No offset, or a stale one, still marks a real occurrence rather than nothing.
+  assert.equal(markSelection(doc, 'Studies show that').indexOf(SELECT_OPEN), 0);
+  assert.equal(markSelection(doc, 'Studies show that', 999).indexOf(SELECT_OPEN), 0);
+  assert.equal(markSelection(doc, 'not in the draft'), doc);
+
+  // A replacement for 13 characters may breathe; a rewritten paragraph may not.
+  const selected = 'experts agree';
+  assert(variantLimit(selected) >= selected.length + 60);
+  assert('in three of the four teams we tracked,'.length <= variantLimit(selected));
+  assert("In today's fast-paced digital landscape, collaboration is key and teams that leverage synergy innovate more.".length
+    > variantLimit(selected));
+
+  // The gap is what stops a variant from repeating its neighbours.
+  assert.equal(
+    selectionSlot('It is important to note that experts agree collaboration is key.', 'experts agree', 29),
+    `It is important to note that ${SELECT_SLOT} collaboration is key.`,
+  );
+  // An unfinished last line has no sentence to sit in; the window still works.
+  assert(selectionSlot('Teams which leverage synergy ship', 'leverage synergy', 12)
+    .includes(`Teams which ${SELECT_SLOT} ship`));
+  assert.equal(selectionSlot('anything', 'absent'), null);
+
+  assert.deepEqual(parseVariants('noise ["a","b","c"] tail'), ['a', 'b', 'c']);
+  assert.throws(() => parseVariants('["a","b"]'), /Expected 3 variants/);
+  assert.throws(() => parseVariants('no array here'), /No JSON array/);
+}
 
 // ── Markdown ──
 // Anything the model writes is escaped before parsing, so it cannot make a tag.
@@ -41,6 +78,15 @@ assert(styleScore(slop).score > styleScore(clean).score,
 assert(styleScore(slop).score > 40, `slop scored too low: ${styleScore(slop).score}`);
 assert(styleScore(clean).score < 30, `clean prose scored too high: ${styleScore(clean).score}`);
 
+// New high-signal categories must reach the automatic-review threshold, while
+// ordinary product verbs and justified passive voice stay clean.
+assert(styleScore('The dashboard understands what the manager wants and decides which metrics matter.').score >= 20);
+assert(styleScore('The dashboard shows three metrics and filters them by date.').score < 20);
+assert(styleScore('The server was restarted at 03:00 after its operator field disappeared from the log.').score < 20);
+assert(styleScore('The change could potentially possibly reduce support volume.').score >= 20);
+assert(styleScore('The change could reduce support volume.').score < 20);
+assert(styleScore('WE MUST MOVE NOW.').score >= 20);
+
 // Empty input must not read as slop, and short input must skip the structural axes.
 assert.equal(styleScore('').score, 0);
 assert.equal(styleScore('Rent had doubled since 2019.').structural, false);
@@ -50,6 +96,12 @@ assert.equal(styleScore(clean).structural, true);
 const even = 'The team met on Monday to talk. The team met on Tuesday to plan. The team met on Friday to ship.';
 const varied = 'They met Monday. After a week of arguing about the queue depth and whose service was dropping the messages, the team finally shipped on Friday. It held.';
 assert(styleMetrics(varied).burstiness > styleMetrics(even).burstiness);
+
+// The score has to be traceable to text the writer can find in their own draft.
+const hits = styleMetrics("In today's fast-paced world we leverage robust tooling.").hits;
+assert(hits.includes("In today's fast-paced world"));
+assert(hits.includes('leverage') && hits.includes('robust'));
+assert.deepEqual(styleMetrics('Rent had doubled since 2019.').hits, []);
 
 // The word lists are English; a Cyrillic draft must not be mistaken for clean.
 assert.equal(isLatinScript('The bakery closed'), true);
@@ -62,6 +114,22 @@ assert.equal(trimOverlap('It is a skill', ' that pays off'), ' that pays off');
 
 const parsed = parseReviewResponse('```json\n[{"quote":"Experts agree","pattern":"Vague attribution","reason":"No source","fix":"Name the source"}]\n```');
 assert.equal(parsed.length, 1);
+assert.equal(parsed[0].code, 'unclassified');
+assert.deepEqual(parseReviewResponse('No strong findings.'), []);
+assert.throws(() => parseReviewResponse('No findings array could be generated.'), /No findings array/);
+assert.throws(() => parseReviewResponse('[null]'), /object/);
+assert.throws(() => parseReviewResponse('[{"quote":"x"}]'), /non-empty/);
+assert.equal(parseReviewResponse('[{"code":"level-7-paragraph-flow","quote":"A. B.","pattern":"Break","reason":"No bridge","fix":"Connect them"}]')[0].code, 'level-7-paragraph-flow');
+const promise = { code: 'level-3-index-discussion', quote: 'We cover price, speed, and safety. Only price and speed follow.' };
+const repeatedTerm = { code: 'level-6-key-terms', quote: 'We cover price, speed, and safety.' };
+const otherTerm = { code: 'level-6-key-terms', quote: 'The interface renames the same metric.' };
+assert.deepEqual(mergeReviewFindings([[promise], [repeatedTerm, otherTerm, otherTerm]]), [promise, otherTerm]);
+assert.deepEqual(mergeReviewFindings([[repeatedTerm], [promise, otherTerm]]), [promise, otherTerm]);
+assert.deepEqual(mergeReviewFindings([[otherTerm], []]), [otherTerm]);
+assert.deepEqual(mergeReviewFindings([[otherTerm, { ...otherTerm, quote: otherTerm.quote + ' More context.' }]]), [otherTerm]);
+assert.throws(() => validateReviewFindings([otherTerm], ['generic-prose']), /outside this pass/);
+assert.throws(() => validateReviewFindings([otherTerm], ['level-6-key-terms'], 'A different passage.'), /copied exactly/);
+assert.doesNotThrow(() => validateReviewFindings([otherTerm], ['level-6-key-terms'], otherTerm.quote));
 assert.deepEqual(locateFindings('Experts agree. Experts agree.', parsed)[0], {
   ...parsed[0], from: 0, to: 13,
 });

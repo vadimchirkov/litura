@@ -2,8 +2,14 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+// Named models first. A router picks a different model per request, so the same
+// draft comes back rewritten wholesale on one call and empty on the next — the
+// app cannot hold a prompt contract against it. Kept last so an OpenRouter-only
+// setup still starts, never as the preferred default.
 const FALLBACK_MODELS = [
   ['amazon-bedrock', 'eu.anthropic.claude-sonnet-4-6'],
+  ['anthropic', 'claude-sonnet-4-6'],
+  ['openrouter', 'anthropic/claude-sonnet-4.6'],
   ['openrouter', 'auto'],
 ];
 

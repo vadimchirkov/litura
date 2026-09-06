@@ -33,11 +33,14 @@
  * Design tokens lifted from chatgpt.com (OpenAI design system).
  * Prose keeps iA Writer Duo (--font); every other surface uses --ui-font.
  */
+/* The page is warm paper; chat blocks are white cards on top of it. That
+   contrast is what separates the conversation from the draft, so the cards
+   need no shadow to lift off. */
 :root {
-  --bg:            #ffffff;  /* surface-canvas */
-  --surface:       #ffffff;  /* surface-primary */
-  --surface-2:     #f9f9f9;  /* hover */
-  --surface-3:     #e8e8e8;  /* pressed / ghost hover */
+  --bg:            #f7f5f0;  /* surface-canvas — warm paper */
+  --surface:       #f7f5f0;  /* surface-primary */
+  --surface-2:     #f0ede5;  /* hover */
+  --surface-3:     #e6e2d8;  /* pressed / ghost hover */
   --border:        #0000001a;
   --border-subtle: #0000000d;
   --border-strong: #00000026;
@@ -46,8 +49,8 @@
   --muted:         #8f8f8f;
   --accent:        #3a83f7;
   --danger:        #911e1b;
-  --fill:          #ececec;  /* filled (secondary) button */
-  --fill-hover:    #dcdcdc;
+  --fill:          #eae6dd;  /* filled (secondary) button */
+  --fill-hover:    #ddd8cd;
   --primary-bg:    #0d0d0d;
   --primary-fg:    #ffffff;
   --primary-hover: #212121;
@@ -90,6 +93,12 @@
     --primary-fg:    #0d0d0d;
     --primary-hover: #ececec;
     --overlay:       #303030;
+
+    /* A shadow tuned for paper is invisible on a dark canvas — the floating
+       panel then reads as text sitting on top of the draft. */
+    --shadow-sm: 0 1px 2px 0 #00000059;
+    --shadow-md: 0 6px 20px 0 #00000080;
+    --shadow-lg: 0 16px 48px 0 #000000a6;
   }
 }
 
@@ -266,6 +275,17 @@ html, body {
 .review-button:disabled { cursor: default; opacity: .5; }
 .review-button.has-findings { color: var(--accent); border-color: var(--accent); }
 
+/* A background check is still the writer's money being spent — show it */
+.review-button.is-busy { animation: review-busy 1.4s ease-in-out infinite; }
+
+@keyframes review-busy {
+  0%, 100% { border-color: var(--border); }
+  50%      { border-color: var(--accent); }
+}
+
+.style-score { cursor: pointer; }
+.style-score:empty { cursor: default; }
+
 /* ── Chat ─────────────────────────────────────────────── */
 /*
  * Pinned bottom-centre over the canvas, Granola-style: understated at rest,
@@ -288,6 +308,17 @@ html, body {
 
 .chat > * { pointer-events: auto; }
 
+/* The draft has to stop where the panel starts. Without this backdrop the
+   cards sit directly on running text and their edges disappear into it. */
+.chat::before {
+  content: '';
+  position: absolute;
+  inset: -20px -28px -32px;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--surface) 72px);
+}
+
 .chat-stream {
   display: flex;
   flex-direction: column;
@@ -306,10 +337,9 @@ html, body {
   align-self: flex-end;
   height: 28px;
   padding: 0 12px;
-  border: 0;
+  border: 1px solid var(--border-subtle);
   border-radius: var(--r-pill);
   background: var(--overlay);
-  box-shadow: var(--shadow-md);
   color: var(--muted);
   font: inherit;
   font-size: 12px;
@@ -325,8 +355,8 @@ html, body {
 .chat-note,
 .chat-error {
   border-radius: var(--r-field);
+  border: 1px solid var(--border-subtle);
   background: var(--overlay);
-  box-shadow: var(--shadow-md);
   font-size: 14px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -395,13 +425,50 @@ html, body {
 @keyframes chat-blink { 50% { opacity: 0; } }
 
 .chat-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 14px;
+  padding: 12px 34px 12px 14px;
   color: var(--text-2);
   font-size: 13px;
 }
+
+/* Dismiss: rejecting a finding must be as cheap as accepting one */
+.chat-card-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  border: 0;
+  background: none;
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: .6;
+}
+
+.chat-card-dismiss:hover { opacity: 1; color: var(--text); }
+
+/* Offered, not spent: the rewrite request starts here, not on the underline */
+.chat-offer {
+  align-self: flex-start;
+  margin-top: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+
+.chat-offer:hover { background: var(--surface-2); }
 
 .chat-card strong { color: var(--text); font-size: 15px; font-weight: 600; }
 .chat-card small { color: var(--muted); font: inherit; }
@@ -418,17 +485,29 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 16px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-2xl, 26px);
+  padding: 8px 8px 8px 18px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
   background: var(--overlay);
   box-shadow: var(--shadow-lg);
-  transition: border-color .12s ease;
+  transition: border-color .12s ease, box-shadow .12s ease;
 }
 
-.chat-composer:focus-within { border-color: var(--accent); }
+.chat-composer:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-lg), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* One line at rest: field left, send right, both on the same baseline. */
+.chat-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
 
 #chat-input {
+  flex: 1;
+  padding: 7px 0;
   border: 0;
   outline: none;
   resize: none;
@@ -442,27 +521,51 @@ html, body {
 
 #chat-input::placeholder { color: var(--muted); }
 
-/* The attached passage: a quote riding along with the next message */
+.chat-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--primary-bg);
+  color: var(--primary-fg);
+  cursor: pointer;
+  transition: opacity .12s ease, background .12s ease;
+}
+
+.chat-send:hover:not(:disabled) { background: var(--primary-hover); }
+
+/* Dim, not hidden: the writer should see where the send is before they type. */
+.chat-send:disabled {
+  background: var(--fill);
+  color: var(--muted);
+  cursor: default;
+}
+
+/* Names what is attached; the passage itself stays highlighted in the draft. */
 .chat-chip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 6px 5px 10px;
-  border-left: 2px solid var(--accent);
-  border-radius: 0 var(--r-field) var(--r-field) 0;
-  background: var(--surface-3);
+  gap: 6px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 3px 4px 3px 10px;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--text-2);
 }
 
 .chat-chip.hidden { display: none; }
 
 .chat-chip-text {
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .chat-chip button {
@@ -490,11 +593,13 @@ html, body {
   .chat-card,
   .chat-error,
   .variant-card { animation: none; }
+  .review-button.is-busy { animation: none; border-color: var(--accent); }
   .chat-caret { animation: none; opacity: .6; }
 }
 
-/* Keep the last lines of the draft clear of the composer */
-#editor-wrapper .cm-content { padding-bottom: 140px; }
+/* Keep the last lines of the draft clear of the panel. The panel grows with
+   its content, so the reserved space is measured, not guessed. */
+#editor-wrapper .cm-content { padding-bottom: var(--chat-height, 140px); }
 
 /* ── Loading skeletons ────────────────────────────────── */
 /*
@@ -507,8 +612,8 @@ html, body {
 .variant-card {
   padding: 12px 14px;
   border-radius: var(--r-field);
+  border: 1px solid var(--border-subtle);
   background: var(--overlay);
-  box-shadow: var(--shadow-md);
   cursor: pointer;
   color: var(--text);
   font-size: 14px;
@@ -547,6 +652,25 @@ html, body {
 .chat-variants.is-spent .variant-card:hover { background: var(--overlay); }
 
 .chat-variants.is-spent .variant-card.is-applied { opacity: 1; }
+
+/* Three options the writer dislikes is a dead end without this */
+.chat-again {
+  align-self: flex-end;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--overlay);
+  box-shadow: var(--shadow-sm);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .12s ease;
+}
+
+.chat-again:hover { color: var(--text); }
+.chat-variants.is-spent .chat-again { display: none; }
 .variant-card.is-applied .variant-label::after {
   content: 'applied';
   color: var(--accent);
@@ -699,6 +823,11 @@ html, body {
 .settings-grid { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 10px; }
 .settings-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }
 .key-entry { display: grid; grid-template-columns: 1fr 2fr auto; gap: 10px; }
+.settings-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.settings-check input { min-height: 0; width: 16px; height: 16px; margin-top: 2px; accent-color: var(--accent); }
+.settings-check span { color: var(--text); font-size: 14px; }
+.settings-check small { display: block; color: var(--muted); font-size: 13px; }
+
 .settings-hint, .settings-error { min-height: 18px; margin-top: 10px; color: var(--muted); font-size: 13px; }
 .settings-error { color: var(--danger); }
 .configured-keys { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }

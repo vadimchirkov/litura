@@ -1,20 +1,28 @@
 # Litura
 
-Litura is a local writing editor that finds weak or generic prose and suggests clearer alternatives. It never changes the draft until you choose a replacement.
+Litura is a local, AI-assisted text editor for making prose sharper and less generic without taking control away from its author. The name comes from Latin: a correction, erasure, or visible revision in a manuscript.
 
-![Litura editor highlighting writing problems](docs/screenshot.png)
+![Litura editor highlighting generic writing patterns](docs/screenshot.png)
 
-## What you can do
+## What it does
 
-- Write in a focused plain-text editor.
-- Review the draft for vague wording, filler, buried points, broken paragraph promises, and abrupt topic shifts.
-- Click an underlined passage to see three replacements.
-- Right-click selected text to request a specific change. Press `Cmd/Ctrl+K` to attach the selection to the chat.
-- Discuss the whole draft in the chat.
-- Accept a short continuation with `Tab`, or dismiss it with `Escape`.
-- Type `/idea <instruction>` and press `Enter` to expand an idea in place.
+- Keeps focus on working document in a distraction-free editor.
+- Shows an AI score for texts; click it to see which words and phrases raised it.
+- Reviews sentences as you finish them — switchable off in settings — and reviews the full document on demand.
+- Highlights named, checkable prose and structure problems, including vague attribution, filler, buried points, broken paragraph promises, and abrupt topic shifts.
+- Offers three replace-in-place alternatives when you ask for them — `Offer rewrites` on a finding card, or a message with a passage attached. Nothing changes until you choose an option. `Try again` asks for three more.
+- Lets you dismiss a finding you disagree with, and jump between findings by clicking the counter in the header.
+- Provides a compact chat for discussing the whole draft.
+- Suggests short continuations below the current line; press `Tab` to accept or `Escape` to dismiss.
 
-The number in the toolbar is a local writing score for English and other predominantly Latin-script drafts. It is a heuristic, not an AI detector.
+Right-click a selection to attach it to the composer, or press `Cmd/Ctrl+K` to attach the current selection or focus the chat. `Cmd/Ctrl+S` downloads the draft; dropping a text file on the editor opens it.
+
+## Data and model access
+
+The draft, findings, conversation, and selected model are stored in browser local storage and survive a reload.
+
+The draft is also mirrored to `draft.md` in the project directory, so it survives cleared browser storage and opens in any editor. The browser copy stays authoritative while the app runs; if the file changes underneath it, Litura says so and offers to load it rather than merging or overwriting silently. Nothing leaves the machine except what a model request sends to the selected provider.
+
 
 ## Run locally
 
@@ -27,17 +35,9 @@ npm install
 npm start
 ```
 
-Open [http://127.0.0.1:3456](http://127.0.0.1:3456). Use the gear button to choose a provider, model, and reasoning level or to add an API key. Litura can also use credentials already available to Pi.
+Open [http://127.0.0.1:3456](http://127.0.0.1:3456). Use the gear button to choose a provider, model, and reasoning level or to add an API key. Litura also discovers credentials already stored by Pi and supported provider environment variables.
 
-## Privacy
-
-The draft and model selection stay in browser local storage. Chat history is cleared when the page reloads. When you use an AI feature, Litura sends the current draft and your instruction to the selected provider. Pi manages API keys.
-
-## Writing style
-
-All AI features follow [style.md](style.md). Edit it to change the voice and writing rules. Litura reads the file again for every request.
-
-Optional defaults:
+Optional environment defaults:
 
 ```bash
 PI_PROVIDER=anthropic
@@ -45,7 +45,10 @@ PI_MODEL=claude-sonnet-4-6
 PI_THINKING_LEVEL=medium
 PORT=3456
 STYLE_FILE=./style.md
+DRAFT_FILE=./draft.md
 ```
+
+Edit `style.md` to describe the voice, facts, and constraints Litura should preserve. The file is read again for each model request, so changes apply without restarting the server.
 
 ## Development
 
@@ -54,9 +57,9 @@ npm run build
 npm run check
 ```
 
-The app uses Node's native HTTP server, vanilla JavaScript, CodeMirror 6, Pi, and esbuild. Edit `src/app.js`, not the generated `public/app.js`.
+The server uses Node's native HTTP module. The browser UI is vanilla JavaScript with CodeMirror 6 and is bundled with esbuild. Source changes belong in `src/app.js`; `public/app.js` is generated.
 
-See [SPEC.md](SPEC.md) for product behavior and API details.
+See [SPEC.md](SPEC.md) for product behavior, API contracts, and implementation boundaries.
 
 ## License
 

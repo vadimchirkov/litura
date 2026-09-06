@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node index.js",
     "build": "esbuild src/app.js --bundle --outfile=public/app.js --format=iife",
-    "check": "node --check index.js && node --check pi.js && npm run build && node selfcheck.js"
+    "check": "node --check index.js && node --check pi.js && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js",
+    "check:deep": "node deepcheck.js"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.2",

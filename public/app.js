@@ -16454,7 +16454,10 @@
     /\ba testament to\b/i,
     /\bevolving landscape\b/i,
     /\bin order to\b/i,
-    /\bdue to the fact that\b/i
+    /\bdue to the fact that\b/i,
+    /\b(?:dashboard|data|design|roadmap|platform|system|tool|app|algorithm) (?:understands?|knows?|decides?|wants?|believes?|cares?)\b/i,
+    /\b(?:could|may|might|arguably|potentially|possibly)(?:\s+\w+){0,2}\s+(?:potentially|possibly|arguably|perhaps|may|might)\b/i,
+    /(?:["“][^"”\n]{1,24}["”][\s,]*){3,}|\b[A-Z]{3,}(?:\s+[A-Z]{3,}){2,}\b/
   ];
   var WORD_RE = /\p{L}[\p{L}\p{N}'’-]*/gu;
   function isLatinScript(text) {
@@ -16489,12 +16492,16 @@
       for (let i = 0; i + 3 <= words.length; i++) grams.push(words.slice(i, i + 3).join(" "));
       repetition = 1 - new Set(grams).size / grams.length;
     }
-    const strong = words.filter((word) => TELL_WORDS_STRONG.includes(word)).length;
-    const weak = words.filter((word) => TELL_WORDS_WEAK.includes(word)).length;
-    const phrases = TELL_PHRASES.filter((pattern) => pattern.test(text)).length;
+    const strongHits = words.filter((word) => TELL_WORDS_STRONG.includes(word));
+    const weakHits = words.filter((word) => TELL_WORDS_WEAK.includes(word));
+    const phraseHits = TELL_PHRASES.map((pattern) => text.match(pattern)?.[0]).filter(Boolean);
+    const strong = strongHits.length;
+    const weak = weakHits.length;
+    const phrases = phraseHits.length;
     const tells = strong + weak + phrases;
+    const hits = [...new Set([...phraseHits, ...strongHits, ...weakHits].map((hit) => hit.trim()))];
     const tellDensity = words.length ? (strong * 2 + weak + phrases * 4) / words.length : 0;
-    return { words: words.length, sentences: lengths.length, burstiness, diversity, repetition, tells, tellDensity };
+    return { words: words.length, sentences: lengths.length, burstiness, diversity, repetition, tells, tellDensity, hits };
   }
   var ANCHORS = { burstinessHuman: 0.6, diversityLow: 0.3, diversityHigh: 0.72, repetitionMax: 0.18, tellMax: 0.05 };
   var WEIGHTS = { tells: 0.45, burstiness: 0.25, diversity: 0.17, repetition: 0.13 };
@@ -16580,8 +16587,12 @@
   var chatChip = document.getElementById("chat-chip");
   var chatChipText = document.getElementById("chat-chip-text");
   var chatChipClear = document.getElementById("chat-chip-clear");
+  var chatSendButton = document.getElementById("chat-send");
   var chatClear = document.getElementById("chat-clear");
   var scoreEl = document.getElementById("style-score");
+  var chatPanel = document.getElementById("chat");
+  var autoReviewEl = document.getElementById("auto-review");
+  var chatHeight = 140;
   var thinkingNames = { off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
   var agentInfo = { available: false, providers: [], models: [], authProviders: [] };
   var agentSelection = null;
@@ -16669,7 +16680,7 @@
     updateAgentLabel();
     return agentInfo;
   }
-  settingsOpen.addEventListener("click", async () => {
+  async function openSettings() {
     settingsError.textContent = "";
     try {
       await refreshAgent();
@@ -16679,8 +16690,20 @@
     draftSelection = currentAgent();
     renderModelSettings();
     renderCredentials();
-    settingsDialog.showModal();
-  });
+    if (!settingsDialog.open) settingsDialog.showModal();
+  }
+  settingsOpen.addEventListener("click", openSettings);
+  async function ensureAgent() {
+    if (currentAgent()) return true;
+    try {
+      await refreshAgent();
+    } catch {
+    }
+    if (currentAgent()) return true;
+    chatAdd(chatEl("div", "chat-error", "No model selected \u2014 add an API key or pick a model in settings."));
+    openSettings();
+    return false;
+  }
   providerEl.addEventListener("change", () => {
     const first = agentInfo.models.find((model) => model.provider === providerEl.value);
     draftSelection = first ? { provider: first.provider, model: first.model, thinkingLevel: "medium" } : null;
@@ -16784,7 +16807,12 @@
   });
   function ghostShow(view, text) {
     const pos = view.state.selection.main.head;
-    view.dispatch({ effects: setGhostFx.of({ text, pos, line: view.state.doc.lineAt(pos).to }) });
+    const line = view.state.doc.lineAt(pos).to;
+    view.dispatch({
+      // The panel is a block below the line, so reserve its own height on top of
+      // the strip the chat already covers — otherwise it opens out of sight.
+      effects: [setGhostFx.of({ text, pos, line }), EditorView.scrollIntoView(line, { y: "nearest", yMargin: 72 })]
+    });
   }
   function ghostClear(view) {
     view.dispatch({ effects: clearGhostFx.of(null) });
@@ -16803,6 +16831,7 @@
   }
   var setReviewFx = StateEffect.define();
   var addReviewFx = StateEffect.define();
+  var dropReviewFx = StateEffect.define();
   var reviewFindings = [];
   var findingSeq = 0;
   var slopMark = (finding) => Decoration.mark({
@@ -16818,6 +16847,27 @@
       for (const effect of tr.effects) {
         if (effect.is(setReviewFx)) return Decoration.set(effect.value.map(slopMark), true);
         if (effect.is(addReviewFx)) return decorations2.update({ add: effect.value.map(slopMark), sort: true });
+        if (effect.is(dropReviewFx)) return decorations2.update({
+          filter: (_from, _to, deco) => deco.spec.attributes["data-slop-id"] !== String(effect.value)
+        });
+      }
+      if (!tr.docChanged) return decorations2;
+      const edited = [];
+      tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => edited.push([fromB, toB]));
+      return decorations2.map(tr.changes).update({
+        filter: (from, to) => !edited.some(([a, b]) => a < to && b > from)
+      });
+    },
+    provide: (field) => EditorView.decorations.from(field)
+  });
+  var setAttachFx = StateEffect.define();
+  var attachField = StateField.define({
+    create: () => Decoration.none,
+    update(decorations2, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(setAttachFx)) {
+          return effect.value ? Decoration.set([Decoration.mark({ class: "cm-attached" }).range(effect.value.from, effect.value.to)]) : Decoration.none;
+        }
       }
       if (!tr.docChanged) return decorations2;
       const edited = [];
@@ -16849,11 +16899,44 @@
     const count = workView.state.field(reviewField).size;
     reviewButton.classList.toggle("has-findings", count > 0);
     reviewButton.textContent = count ? `${count} suggestion${count === 1 ? "" : "s"}` : "Review";
+    reviewButton.title = count ? "Jump to the next finding \u2014 Shift-click to review again" : "Review writing and structure";
+  }
+  var jumpFrom = -1;
+  function jumpToNextFinding() {
+    const ranges = currentRanges();
+    if (!ranges.length) return;
+    const next = ranges.find((range) => range.from > jumpFrom) ?? ranges[0];
+    jumpFrom = next.from;
+    workView.dispatch({
+      selection: { anchor: next.from, head: next.to },
+      effects: EditorView.scrollIntoView(next.from, { y: "center" })
+    });
+    workView.focus();
+  }
+  function dismissFinding(id) {
+    reviewFindings = reviewFindings.filter((finding) => finding.id !== id);
+    workView.dispatch({ effects: dropReviewFx.of(id) });
+    if (activeFinding?.id === id) detach();
+    saveFindings();
+    syncReviewLabel();
+  }
+  function saveFindings() {
+    const live = reviewFindings.filter((finding) => findingRange(finding.id)).map(({ code, quote, pattern, reason, fix }) => ({ code, quote, pattern, reason, fix }));
+    localStorage.setItem("wa-findings", JSON.stringify(live));
+  }
+  function restoreFindings() {
+    let saved = [];
+    try {
+      saved = JSON.parse(localStorage.getItem("wa-findings") || "[]");
+    } catch {
+    }
+    if (saved.length && mergeFindings(saved)) syncReviewLabel();
   }
   function clearReview() {
     reviewFindings = [];
     checkedSentences.clear();
     workView.dispatch({ effects: setReviewFx.of([]) });
+    localStorage.removeItem("wa-findings");
     syncReviewLabel();
   }
   function mergeFindings(rawFindings) {
@@ -16861,6 +16944,7 @@
     if (!located.length) return 0;
     reviewFindings.push(...located);
     workView.dispatch({ effects: addReviewFx.of(located) });
+    saveFindings();
     return located.length;
   }
   async function reviewRequest(body) {
@@ -16876,6 +16960,8 @@
       clearReview();
       return;
     }
+    if (!await ensureAgent()) return;
+    jumpFrom = -1;
     reviewButton.disabled = true;
     reviewButton.textContent = "Reviewing\u2026";
     clearReview();
@@ -16893,13 +16979,22 @@
       reviewButton.disabled = false;
     }
   }
-  reviewButton.addEventListener("click", runReview);
+  reviewButton.addEventListener("click", (event) => {
+    if (workView.state.field(reviewField).size && !event.shiftKey) jumpToNextFinding();
+    else runReview();
+  });
   var AUTO_REVIEW_DELAY = 1500;
   var AUTO_REVIEW_MIN = 25;
   var AUTO_REVIEW_THRESHOLD = 20;
   var checkedSentences = /* @__PURE__ */ new Set();
   var autoReviewTimer = null;
   var autoReviewBusy = false;
+  var autoReviewOn = localStorage.getItem("wa-autoreview") !== "off";
+  autoReviewEl.checked = autoReviewOn;
+  autoReviewEl.addEventListener("change", () => {
+    autoReviewOn = autoReviewEl.checked;
+    localStorage.setItem("wa-autoreview", autoReviewOn ? "on" : "off");
+  });
   function syncStyleScore() {
     const text = workView.state.doc.toString();
     const { score, structural } = styleScore(text);
@@ -16908,9 +17003,30 @@
       return;
     }
     scoreEl.textContent = `${score}`;
-    scoreEl.title = structural ? `Local AI-tell score ${score}/100 (0 = clean). Computed in the browser, no model call.` : `Local AI-tell score ${score}/100, wording only \u2014 too short to judge rhythm or variety.`;
+    scoreEl.title = structural ? `Local AI-tell score ${score}/100 (0 = clean). Click to see what raised it.` : `Local AI-tell score ${score}/100, wording only \u2014 too short to judge rhythm or variety. Click for detail.`;
     scoreEl.classList.toggle("warn", score >= 40);
   }
+  function showScoreCard() {
+    const text = workView.state.doc.toString();
+    if (!text.trim() || !isLatinScript(text)) return;
+    const { score, hits, burstiness, diversity, repetition, structural } = styleScore(text);
+    const notes = [];
+    if (structural) {
+      if (burstiness < 0.45) notes.push("Sentence lengths are evenly matched \u2014 vary them.");
+      if (diversity < 0.5) notes.push("Vocabulary repeats within a short window.");
+      if (repetition > 0.05) notes.push("Some three-word sequences repeat.");
+    } else {
+      notes.push("Too short to judge rhythm or variety \u2014 wording only.");
+    }
+    const card = chatEl("div", "chat-card");
+    card.append(
+      chatEl("strong", "", `Local score ${score}/100`),
+      chatEl("span", "", hits.length ? `Known tells: ${hits.join(", ")}` : "No known tell words or phrases."),
+      chatEl("small", "", notes.join(" ") || "Rhythm and variety read as human.")
+    );
+    chatAdd(card);
+  }
+  scoreEl.addEventListener("click", showScoreCard);
   function autoReviewSchedule() {
     clearTimeout(autoReviewTimer);
     autoReviewTimer = setTimeout(autoReviewRun, AUTO_REVIEW_DELAY);
@@ -16926,10 +17042,11 @@
     return styleScore(text).score >= AUTO_REVIEW_THRESHOLD;
   }
   async function autoReviewRun() {
-    if (autoReviewBusy || reviewButton.disabled) return;
+    if (!autoReviewOn || autoReviewBusy || reviewButton.disabled || !currentAgent()) return;
     const pending = autoReviewPending(workView.state);
     if (!pending.length) return;
     autoReviewBusy = true;
+    reviewButton.classList.add("is-busy");
     for (const sentence of pending) checkedSentences.add(sentence.text);
     try {
       if (await reviewRequest({
@@ -16941,6 +17058,7 @@
       console.error("[/review auto]", error.message);
     } finally {
       autoReviewBusy = false;
+      reviewButton.classList.remove("is-busy");
     }
   }
   var suggestTimer = null;
@@ -16969,7 +17087,7 @@
   async function suggestFetch() {
     const view = workView;
     const state = view.state;
-    if (state.readOnly) return;
+    if (state.readOnly || !currentAgent()) return;
     if (!atParagraphEnd(state)) return;
     const doc2 = state.doc.toString();
     const pos = state.selection.main.head;
@@ -17093,6 +17211,27 @@
   function chatScroll(stick) {
     if (stick) chatStream.scrollTop = chatStream.scrollHeight;
   }
+  function saveChat() {
+    localStorage.setItem("wa-chat", JSON.stringify(chatHistory.slice(-20)));
+  }
+  function restoreChat() {
+    let saved = [];
+    try {
+      saved = JSON.parse(localStorage.getItem("wa-chat") || "[]");
+    } catch {
+    }
+    if (!Array.isArray(saved) || !saved.length) return;
+    chatHistory = saved;
+    for (const message of saved) {
+      if (message.role === "user") {
+        chatAdd(chatEl("div", "chat-message is-user", message.display ?? message.content));
+      } else {
+        const node = chatEl("div", "chat-message is-agent is-markdown");
+        node.innerHTML = renderMarkdown(message.content);
+        chatAdd(node);
+      }
+    }
+  }
   function chatAdd(node) {
     const stick = chatAtBottom();
     chatStream.append(node);
@@ -17100,25 +17239,34 @@
     chatClear.hidden = false;
     return node;
   }
-  function attach(range, finding = null) {
+  function attach(range, finding = null, focusComposer = true) {
     attached = range;
     activeFinding = finding;
     chatChip.classList.remove("hidden");
-    chatChipText.textContent = range.text;
-    chatChipText.title = range.text;
+    chatChipText.textContent = finding?.pattern ?? "Selected text";
+    workView.dispatch({ effects: setAttachFx.of({ from: range.from, to: range.to }) });
     chatInput.placeholder = "Describe the change";
-    chatInput.focus();
+    if (focusComposer) chatInput.focus();
   }
   function detach() {
     attached = null;
     activeFinding = null;
     chatChip.classList.add("hidden");
     chatInput.placeholder = CHAT_PLACEHOLDER;
+    workView.dispatch({ effects: setAttachFx.of(null) });
   }
   function attachedRange() {
     if (!attached) return null;
-    if (!activeFinding) return attached;
+    if (!activeFinding || attached.fixed) return attached;
     return findingRange(activeFinding.id) ?? attached;
+  }
+  function paragraphAround(state, from, to) {
+    let first = state.doc.lineAt(from).number;
+    let last = state.doc.lineAt(to).number;
+    while (first > 1 && state.doc.line(first - 1).text.trim()) first--;
+    while (last < state.doc.lines && state.doc.line(last + 1).text.trim()) last++;
+    const range = { from: state.doc.line(first).from, to: state.doc.line(last).to };
+    return { ...range, text: state.sliceDoc(range.from, range.to), fixed: true };
   }
   function applyText(text, card) {
     const range = attachedRange();
@@ -17133,16 +17281,35 @@
     card?.classList.add("is-applied");
     card?.parentElement?.classList.add("is-spent");
   }
-  function findingCard(finding) {
+  function findingCard(finding, instruction) {
     const card = chatEl("div", "chat-card");
+    const dismiss = chatEl("button", "chat-card-dismiss", "\xD7");
+    dismiss.type = "button";
+    dismiss.title = "Dismiss this finding";
+    dismiss.setAttribute("aria-label", "Dismiss this finding");
+    dismiss.addEventListener("click", () => {
+      chatAbort?.abort();
+      dismissFinding(finding.id);
+      if (card.nextElementSibling?.classList.contains("chat-variants")) card.nextElementSibling.remove();
+      card.remove();
+    });
     card.append(
+      dismiss,
       chatEl("strong", "", finding.pattern),
       chatEl("span", "", finding.reason),
       chatEl("small", "", finding.fix)
     );
+    const offer = chatEl("button", "chat-offer", "Offer rewrites");
+    offer.type = "button";
+    offer.addEventListener("click", () => {
+      offer.remove();
+      if (activeFinding?.id !== finding.id) openFinding(finding);
+      requestVariants(instruction);
+    });
+    card.append(offer);
     return card;
   }
-  function variantCards(variants) {
+  function variantCards(variants, instruction) {
     const doc2 = workView.state.doc.toString();
     const range = attachedRange();
     const measurable = isLatinScript(doc2) && range;
@@ -17169,6 +17336,14 @@
       });
       wrap.append(card);
     });
+    const again = chatEl("button", "chat-again", "Try again");
+    again.type = "button";
+    again.addEventListener("click", () => {
+      if (wrap.classList.contains("is-spent")) return;
+      wrap.remove();
+      requestVariants(instruction);
+    });
+    wrap.append(again);
     return wrap;
   }
   function skeletonCards(count = 3) {
@@ -17187,7 +17362,11 @@
   }
   async function requestVariants(instruction) {
     const range = attachedRange();
-    if (!range) return;
+    if (!range) {
+      chatAdd(chatEl("div", "chat-error", "That passage is no longer attached \u2014 select it again."));
+      return;
+    }
+    if (!await ensureAgent()) return;
     const placeholder2 = chatAdd(skeletonCards());
     chatAbort?.abort();
     chatAbort = new AbortController();
@@ -17199,6 +17378,8 @@
         body: JSON.stringify({
           document: workView.state.doc.toString(),
           selected: range.text,
+          from: range.from,
+          // exact span, so the server marks the right occurrence
           instruction,
           agent: currentAgent()
         })
@@ -17206,7 +17387,7 @@
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
       const stick = chatAtBottom();
-      placeholder2.replaceWith(variantCards(data.variants));
+      placeholder2.replaceWith(variantCards(data.variants, instruction));
       chatScroll(stick);
     } catch (error) {
       if (error.name === "AbortError") {
@@ -17217,27 +17398,43 @@
       placeholder2.replaceWith(chatEl("div", "chat-error", error.message));
     }
   }
+  var findingCards = /* @__PURE__ */ new Map();
   function openFinding(finding) {
     const range = findingRange(finding.id);
     if (!range) return;
-    attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding);
-    workView.dispatch({ selection: { anchor: range.from, head: range.to } });
-    chatAdd(findingCard(finding));
-    requestVariants(
-      `Fix ${finding.pattern}: ${finding.fix.replace(/\.?$/, ".")} Preserve facts, voice, and specific details; add no new claims.`
-    );
+    const structural = finding.code?.startsWith("level-");
+    const scope = structural ? paragraphAround(workView.state, range.from, range.to) : { ...range, text: workView.state.sliceDoc(range.from, range.to) };
+    attach(scope, finding, false);
+    workView.dispatch({ effects: EditorView.scrollIntoView(scope.from, { y: "center" }) });
+    if (structural) chatInput.placeholder = "Ask how to revise this part";
+    if (findingCards.get(finding.id)?.isConnected) {
+      chatScroll(true);
+      return;
+    }
+    const instruction = structural ? `Rewrite this whole paragraph to fix ${finding.pattern}: ${finding.fix.replace(/\.?$/, ".")} You may reorder and rejoin its sentences. Keep every fact, the level of detail, and the author's voice; add no new claims.` : `Fix ${finding.pattern}: ${finding.fix.replace(/\.?$/, ".")} Preserve facts, voice, and specific details; add no new claims.`;
+    findingCards.set(finding.id, chatAdd(findingCard(finding, instruction)));
   }
   async function chatSend() {
     const text = chatInput.value.trim();
     if (!text) return;
+    if (!await ensureAgent()) return;
     chatInput.value = "";
     chatResize();
     chatAdd(chatEl("div", "chat-message is-user", text));
-    if (attached) {
+    if (attached && !activeFinding?.code?.startsWith("level-")) {
       requestVariants(text);
       return;
     }
-    chatHistory.push({ role: "user", content: text });
+    chatHistory.push(attached && activeFinding ? {
+      role: "user",
+      content: `${text}
+
+Finding: ${activeFinding.pattern}
+Quoted passage: ${attached.text}
+Editing direction: ${activeFinding.fix}`,
+      display: text
+    } : { role: "user", content: text });
+    saveChat();
     const reply = chatAdd(chatEl("div", "chat-message is-agent"));
     reply.append(chatEl("span", "chat-caret"));
     chatAbort?.abort();
@@ -17249,7 +17446,7 @@
         headers: { "Content-Type": "application/json" },
         signal: chatAbort.signal,
         body: JSON.stringify({
-          messages: chatHistory,
+          messages: chatHistory.map(({ role, content: content2 }) => ({ role, content: content2 })),
           document: workView.state.doc.toString(),
           agent: currentAgent()
         })
@@ -17265,6 +17462,7 @@
       reply.classList.add("is-markdown");
       reply.innerHTML = renderMarkdown(answer);
       chatHistory.push({ role: "assistant", content: answer });
+      saveChat();
     } catch (error) {
       if (error.name === "AbortError") {
         reply.remove();
@@ -17298,7 +17496,12 @@
   function chatResize() {
     chatInput.style.height = "auto";
     chatInput.style.height = `${Math.min(chatInput.scrollHeight, 160)}px`;
+    chatSendButton.disabled = !chatInput.value.trim();
   }
+  chatSendButton.addEventListener("click", () => {
+    chatSend();
+    chatInput.focus();
+  });
   chatInput.placeholder = CHAT_PLACEHOLDER;
   chatInput.addEventListener("input", chatResize);
   chatInput.addEventListener("keydown", (event) => {
@@ -17322,6 +17525,7 @@
     chatAbort?.abort();
     chatStream.replaceChildren();
     chatHistory = [];
+    localStorage.removeItem("wa-chat");
     chatClear.hidden = true;
     detach();
     chatInput.focus();
@@ -17382,9 +17586,13 @@
       gap: "10px",
       margin: "6px 0 2px",
       padding: "8px 12px",
+      // Sits between two lines of the writer's own prose — it has to read as a
+      // panel on top of the draft, not as another paragraph of it.
+      border: "1px solid var(--border)",
       borderLeft: "2px solid var(--accent)",
       borderRadius: "0 var(--r-sm) var(--r-sm) 0",
-      background: "var(--surface-2)",
+      background: "var(--overlay)",
+      boxShadow: "var(--shadow-md)",
       color: "var(--text-2)",
       pointerEvents: "none",
       userSelect: "none"
@@ -17399,6 +17607,12 @@
       fontFamily: "var(--ui-font)",
       fontSize: "11px",
       letterSpacing: ".02em"
+    },
+    // The attached passage. Survives losing focus, unlike a native selection.
+    ".cm-attached": {
+      background: "color-mix(in srgb, var(--accent) 18%, transparent)",
+      borderRadius: "3px",
+      boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent)"
     },
     ".cm-slop": {
       textDecorationLine: "underline",
@@ -17460,10 +17674,14 @@
         // Ghost text state + decoration provider
         ghostField,
         reviewField,
+        attachField,
         // Read-only compartment — toggled during /idea streaming
         readonlyComp.of(EditorState.readOnly.of(false)),
         // Word wrap (essential for prose)
         EditorView.lineWrapping,
+        // Reserve the covered strip so CodeMirror scrolls the caret above the
+        // panel instead of under it.
+        EditorView.scrollMargins.of(() => ({ bottom: chatHeight })),
         // Placeholder shown when document is empty
         placeholder("Start writing..."),
         // Visual theme
@@ -17477,7 +17695,7 @@
             const finding = reviewFindings.find((item) => item.id === Number(mark.dataset.slopId));
             if (!finding) return false;
             openFinding(finding);
-            return true;
+            return false;
           },
           contextmenu(event, view) {
             const sel = view.state.selection.main;
@@ -17490,7 +17708,16 @@
         // Save on every edit + schedule a suggestion
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            if (reviewFindings.length) syncReviewLabel();
+            if (attached && update.state.field(attachField).size === 0) {
+              queueMicrotask(() => {
+                chatAbort?.abort();
+                detach();
+              });
+            }
+            if (reviewFindings.length) {
+              syncReviewLabel();
+              saveFindings();
+            }
             save();
             suggestSchedule();
             autoReviewSchedule();
@@ -17501,9 +17728,102 @@
     }),
     parent: editorWrap
   });
+  new ResizeObserver(() => {
+    chatHeight = Math.round(chatPanel.getBoundingClientRect().height) + 48;
+    document.documentElement.style.setProperty("--chat-height", `${chatHeight}px`);
+    workView.dispatch({
+      effects: EditorView.scrollIntoView(workView.state.selection.main.head, { y: "nearest" })
+    });
+  }).observe(chatPanel);
+  var diskTimer = null;
+  var diskText = null;
+  function saveToDisk() {
+    clearTimeout(diskTimer);
+    diskTimer = setTimeout(() => {
+      const text = workView.state.doc.toString();
+      fetch("/draft", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+      }).then(() => {
+        diskText = text;
+      }).catch((error) => console.error("[/draft]", error.message));
+    }, 800);
+  }
   function save() {
     localStorage.setItem("wa-working", workView.state.doc.toString());
+    saveToDisk();
   }
+  function loadFromDisk(text) {
+    workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: text } });
+    clearReview();
+  }
+  var driftAtStartup = null;
+  api("/draft").then(({ text }) => {
+    diskText = text;
+    if (!localStorage.getItem("wa-working")) {
+      if (text) loadFromDisk(text);
+      return;
+    }
+    if (text && text !== workView.state.doc.toString()) driftAtStartup = text;
+    else saveToDisk();
+  }).catch((error) => console.error("[/draft]", error.message)).finally(() => {
+    restoreFindings();
+    restoreChat();
+    if (driftAtStartup) promptDiskDrift(driftAtStartup);
+  });
+  var diskPrompt = null;
+  function promptDiskDrift(text) {
+    const note = chatEl("div", "chat-card");
+    const load = chatEl("button", "chat-again", "Load from disk");
+    load.type = "button";
+    load.addEventListener("click", () => {
+      loadFromDisk(text);
+      save();
+      note.remove();
+    });
+    note.append(
+      chatEl("strong", "", "draft.md changed outside Litura"),
+      chatEl("span", "", "Loading it replaces the draft in this window; keeping this draft overwrites the file on your next edit."),
+      load
+    );
+    diskPrompt = chatAdd(note);
+  }
+  async function checkDiskDrift() {
+    if (diskPrompt?.isConnected) return;
+    try {
+      const { text } = await api("/draft");
+      if (text === diskText || text === workView.state.doc.toString()) return;
+      diskText = text;
+      promptDiskDrift(text);
+    } catch (error) {
+      console.error("[/draft]", error.message);
+    }
+  }
+  window.addEventListener("focus", checkDiskDrift);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkDiskDrift();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "s") return;
+    event.preventDefault();
+    const url = URL.createObjectURL(new Blob([workView.state.doc.toString()], { type: "text/markdown" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "draft.md";
+    link.click();
+    URL.revokeObjectURL(url);
+  });
+  editorWrap.addEventListener("dragover", (event) => event.preventDefault());
+  editorWrap.addEventListener("drop", async (event) => {
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    event.preventDefault();
+    const text = await file.text();
+    if (workView.state.doc.length && !confirm(`Replace the current draft with ${file.name}?`)) return;
+    loadFromDisk(text);
+    save();
+  });
   workView.focus();
   syncStyleScore();
 })();
