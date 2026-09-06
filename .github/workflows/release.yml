@@ -43,6 +43,16 @@ jobs:
           pkg="$(node -p "require('./package.json').version")"
           test "$tag" = "$pkg" || { echo "tag v$tag != package.json $pkg"; exit 1; }
 
+      # Pushing a tag for a version already in the registry is a normal thing to
+      # do — recording an older release, re-running a job — and npm answers it
+      # with a hard error. Treat it as nothing to do rather than a failed build.
       - name: Publish to npm
         if: startsWith(github.ref, 'refs/tags/v')
-        run: npm publish
+        run: |
+          pkg="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$pkg@$version" version >/dev/null 2>&1; then
+            echo "$pkg@$version is already published — nothing to do."
+          else
+            npm publish
+          fi
