@@ -2,7 +2,7 @@
 
 Litura is a local, AI-assisted text editor for making prose sharper and less generic without taking control away from its author. The name comes from Latin: a correction, erasure, or visible revision in a manuscript.
 
-![Litura editor in dark mode](docs/screenshot.png)
+![Litura editor with review marks and inline continuation](docs/screenshot.png)
 
 ## What it does
 

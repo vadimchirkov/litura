@@ -5,6 +5,10 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.3.3 — 2026-09-07
+
+- Refreshed the README preview with a full-screen editor screenshot showing review marks and inline continuation.
+
 ## 0.3.2 — 2026-09-07
 
 - Moved the Slop Score next to the settings control in the editor header.
