@@ -1,6 +1,6 @@
 {
   "name": "litura-app",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A local AI-assisted editor for sharper, more human writing",
   "keywords": [
     "writing",
@@ -33,6 +33,8 @@
     "review.js",
     "review-model.js",
     "review-prompt.js",
+    "document-store.js",
+    "editing.js",
     "public",
     "style.md",
     "SPEC.md",
@@ -41,7 +43,8 @@
   "scripts": {
     "start": "node index.js",
     "build": "esbuild src/app.js --bundle --outfile=public/app.js --format=iife",
-    "check": "node --check index.js && node --check pi.js && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js",
+    "check": "node --check index.js && node --check pi.js && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js && node safetycheck.js",
+    "test:browser": "node tests/browser-fixture.mjs",
     "check:deep": "node deepcheck.js",
     "prepublishOnly": "npm run build"
   },

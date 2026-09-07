@@ -5,6 +5,12 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.3.0 — 2026-09-07
+
+- Review remarks stay beside the passage they describe without shifting the draft when opened or clicked.
+- Added document actions and local history, replace-in-place previews, light/dark appearance settings, and automatic settings saves.
+- Refined the editor header, chat composer, settings controls, and release safety checks.
+
 ## 0.2.0 — 2026-09-06
 
 - Settings can ask npm about new versions once a day, off by default. When a newer version is published the header shows a badge linking to this file; the badge links rather than installs, so updating stays a command you run. Left off, Litura opens no connection of its own.

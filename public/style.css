@@ -29,6 +29,138 @@
   padding: 0;
 }
 
+[hidden] { display: none !important; }
+
+/* The file name is the menu: one control for open, export and history, so the
+   header keeps a single row and the document keeps the page. */
+#document-menu-button { display: inline-flex; align-items: center; gap: 4px; max-width: 240px; }
+#document-name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#document-menu {
+  position: fixed;
+  margin: 0;
+  padding: 6px;
+  min-width: 200px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--overlay);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+}
+#document-menu button {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  text-align: left;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+#document-menu button:hover { background: var(--surface-3); }
+
+/* Status text belongs beside the control that produced it: saving is a
+   property of the file, so it rides beside the file name. */
+#save-status { color: var(--text-2); font-size: 12px; white-space: nowrap; }
+
+/* Review actions live in the assistant panel. The status line is the last
+   item and takes the leftover width, truncating rather than wrapping. */
+.chat-recipes { display: flex; align-items: center; gap: 8px; padding: 0 4px 8px; }
+.chat-recipes:not(:has(> #chat-preview:not([hidden]), > #ai-stop:not([hidden]), > #review-status:not(:empty))) { display: none; }
+.recipe {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--overlay);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.recipe:hover { background: var(--surface-3); }
+.recipe.has-findings { color: var(--accent); border-color: var(--accent); }
+.recipe.is-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; padding: 5px 6px; text-align: center; }
+.preview-step { display: inline-flex; align-items: center; gap: 6px; }
+.preview-hint { display: none; }
+#review-status { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 12px; }
+
+#document-menu-button, .document-dialog button {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+#document-menu-button:hover { background: var(--surface-2); }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.document-dialog { padding: 0 24px 24px; max-height: 85vh; overflow: auto; overscroll-behavior: contain; }
+/* Sticky, so the title and the way out stay reachable in a long list. */
+.document-dialog header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 20px 0 12px;
+  background: var(--overlay);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.document-dialog h2 { font-size: 18px; font-weight: 600; }
+.document-dialog h3, .document-dialog p { margin-bottom: 12px; }
+.document-dialog button { margin: 6px 6px 6px 0; }
+.document-dialog header button { margin: 0; }
+.document-dialog details { padding: 8px 0; }
+.document-dialog summary { cursor: pointer; color: var(--text-2); font-size: 13px; }
+
+/* One row per version: when, why, and enough of the text to recognise it. */
+.history-list { display: flex; flex-direction: column; gap: 4px; }
+.history-item { padding: 12px 0; border-top: 1px solid var(--border-subtle); }
+.history-item:first-child { border-top: 0; }
+.history-when { color: var(--text); font-size: 13px; font-weight: 500; }
+.history-excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: 13px;
+}
+.history-current { margin-top: 6px; color: var(--muted); font-size: 13px; }
+/* A row action, not the dialog's action — it does not get the 44px pill. */
+.document-dialog .history-item button { min-height: 30px; padding: 0 14px; margin: 8px 0 0; font-size: 13px; }
+.history-note { display: block; margin-top: 16px; color: var(--muted); font-size: 12px; }
+.document-dialog textarea { display: block; width: 100%; margin-top: 8px; padding: 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border); font: inherit; }
+.save-as-form label { display: grid; gap: 8px; color: var(--text-2); font-size: 13px; }
+.save-as-form input { width: 100%; }
+.save-as-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.passage-preview { display: block; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font: inherit; padding: 8px 0; }
+del.passage-preview { border-left: 2px solid var(--danger); padding-left: 8px; }
+ins.passage-preview { border-left: 2px solid var(--accent); padding-left: 8px; text-decoration: none; }
+.finding-row { display: block; text-align: left; width: 100%; }
+.chat-card select { max-width: 100%; background: var(--surface); color: var(--text); padding: 6px; border: 1px solid var(--border); }
+@media (max-width: 640px) {
+  .pane-header { padding: 0 8px; gap: 6px; }
+  #document-name { max-width: 96px; }
+  #save-status { display: none; }
+  .document-dialog { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
 /*
  * Design tokens lifted from chatgpt.com (OpenAI design system).
  * Prose keeps iA Writer Duo (--font); every other surface uses --ui-font.
@@ -57,6 +189,18 @@
   --overlay:       #ffffff;
   --scrim:         #00000073;
 
+  /* Review marks. A finding is a remark, not an error, so it gets a band the
+     eye can skip; the attached passage sits one step above it. */
+  --slop-tint:       color-mix(in srgb, var(--accent) 10%, transparent);
+  --slop-tint-hover: color-mix(in srgb, var(--accent) 18%, transparent);
+  --slop-line:       color-mix(in srgb, var(--accent) 40%, transparent);
+  --attached-tint:   color-mix(in srgb, var(--accent) 24%, transparent);
+
+  /* Kept and cut words while an option is being tried on. */
+  --ok:            #3f9448;
+  --added-tint:    color-mix(in srgb, var(--ok) 42%, transparent);
+  --removed-tint:  color-mix(in srgb, var(--danger) 24%, transparent);
+
   --shadow-sm: 0 1px 2px 0 #00000014;
   --shadow-md: 0 4px 16px 0 #0000001f;
   --shadow-lg: 0 12px 40px 0 #0000002e;
@@ -74,7 +218,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg:            #000000;
     --surface:       #212121;
     --surface-2:     #303030;
@@ -94,12 +238,54 @@
     --primary-hover: #ececec;
     --overlay:       #303030;
 
+    /* The same tints read weaker against a dark canvas — lift them. */
+    --slop-tint:       color-mix(in srgb, var(--accent) 16%, transparent);
+    --slop-tint-hover: color-mix(in srgb, var(--accent) 26%, transparent);
+    --slop-line:       color-mix(in srgb, var(--accent) 55%, transparent);
+    --attached-tint:   color-mix(in srgb, var(--accent) 32%, transparent);
+
+    --ok:            #6fcf76;
+    --added-tint:    color-mix(in srgb, var(--ok) 34%, transparent);
+    --removed-tint:  color-mix(in srgb, var(--danger) 26%, transparent);
+
     /* A shadow tuned for paper is invisible on a dark canvas — the floating
        panel then reads as text sitting on top of the draft. */
     --shadow-sm: 0 1px 2px 0 #00000059;
     --shadow-md: 0 6px 20px 0 #00000080;
     --shadow-lg: 0 16px 48px 0 #000000a6;
   }
+}
+
+/* An explicit dark-mode choice must also work on a light-system machine. */
+:root[data-theme="dark"] {
+  --bg:            #000000;
+  --surface:       #212121;
+  --surface-2:     #303030;
+  --surface-3:     #414141;
+  --border:        #ffffff26;
+  --border-subtle: #ffffff0d;
+  --border-strong: #ffffff33;
+  --text:          #ffffff;
+  --text-2:        #cdcdcd;
+  --muted:         #afafaf;
+  --accent:        #63a8f8;
+  --danger:        #ff9b97;
+  --fill:          #414141;
+  --fill-hover:    #4f4f4f;
+  --primary-bg:    #ffffff;
+  --primary-fg:    #0d0d0d;
+  --primary-hover: #ececec;
+  --overlay:       #303030;
+  --slop-tint:       color-mix(in srgb, var(--accent) 16%, transparent);
+  --slop-tint-hover: color-mix(in srgb, var(--accent) 26%, transparent);
+  --slop-line:       color-mix(in srgb, var(--accent) 55%, transparent);
+  --attached-tint:   color-mix(in srgb, var(--accent) 32%, transparent);
+  --ok:            #6fcf76;
+  --added-tint:    color-mix(in srgb, var(--ok) 34%, transparent);
+  --removed-tint:  color-mix(in srgb, var(--danger) 26%, transparent);
+  --shadow-sm: 0 1px 2px 0 #00000059;
+  --shadow-md: 0 6px 20px 0 #00000080;
+  --shadow-lg: 0 16px 48px 0 #000000a6;
 }
 
 html, body {
@@ -156,6 +342,7 @@ html, body {
 }
 
 .pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -163,6 +350,82 @@ html, body {
   overflow: hidden;
   background: var(--surface);
 }
+
+/* The rail floats in the margin the centred text column already leaves empty,
+   so a card appearing never moves a word. It is shown only when that margin
+   is wide enough to hold it; otherwise the cards go to the panel. Only the
+   cards take clicks — the margin below them still belongs to the editor. */
+.rail {
+  position: absolute;
+  top: 48px;
+  bottom: 0;
+  width: 240px;
+  padding-top: 28px;
+  overflow: hidden;
+  pointer-events: none;   /* left is set to the text column's right edge */
+}
+#rail > * {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0;
+  pointer-events: auto;
+  transition: top .12s var(--ease);
+}
+
+/* Margin notes are read at a glance beside the line, so the card is quiet
+   until it is the one being worked on: name, why, then what to do. */
+#rail .chat-card { gap: 3px; padding: 10px 12px; font-size: 13px; }
+#rail .chat-card strong { color: var(--text); font-size: 13px; font-weight: 500; }
+#rail .chat-card span { color: var(--text-2); }
+#rail .chat-card small { color: var(--text-2); }
+#rail .chat-card small::before { content: '→ '; color: var(--muted); }
+
+/* Hovering a card lights the mark it belongs to. What is attached is already
+   named in the composer chip, so the open card only needs a firmer edge to
+   stand out among its neighbours — no color, just weight. */
+#rail .chat-card.is-active { border-color: var(--border-strong); }
+.cm-slop.is-hot { background: var(--slop-tint-hover); }
+
+/* One × per card is one × too many at rest — a rail of them reads as a
+   toolbar. It comes back on hover and on keyboard focus. */
+#rail .chat-card-dismiss { opacity: 0; transition: opacity .12s ease; }
+#rail .chat-card:hover .chat-card-dismiss,
+#rail .chat-card:focus-within .chat-card-dismiss { opacity: .6; }
+#rail .chat-card .chat-card-dismiss:hover { opacity: 1; }
+
+#rail .chat-offer { margin-top: 7px; padding: 3px 10px; font-size: 12px; }
+
+/* A card is a box while it is a remark. What comes after — waiting for
+   options, stepping through them, the way back — is passing state, and a
+   bordered panel around a status line or one button is more furniture than
+   the moment deserves. The card keeps its place in the rail and gives up its
+   walls. */
+.chat-card.is-bare {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.card-working { color: var(--muted); font-size: 13px; }
+
+/* Bare too: the controls are the interface, nothing needs to hold them. */
+#rail #chat-preview {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+/* Asking for three more is a corner action, not a step in the ring: it sits
+   out of the reading order, at the end of the row the stepper starts. */
+#rail #preview-again {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+#rail #preview-again:hover { color: var(--text); background: none; }
+#rail .preview-hint { display: block; flex: 1 0 100%; color: var(--muted); font-size: 11px; }
 
 .pane-header {
   position: relative;
@@ -222,34 +485,33 @@ html, body {
   transition: background var(--motion, .12s) ease, color .12s ease;
 }
 
+.settings-open { margin-left: auto; }
+.settings-open svg { width: 17px; height: 17px; }
+
 .icon-btn:hover,
 .settings-open:hover {
   background: var(--surface-3);
   color: var(--text);
 }
 
-.agent-status {
-  max-width: 42%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 400;
-}
-
-/* Local style score — computed in the browser, so it updates as you type */
+/* Local slop score — computed in the browser, so it updates as you type.
+   Click it for the words behind the number. */
 .style-score {
   margin-left: auto;
-  min-width: 24px;
-  text-align: right;
+  padding: 0;
+  border: 0;
+  background: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
   color: var(--muted);
+  font: inherit;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
 }
-
-.style-score:empty { margin-left: auto; }
-.style-score.warn { color: var(--accent); }
+.style-score-label { color: var(--muted); }
+.style-score.warn #style-score-value { color: var(--accent); }
 
 /* Available update — quiet on purpose. Nothing is broken, and the writer is
    mid-sentence; this must not compete with the draft. */
@@ -266,40 +528,13 @@ html, body {
 .update-badge:hover { background: var(--fill-hover); color: var(--text); }
 .update-badge[hidden] { display: none; }
 
-/* Secondary pill button — ChatGPT's action/secondary style */
-.review-button {
-  display: inline-flex;
-  align-items: center;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-  cursor: pointer;
-  transition: background .12s ease, border-color .12s ease;
-}
-
-.review-button:hover { background: var(--surface-2); }
-.review-button:active { background: var(--surface-3); }
-.review-button:disabled { cursor: default; opacity: .5; }
-.review-button.has-findings { color: var(--accent); border-color: var(--accent); }
-
 /* A background check is still the writer's money being spent — show it */
-.review-button.is-busy { animation: review-busy 1.4s ease-in-out infinite; }
+.recipe.is-busy { animation: review-busy 1.4s ease-in-out infinite; }
 
 @keyframes review-busy {
   0%, 100% { border-color: var(--border); }
   50%      { border-color: var(--accent); }
 }
-
-.style-score { cursor: pointer; }
-.style-score:empty { cursor: default; }
 
 /* ── Chat ─────────────────────────────────────────────── */
 /*
@@ -341,23 +576,28 @@ html, body {
   max-height: 46vh;
   overflow-y: auto;
   padding: 4px;
-  /* Content clipped at the top should read as scrollable, not as broken. */
-  mask-image: linear-gradient(to bottom, transparent, #000 24px);
 }
 
 .chat-stream:empty { display: none; }
 
 /* Way out of the stream. Only shown once there is something to leave. */
+/* One control, two states: a × over an open conversation, and the way back
+   over a closed one. The pill is sized from its content so it can be both. */
 .chat-clear {
   align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
   height: 28px;
-  padding: 0 12px;
+  padding: 0 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-pill);
   background: var(--overlay);
   color: var(--muted);
   font: inherit;
   font-size: 12px;
+  line-height: 1;
   cursor: pointer;
   transition: color .12s ease;
 }
@@ -367,7 +607,6 @@ html, body {
 
 .chat-message,
 .chat-card,
-.chat-note,
 .chat-error {
   border-radius: var(--r-field);
   border: 1px solid var(--border-subtle);
@@ -399,7 +638,49 @@ html, body {
   font-size: 13px;
 }
 
-.chat-error { padding: 10px 14px; color: var(--danger); }
+/* A failed call is a fact, not an accusation: the mark carries the colour and
+   the sentence stays readable. Message left, the one thing to do about it
+   right, and nothing in between. */
+.chat-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  color: var(--text);
+}
+
+.chat-error::before {
+  content: '!';
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* The way out of a dead end. Five places raise one: a failed call, a failed
+   save, a draft left behind by an older version. */
+.chat-again {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--overlay);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.chat-again:hover { background: var(--surface-2); color: var(--text); }
+.chat-error .chat-again { margin-left: auto; align-self: center; }
 
 /* Rendered reply: block spacing comes from the tags, not from pre-wrap */
 .chat-message.is-markdown { white-space: normal; }
@@ -488,12 +769,6 @@ html, body {
 .chat-card strong { color: var(--text); font-size: 15px; font-weight: 600; }
 .chat-card small { color: var(--muted); font: inherit; }
 
-.chat-variants {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 /* ── Composer ─────────────────────────────────────────── */
 
 .chat-composer {
@@ -513,8 +788,26 @@ html, body {
   box-shadow: var(--shadow-lg), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+/* Recipes belong to an empty composer, not to the document's permanent UI.
+   focus-within keeps the button reachable by mouse and Shift+Tab. */
+.chat-recipe-suggestions { display: none; }
+.chat-composer:focus-within:has(#chat-input:placeholder-shown) .chat-recipe-suggestions:has(#review-button:not([hidden])) {
+  display: flex;
+  padding-top: 2px;
+}
+.chat-composer:focus-within:has(#chat-send.is-busy) .chat-recipe-suggestions:has(#review-button:not([hidden])) { display: none; }
+.chat-recipe-suggestions .recipe {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+  padding: 4px 8px;
+  min-height: 28px;
+}
+.chat-recipe-suggestions .recipe:hover { background: var(--surface-2); color: var(--text); }
+
 /* One line at rest: field left, send right, both on the same baseline. */
 .chat-row {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 8px;
@@ -535,6 +828,29 @@ html, body {
 }
 
 #chat-input::placeholder { color: var(--muted); }
+
+.chat-thinking {
+  display: none;
+  position: absolute;
+  left: 0;
+  bottom: 7px;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.chat-row:has(.chat-send.is-busy) #chat-input:placeholder-shown::placeholder { color: transparent; }
+.chat-row:has(.chat-send.is-busy) #chat-input:placeholder-shown + .chat-thinking { display: flex; }
+
+.chat-thinking-caret {
+  width: 1px;
+  height: 17px;
+  background: currentColor;
+  animation: thinking-caret 1.4s steps(1, end) infinite;
+}
 
 .chat-send {
   display: inline-flex;
@@ -558,6 +874,28 @@ html, body {
   background: var(--fill);
   color: var(--muted);
   cursor: default;
+}
+
+/* Working: the input gets a writing cursor while the button becomes Stop. */
+.chat-send { position: relative; }
+.chat-send.is-busy .chat-send-arrow { display: none; }
+.chat-send.is-busy::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 1.5px;
+  background: currentColor;
+}
+
+@keyframes thinking-caret {
+  0%, 45% { opacity: 1; transform: translateX(0); }
+  50%, 70% { opacity: .35; transform: translateX(3px); }
+  75%, 100% { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking-caret { animation: none; }
 }
 
 /* Names what is attached; the passage itself stays highlighted in the draft. */
@@ -606,9 +944,8 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .chat-message,
   .chat-card,
-  .chat-error,
-  .variant-card { animation: none; }
-  .review-button.is-busy { animation: none; border-color: var(--accent); }
+  .chat-error { animation: none; }
+  .recipe.is-busy { animation: none; border-color: var(--accent); }
   .chat-caret { animation: none; opacity: .6; }
 }
 
@@ -616,110 +953,90 @@ html, body {
    its content, so the reserved space is measured, not guessed. */
 #editor-wrapper .cm-content { padding-bottom: var(--chat-height, 140px); }
 
-/* ── Loading skeletons ────────────────────────────────── */
-/*
- * Used where the shape of what is coming is known — the three variant cards.
- * A spinner there would collapse the box and then shove it open again.
- */
-
-/* ── Variant cards ────────────────────────────────────── */
-
-.variant-card {
-  padding: 12px 14px;
-  border-radius: var(--r-field);
-  border: 1px solid var(--border-subtle);
+/* ── Rewrite preview ──────────────────────────────────── */
+/* The proposal is a clean sheet laid over the draft: the same white the chat
+   cards use, not another accent. Colour in here belongs to the edit itself —
+   what was added and what was cut — and a blue wash underneath drowns both. */
+.cm-variant {
   background: var(--overlay);
-  cursor: pointer;
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.55;
-  transition: background .12s ease;
-  animation: chat-in .2s var(--ease);
+  box-shadow: 0 0 0 2px var(--overlay);
+  border-bottom: 1px solid var(--border-strong);
+  white-space: pre-wrap;
 }
 
-.variant-card:hover { background: var(--surface-2); }
-
-.variant-label {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 4px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-/* Draft score if you pick this variant. Informational — never fed to the model. */
-.variant-delta {
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
-}
-
-.variant-delta.is-better { color: #53b559; }
-.variant-delta.is-worse  { color: var(--danger); }
-
-.variant-card.is-loading { cursor: default; }
-.variant-card.is-loading:hover { background: var(--overlay); }
-
-/* Once one option is applied the others point at a range that is gone. Stop
- * advertising a click that would silently do nothing. */
-.chat-variants.is-spent .variant-card { cursor: default; opacity: .45; }
-.chat-variants.is-spent .variant-card:hover { background: var(--overlay); }
-
-.chat-variants.is-spent .variant-card.is-applied { opacity: 1; }
-
-/* Three options the writer dislikes is a dead end without this */
-.chat-again {
-  align-self: flex-end;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  background: var(--overlay);
-  box-shadow: var(--shadow-sm);
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: color .12s ease;
-}
-
-.chat-again:hover { color: var(--text); }
-.chat-variants.is-spent .chat-again { display: none; }
-.variant-card.is-applied .variant-label::after {
-  content: 'applied';
-  color: var(--accent);
-  font-weight: 400;
-}
-
-.skeleton {
+/* What this option changes stays on the line — struck words stay struck, added
+   words stay added. Only the colour is temporary: it walks through the edit in
+   reading order, holds for a couple of seconds, and leaves the same way, so
+   the sentence ends up readable as a sentence instead of as a coloured diff.
+   Nothing here animates size: the line's reserved height is measured against
+   this, and a highlight that moved the text would make that measurement a
+   lie. */
+.cm-variant-new {
   border-radius: var(--r-xs);
-  background: linear-gradient(90deg, var(--surface-3) 25%, var(--surface-2) 37%, var(--surface-3) 63%);
-  background-size: 400% 100%;
-  animation: skeleton-sheen 1.4s ease-in-out infinite;
+  text-decoration: none;
+  animation: word-add 2.6s var(--ease) both;
 }
 
-.skeleton-label {
-  width: 64px;
-  height: 10px;
-  margin-bottom: 8px;
+.cm-variant-old {
+  border-radius: var(--r-xs);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  animation: word-cut 2.6s var(--ease) both;
 }
 
-.skeleton-line {
-  height: 12px;
-  margin-top: 7px;
+@keyframes word-add {
+  0%        { background: transparent; }
+  10%, 65%  { background: var(--added-tint); }
+  100%      { background: transparent; }
 }
 
-.skeleton-line.is-short { width: 62%; }
-
-@keyframes skeleton-sheen {
-  from { background-position: 100% 50%; }
-  to   { background-position: 0 50%; }
+@keyframes word-cut {
+  0%        { background: transparent; color: inherit; }
+  10%, 65%  { background: var(--removed-tint); color: var(--danger); }
+  100%      { background: transparent; color: var(--muted); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .skeleton { animation: none; }
+/* The cut word and the word taking its place are adjacent in the edit script
+   — the space between them belongs to neither, so it has to be drawn. */
+.cm-variant-old + .cm-variant-new { margin-left: .28em; }
+
+/* Stepping back to the writer's wording: the option's words are the ones
+   struck, and the words coming back are the writer's own — nothing lights up
+   for them, they were never a proposal. */
+.is-reverting .cm-variant-new { animation: none; background: transparent; }
+
+/* The controls belong to the row above the composer, not to a box of their
+   own — display:contents lets them sit in that flex row directly. */
+.preview-controls { display: contents; }
+#preview-count { color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+#rail #preview-kept .recipe { box-shadow: var(--shadow-sm); }
+/* The same card the options sat in, holding the way back instead: the box
+   stays put, only what is inside it changes. The bar drains over the same
+   window Undo is good for, so the writer sees the time running out rather
+   than guessing when the offer expires. */
+/* One button, no panel around it. The countdown lives in the button itself:
+   the control is the timer, so there is nothing to draw but the control. */
+#rail #preview-kept { display: flex; }
+#rail #preview-undo { position: relative; overflow: hidden; }
+/* Gated behind a class, not the bare selector: JS restarts the drain by
+   toggling it off and on across a reflow, which a plain animation on the
+   selector itself would not replay. */
+#rail #preview-kept.is-counting #preview-undo::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 2px;
+  background: var(--muted);
+  transform-origin: left;
+  animation: kept-countdown linear forwards;
+  animation-duration: var(--kept-ms, 8000ms);
 }
+@keyframes kept-countdown {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+/* A pressed toggle has to look pressed wherever the strip is living. */
+.recipe[aria-pressed="true"] { background: var(--surface-3); border-color: var(--border-strong); }
 
 .error-msg {
   padding: 12px 14px;
@@ -752,14 +1069,13 @@ html, body {
 
 .settings-dialog::backdrop { background: var(--scrim); }
 .settings-dialog form { display: flex; flex-direction: column; }
-.settings-dialog header, .settings-dialog footer {
+.settings-dialog header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px;
 }
 .settings-dialog header { border-bottom: 1px solid var(--border-subtle); }
-.settings-dialog footer { border-top: 1px solid var(--border-subtle); justify-content: flex-end; gap: 8px; }
 .settings-dialog header span, .settings-dialog h3 {
   color: var(--muted);
   font-size: 13px;
@@ -786,6 +1102,106 @@ html, body {
 }
 .settings-dialog input:focus, .settings-dialog select:focus { border-color: var(--accent); }
 
+/* The trigger reads as the field it replaces; only the list behind it is new. */
+.settings-dialog .combo-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 44px;
+  width: 100%;
+  padding: 0 36px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  text-align: left;
+}
+
+/* The hover state has to carry the icon too: `.settings-dialog button:hover`
+   is a `background` shorthand, and on hover it outranks the resting rule and
+   wipes every longhand it does not set — the magnifier vanishes mid-gesture. */
+.settings-dialog .combo-trigger,
+.settings-dialog .combo-trigger:hover {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238f8f8f' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.2'/%3E%3Cpath d='M10.2 10.2 13.5 13.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px 16px;
+}
+.settings-dialog .combo-trigger:hover { background-color: var(--surface-2); }
+.combo-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* `display` has to stay with the popover state: setting it unconditionally
+   overrides the UA's `[popover] { display: none }` and the list never hides. */
+.combo:popover-open { display: flex; flex-direction: column; }
+.combo {
+  position: fixed;
+  margin: 0;
+  padding: 0;
+  max-height: min(320px, 60vh);
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--overlay);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  overflow: hidden;
+}
+.combo .combo-search {
+  min-height: 42px;
+  padding-left: 36px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238f8f8f' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.2'/%3E%3Cpath d='M10.2 10.2 13.5 13.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 12px center;
+  background-size: 16px 16px;
+  font-size: 14px;
+}
+.combo .combo-search::-webkit-search-cancel-button { display: none; }
+.combo-list { overflow: auto; overscroll-behavior: contain; padding: 6px; }
+/* Two classes deep on purpose: these live inside the settings dialog, whose
+   own `button` rule would otherwise make every row a filled 44px pill. */
+.combo .combo-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;   /* dragging down a list is scrolling, not selecting */
+}
+.combo .combo-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Neutral grey, not the warm surfaces of the draft: this list sits on a white
+   panel and the beige read as a tint someone chose rather than a row under the
+   pointer. Mixed from the text colour, so it inverts with the theme. */
+.combo .combo-item:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+/* Where the keyboard is: stronger than hover, because the pointer can only be
+   in one place and the writer may be using neither. */
+.combo .combo-item.is-active { background: color-mix(in srgb, var(--text) 11%, transparent); }
+/* The chosen one is marked, not merely remembered by the field above. */
+.combo .combo-item::before {
+  content: '✓';
+  flex-shrink: 0;
+  width: 12px;
+  color: transparent;
+  font-size: 12px;
+}
+.combo .combo-item[aria-selected="true"] { font-weight: 500; }
+.combo .combo-item[aria-selected="true"]::before { color: var(--accent); }
+.combo-empty { padding: 12px; color: var(--muted); font-size: 13px; }
+
 /* The UA chevron sits flush against the border — draw our own, inset properly */
 .settings-dialog select {
   appearance: none;
@@ -799,6 +1215,10 @@ html, body {
 @media (prefers-color-scheme: dark) {
   .settings-dialog select {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23afafaf' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");
+  }
+  .settings-dialog .combo-trigger,
+  .settings-dialog .combo-trigger:hover {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23afafaf' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.2'/%3E%3Cpath d='M10.2 10.2 13.5 13.5'/%3E%3C/svg%3E");
   }
 }
 
@@ -817,12 +1237,6 @@ html, body {
   transition: background .12s ease;
 }
 .settings-dialog button:hover { background: var(--fill-hover); }
-.settings-dialog button.primary {
-  color: var(--primary-fg);
-  background: var(--primary-bg);
-  border-color: var(--primary-bg);
-}
-.settings-dialog button.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .settings-dialog button:disabled { opacity: .5; cursor: default; }
 .settings-dialog .dialog-close {
   width: 32px;
@@ -839,8 +1253,39 @@ html, body {
 .settings-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }
 .key-entry { display: grid; grid-template-columns: 1fr 2fr auto; gap: 10px; }
 .settings-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+/* Two switches in a row need a gap, or a two-line description runs straight
+   into the next label and the pair reads as one paragraph. */
+.settings-check + .settings-check { margin-top: 14px; }
 .settings-check input { min-height: 0; width: 16px; height: 16px; margin-top: 2px; accent-color: var(--accent); }
 .settings-check span { color: var(--text); font-size: 14px; }
+
+.theme-toggle input {
+  appearance: none;
+  position: relative;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 20px;
+  margin-top: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.theme-toggle input::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .12s ease, background .12s ease;
+}
+.theme-toggle input:checked { background: var(--primary-bg); border-color: var(--primary-bg); }
+.theme-toggle input:checked::after { transform: translateX(14px); background: var(--primary-fg); }
+.theme-toggle input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-check small { display: block; color: var(--muted); font-size: 13px; }
 
 .settings-hint, .settings-error { min-height: 18px; margin-top: 10px; color: var(--muted); font-size: 13px; }

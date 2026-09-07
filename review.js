@@ -38,7 +38,7 @@ export function mergeReviewFindings(groups) {
       (other.quote.includes(finding.quote) || finding.quote.includes(other.quote)))) return false;
     seen.push(finding);
     return true;
-  }).slice(0, 8);
+  });
 }
 
 // ─── Local style scoring ─────────────────────────────────────────────────────
@@ -220,8 +220,8 @@ export function parseVariants(raw) {
   const match = raw.match(/\[[\s\S]*\]/);
   if (!match) throw new Error('No JSON array in response');
   const variants = JSON.parse(match[0]);
-  if (!Array.isArray(variants) || variants.length < 3) throw new Error('Expected 3 variants');
-  return variants.slice(0, 3).map(String);
+  if (!Array.isArray(variants) || variants.length !== 3 || variants.some(text => typeof text !== 'string' || !text.trim())) throw new Error('Expected exactly 3 non-empty strings');
+  return variants;
 }
 
 // Models restate the last words before continuing ("…the queue" → "queue began
@@ -253,7 +253,7 @@ export function locateFindings(document, findings, occupied = []) {
   const located = [];
   for (const finding of findings) {
     let from = document.indexOf(finding.quote);
-    while (from >= 0 && taken.some(range => from < range.to && from + finding.quote.length > range.from)) {
+    while (from >= 0 && taken.some(range => (!range.code || range.code === finding.code) && from < range.to && from + finding.quote.length > range.from)) {
       from = document.indexOf(finding.quote, from + 1);
     }
     if (from < 0) continue;

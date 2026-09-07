@@ -7,14 +7,26 @@ const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ma
 // app cannot hold a prompt contract against it. Kept last so an OpenRouter-only
 // setup still starts, never as the preferred default.
 const FALLBACK_MODELS = [
-  ['amazon-bedrock', 'eu.anthropic.claude-sonnet-4-6'],
   ['anthropic', 'claude-sonnet-4-6'],
   ['openrouter', 'anthropic/claude-sonnet-4.6'],
   ['openrouter', 'auto'],
 ];
 
+// Pi ships a snapshot of every provider's model list, and it ages: a model
+// added to OpenRouter after the dependency was published cannot be selected at
+// all, because `resolveModel` refuses what the catalog does not know. Asking a
+// provider what it offers is a call to the provider the writer has already
+// pointed the app at, so it is allowed by default. `LITURA_OFFLINE_MODELS=1`
+// stops Litura from asking, and Pi falls back to the list it already has —
+// bundled, or cached from an earlier refresh.
+const OFFLINE_MODELS = Boolean(process.env.LITURA_OFFLINE_MODELS);
 let runtimePromise;
-const runtime = () => runtimePromise ??= ModelRuntime.create({ allowModelNetwork: false });
+const runtime = () => runtimePromise ??= ModelRuntime.create({ allowModelNetwork: !OFFLINE_MODELS })
+  .catch(error => {
+    // No network, or a provider that will not answer: the snapshot still works.
+    console.warn('[pi] model catalog refresh failed, using the bundled list —', error.message);
+    return ModelRuntime.create({ allowModelNetwork: false });
+  });
 
 const requestedThinking = () => THINKING_LEVELS.includes(process.env.PI_THINKING_LEVEL)
   ? process.env.PI_THINKING_LEVEL
@@ -122,17 +134,29 @@ const options = (selection, maxTokens, signal) => ({
   ...(selection.thinkingLevel === 'off' ? {} : { reasoning: selection.thinkingLevel }),
 });
 
-export async function completeText({ systemPrompt, userPrompt, selection, maxTokens = 1500, signal }) {
+export async function completeText({ systemPrompt, userPrompt, selection, maxTokens = 1500, signal, continuation = false }) {
   const resolved = await resolveModel(selection);
+  // Typing suggestions need the least reasoning the model supports, regardless
+  // of the author's review settings. Mandatory-reasoning models need headroom.
+  const effectiveSelection = continuation ? selectionFor(resolved.model, 'off') : resolved.selection;
+  const budget = continuation ? (effectiveSelection.thinkingLevel === 'off' ? 256 : 2048) : maxTokens;
   const response = await resolved.rt.completeSimple(
     resolved.model,
     request(systemPrompt, userPrompt),
-    options(resolved.selection, maxTokens, signal),
+    options(effectiveSelection, budget, signal),
   );
   if (response.stopReason === 'error' || response.stopReason === 'aborted') {
     throw new Error(response.errorMessage ?? 'Pi request failed');
   }
-  return response.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('').trim();
+  const text = response.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('').trim();
+  if (response.stopReason === 'length') {
+    if (!continuation) throw new Error('Model output was truncated. Try a smaller passage or less reasoning.');
+    // Only continuations may use partial output. Drop the potentially cut word;
+    // a reasoning-only response or a single cut token offers nothing to accept.
+    const boundary = text.search(/\s+\S*$/u);
+    return boundary < 0 ? '' : text.slice(0, boundary).trimEnd();
+  }
+  return text;
 }
 
 export async function streamText({ systemPrompt, userPrompt, messages, selection, maxTokens = 2000, signal, onText }) {
@@ -145,5 +169,6 @@ export async function streamText({ systemPrompt, userPrompt, messages, selection
   for await (const event of stream) {
     if (event.type === 'text_delta') onText(event.delta);
     if (event.type === 'error') throw new Error(event.error.errorMessage ?? 'Pi request failed');
+    if (event.type === 'done' && event.reason === 'length') throw new Error('Model output was truncated. Try a smaller passage.');
   }
 }

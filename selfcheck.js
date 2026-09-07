@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import { clampThinkingLevel } from '@earendil-works/pi-ai';
 import { getAgentStatus } from './pi.js';
 import { renderMarkdown } from './markdown.js';
 import {
@@ -6,6 +9,44 @@ import {
   parseReviewResponse, parseVariants, selectionSlot, styleMetrics, styleScore, trimOverlap,
   validateReviewFindings, variantLimit, SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
 } from './review.js';
+
+// Exercise the production completion path without credentials or model calls.
+// Keep the mock at the provider boundary, not at the truncation guard.
+{
+  const source = fs.readFileSync(new URL('./pi.js', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  assert.match(server.slice(server.indexOf("if (url.pathname === '/suggest')")), /continuation: true/);
+  const code = source.slice(source.indexOf('const options ='), source.indexOf('export async function streamText')).replace('export ', '');
+  let response, sent;
+  const model = { reasoning: true };
+  const selection = { thinkingLevel: 'high' };
+  const context = vm.createContext({
+    resolveModel: async () => ({ model, selection, rt: { completeSimple: async (_model, _request, options) => { sent = options; return response; } } }),
+    selectionFor: (model, level) => ({ thinkingLevel: clampThinkingLevel(model, level) }),
+    request: () => ({}),
+  });
+  vm.runInContext(code, context);
+  response = { stopReason: 'length', content: [{ type: 'text', text: 'the next useful wor' }] };
+  await assert.rejects(context.completeText({}), /truncated/);
+  assert.equal(sent.reasoning, 'high');
+  assert.equal(sent.maxTokens, 1500);
+  assert.equal(await context.completeText({ continuation: true }), 'the next useful');
+  assert.equal(sent.reasoning, undefined);
+  assert.equal(sent.maxTokens, 256);
+  assert.equal(selection.thinkingLevel, 'high');
+  model.thinkingLevelMap = { off: null, minimal: 'minimal' };
+  await context.completeText({ continuation: true });
+  assert.equal(sent.reasoning, 'minimal');
+  assert.equal(sent.maxTokens, 2048);
+  response = { stopReason: 'length', content: [{ type: 'thinking', thinking: 'reasoning only' }] };
+  assert.equal(await context.completeText({ continuation: true }), '');
+  response = { stopReason: 'stop', content: [{ type: 'text', text: 'a finished thought.' }] };
+  assert.equal(await context.completeText({ continuation: true }), 'a finished thought.');
+  for (const stopReason of ['error', 'aborted']) {
+    response = { stopReason, errorMessage: 'Provider failure', content: [] };
+    await assert.rejects(context.completeText({ continuation: true }), /Provider failure/);
+  }
+}
 
 // ── Rewrite scope ──
 // The marked span is what the model must replace; an unmarked draft is what
@@ -39,7 +80,8 @@ import {
   assert.equal(selectionSlot('anything', 'absent'), null);
 
   assert.deepEqual(parseVariants('noise ["a","b","c"] tail'), ['a', 'b', 'c']);
-  assert.throws(() => parseVariants('["a","b"]'), /Expected 3 variants/);
+  assert.throws(() => parseVariants('["a","b"]'), /Expected exactly 3/);
+  for (const raw of ['[null,"b","c"]', '[{},"b","c"]', '["","b","c"]', '["a","b","c","d"]']) assert.throws(() => parseVariants(raw));
   assert.throws(() => parseVariants('no array here'), /No JSON array/);
 }
 

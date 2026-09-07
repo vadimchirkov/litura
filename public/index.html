@@ -16,20 +16,46 @@
       right after the cursor — press Tab to accept, Escape to dismiss.
     -->
     <div class="pane" id="pane-work">
+      <!-- One row. Everything about the file lives behind its name; everything
+           about the review lives next to the Review button; status text sits
+           where the action that produced it is. -->
       <div class="pane-header">
         <span class="wordmark">Litura</span>
-        <span class="style-score" id="style-score" title="Local AI-tell score (0 = clean). Computed in the browser, no model call."></span>
-        <button class="review-button" id="review-button" title="Review writing and structure">Review</button>
+        <button type="button" id="document-menu-button" popovertarget="document-menu" title="Document actions">
+          <span id="document-name" title="Loading document">Loading…</span>
+          <span aria-hidden="true">▾</span>
+        </button>
+        <div id="document-menu" popover>
+          <button type="button" id="file-new">New</button>
+          <button type="button" id="file-open">Open a file…</button>
+          <input id="file-input" type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
+          <button type="button" id="file-export">Save as new…</button>
+          <button type="button" id="file-history">History</button>
+        </div>
+        <span id="save-status" role="status"></span>
+        <button type="button" class="style-score" id="style-score" hidden title="Local slop score">
+          <span class="style-score-label">Slop Score</span>
+          <span id="style-score-value"></span>
+        </button>
         <!-- Only ever shown when the writer opted into the check and a newer
              version exists. It links to the changelog, not to an installer:
              updating is a command the writer runs. -->
         <a class="update-badge" id="update-badge" hidden
            href="https://github.com/vadimchirkov/litura/blob/main/CHANGELOG.md"
            target="_blank" rel="noreferrer"></a>
-        <span class="agent-status" id="agent-status">Pi</span>
-        <button class="settings-open" id="settings-open" title="Model and access" aria-label="Model and access">⚙</button>
+        <button class="settings-open" id="settings-open" title="Model and access" aria-label="Model and access">
+          <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <path d="M3 5h14M3 10h14M3 15h14"/>
+            <circle cx="7" cy="5" r="1.5" fill="var(--surface)"/>
+            <circle cx="13" cy="10" r="1.5" fill="var(--surface)"/>
+            <circle cx="9" cy="15" r="1.5" fill="var(--surface)"/>
+          </svg>
+        </button>
       </div>
       <div id="editor-wrapper"></div>
+      <!-- Remarks about a place in the text stand next to that place. Below
+           the rail's breakpoint the same cards move into the panel. -->
+      <aside class="rail" id="rail" aria-label="Remarks on the draft" hidden></aside>
     </div>
 
   </div>
@@ -41,9 +67,37 @@
     prev/next stepper: the underlines themselves are the navigation.
   -->
   <div class="chat" id="chat">
-    <button type="button" class="chat-clear" id="chat-clear" hidden>Clear</button>
+    <!-- Closing puts the conversation away; it does not end it. The same
+         control brings it back, and the turns are still there. -->
+    <button type="button" class="chat-clear" id="chat-clear" hidden aria-label="Close conversation" title="Close — the conversation is kept">×</button>
     <div class="chat-stream" id="chat-stream"></div>
+    <!-- Actions that spend a model call sit with the assistant, not in the
+         header: the draft's frame stays the draft's. -->
+    <div class="chat-recipes">
+      <!-- Rewrites are tried on in the draft itself; this only steps through
+           them. display:contents keeps the buttons in the row above. -->
+      <span class="preview-controls" id="chat-preview" hidden>
+        <span class="preview-step">
+          <button type="button" class="recipe is-icon" id="preview-prev" aria-label="Previous option" title="Previous option (←)">‹</button>
+          <span id="preview-count"></span>
+          <button type="button" class="recipe is-icon" id="preview-next" aria-label="Next option" title="Next option (→)">›</button>
+        </span>
+        <button type="button" class="recipe is-icon" id="preview-again" aria-label="Try again" title="Try again — ask for three more">
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="19.17 3.33 19.17 8.33 14.17 8.33"/><path d="M17.07 12.5a7.5 7.5 0 1 1-1.77-7.8l3.87 3.63"/></svg>
+        </button>
+        <small class="preview-hint">← → step · leaving keeps what you see · Esc restores</small>
+      </span>
+      <!-- A replacement nobody pressed a button for has to leave a way back
+           where the writer is already looking. -->
+      <span class="preview-controls" id="preview-kept" hidden>
+        <button type="button" class="recipe" id="preview-undo" title="Put the passage back as it was">Undo</button>
+      </span>
+      <span id="review-status" role="status"></span>
+    </div>
     <div class="chat-composer">
+      <div class="chat-recipe-suggestions">
+        <button type="button" class="recipe" id="review-button" title="Review the whole draft. F8 and Shift+F8 step through findings.">Review</button>
+      </div>
       <!-- The passage itself stays highlighted in the draft; this only names
            what is attached and offers the way out. -->
       <div class="chat-chip hidden" id="chat-chip">
@@ -51,9 +105,12 @@
         <button type="button" id="chat-chip-clear" aria-label="Detach selection">×</button>
       </div>
       <div class="chat-row">
-        <textarea id="chat-input" rows="1" placeholder="Ask anything" autocomplete="off" spellcheck="false"></textarea>
+        <textarea id="chat-input" aria-label="Message or rewrite instruction" rows="1" placeholder="Ask anything" autocomplete="off" spellcheck="false"></textarea>
+        <span class="chat-thinking" aria-hidden="true">Thinking<span class="chat-thinking-caret"></span></span>
+        <!-- Send, and while the model is working, the same button is where the
+             work is shown and where it is stopped. -->
         <button type="button" class="chat-send" id="chat-send" aria-label="Send" disabled>
-          <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true"><path d="M10 16V5M10 4.5 5 9.5M10 4.5l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg class="chat-send-arrow" viewBox="0 0 20 20" width="17" height="17" aria-hidden="true"><path d="M10 16V5M10 4.5 5 9.5M10 4.5l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
     </div>
@@ -63,35 +120,68 @@
     <form method="dialog" id="settings-form">
       <header>
         <div>
-          <span>Pi</span>
           <h2>Model and access</h2>
         </div>
-        <button value="cancel" class="dialog-close" aria-label="Close">×</button>
+        <button type="button" class="dialog-close" aria-label="Close">×</button>
       </header>
 
       <section>
         <h3>Default model</h3>
+        <!-- Hundreds of models behind one field. A native datalist cannot do
+             it: its popup never reaches the top layer over a modal dialog, and
+             a pre-filled value means typing filters against the old answer. -->
         <div class="settings-grid">
-          <label>Provider<select id="agent-provider"></select></label>
-          <label>Model<select id="agent-model"></select></label>
+          <label>Provider
+            <button type="button" class="combo-trigger" id="agent-provider" popovertarget="provider-combo" aria-haspopup="listbox">
+              <span class="combo-value"></span>
+            </button>
+          </label>
+          <label>Model
+            <button type="button" class="combo-trigger" id="agent-model" popovertarget="model-combo" aria-haspopup="listbox">
+              <span class="combo-value"></span>
+            </button>
+          </label>
           <label>Reasoning<select id="agent-thinking"></select></label>
+        </div>
+        <div class="combo" id="provider-combo" popover>
+          <input type="search" class="combo-search" aria-label="Search providers" placeholder="Search providers" autocomplete="off" spellcheck="false">
+          <div class="combo-list" role="listbox" aria-label="Providers"></div>
+          <p class="combo-empty" hidden>Nothing matches</p>
+        </div>
+        <div class="combo" id="model-combo" popover>
+          <input type="search" class="combo-search" aria-label="Search models" placeholder="Search models" autocomplete="off" spellcheck="false">
+          <div class="combo-list" role="listbox" aria-label="Models"></div>
+          <p class="combo-empty" hidden>Nothing matches</p>
         </div>
         <p class="settings-hint" id="model-hint"></p>
       </section>
 
       <section>
-        <h3>Review</h3>
+        <h3>While you write</h3>
         <label class="settings-check">
           <input type="checkbox" id="auto-review" checked>
-          <span>Check sentences as I finish them<small>Off means only the Review button spends a model call.</small></span>
+          <span>Check finished paragraphs automatically<small>Sends each finished paragraph to your model as you write.</small></span>
+        </label>
+        <label class="settings-check">
+          <input type="checkbox" id="auto-suggest" checked>
+          <span>Suggest continuations while typing<small>Switch both off to send your text only when you ask.</small></span>
+        </label>
+        <p class="settings-hint">All changes take effect immediately.</p>
+      </section>
+
+      <section>
+        <h3>Appearance</h3>
+        <label class="settings-check theme-toggle">
+          <input type="checkbox" id="theme-toggle">
+          <span>Dark mode<small>Use a dark canvas and darker panels.</small></span>
         </label>
       </section>
 
       <section>
         <h3>Updates</h3>
         <label class="settings-check">
-          <input type="checkbox" id="update-check">
-          <span>Ask npm about new versions<small>Off by default, once a day when on. It is the only request Litura makes that no writing of yours asked for.</small></span>
+          <input type="checkbox" id="update-check" checked>
+          <span>Ask npm about new versions<small>Once a day. The only request Litura makes to anyone but your own model provider.</small></span>
         </label>
         <p class="settings-hint" id="update-status"></p>
       </section>
@@ -107,10 +197,6 @@
         <p class="settings-error" id="settings-error" role="alert"></p>
       </section>
 
-      <footer>
-        <button value="cancel">Cancel</button>
-        <button value="default" id="settings-save" class="primary">Save</button>
-      </footer>
     </form>
   </dialog>
 

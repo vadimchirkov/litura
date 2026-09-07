@@ -34,7 +34,7 @@ export function buildReviewTask({ targeted = false, phase = 'all' } = {}) {
     'Final whole-essay check: when a title recommends an action but the ending says that action remains undecided or unavailable, report level-1-whole-essay because the opening problem remains unresolved. ';
   const localRules = phase === 'global' ? '' :
     'Run these three local diagnostic passes unless the genre is excluded; do not return [] merely because grammar is clean. ' +
-    'At level 5, mechanically locate the main claim of every explanatory paragraph with at least five sentences. If it is neither the first nor the last sentence, report level-5-point-placement even when the paragraph is otherwise coherent. ' +
+    'At level 5, examine whether the reader can follow the main claim. A claim in the middle is not a fault by itself: report it only when its placement makes the argument harder to follow. Respect the stated genre, audience and intended voice. ' +
     'In an argumentative paragraph, treat its primary should or must recommendation as the main claim; do not mistake an earlier descriptive topic sentence for that claim. ' +
     'At level 6, list the central terms established by an opening and verify that the discussion carries them through repetition, a clear synonym, a pronoun, or an unambiguous conceptual continuation. Report an unannounced replacement term only when it makes the referent or organising promise unclear. Terms introduced and explained inside the same opening unit are fulfilled locally; do not require them to recur later unless the draft explicitly announces them as continuing threads. ' +
     'If a missing term is itself an item in an explicit opening index, omit the level-6 finding because the global pass handles the broken promise at level 3. ' +
@@ -42,7 +42,7 @@ export function buildReviewTask({ targeted = false, phase = 'all' } = {}) {
     'An unexplained switch to a different entity or domain is a clear level-7 failure; do not assume intentional disorientation unless the draft signals a narrative or artistic purpose. ' +
     'Before reporting level 7, test the ideas rather than vocabulary: a move from a misuse or problem to its proper use or remedy, or from a claim to an instruction about the same activity, is a conceptual bridge. ' +
     'In aphoristic, historical, or deliberately list-like prose, do not flag a grammatical subject change by itself when the ideas remain plainly related. If an unrelated passage forms a whole paragraph or section rather than one sentence, omit level 7 because the global pass handles it at level 4. ' +
-    'Final local check before answering: in every five-sentence-or-longer argumentative paragraph, a should/must recommendation with at least two sentences before and after it requires level-5-point-placement. ';
+    'Final local check: identify a concrete reader consequence for each diagnosis; omit purely mechanical preferences. ';
 
   return (
     'You are a sharp human editor auditing a draft for writing and reader-structure problems. ' +

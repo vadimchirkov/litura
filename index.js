@@ -20,6 +20,7 @@ import {
 } from './review.js';
 import { requestReview } from './review-model.js';
 import { buildReviewTask, buildReviewUser, reviewCodesForPass } from './review-prompt.js';
+import { documentStore, MAX_DOCUMENT_BYTES } from './document-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
@@ -28,7 +29,7 @@ const VERSION = MANIFEST.version;
 // Ask npm what it publishes. `null` means the package is not published at all
 // — a local build asking about itself — which is not the same as a failure.
 async function latestPublished(name = MANIFEST.name) {
-  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`);
+  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`, { signal: AbortSignal.timeout(5000) });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`registry returned ${response.status}`);
   return (await response.json()).version;
@@ -79,7 +80,8 @@ if (fs.existsSync(path.join(__dirname, 'src/app.js'))) {
     });
     console.log('[build] Frontend bundled ✓');
   } catch (e) {
-    console.error('[build] Frontend build failed — server will serve stale bundle.\n', e.message);
+    console.error('[build] Frontend build failed.\n', e.message);
+    process.exit(1);
   }
 }
 
@@ -91,6 +93,7 @@ const PUBLIC = path.join(__dirname, 'public');
 // bundled style.md is the fallback when the folder has none of its own.
 const CWD        = process.cwd();
 const DRAFT_FILE = process.env.DRAFT_FILE || path.join(CWD, 'draft.md');
+const draftStore = documentStore(DRAFT_FILE);
 const STYLE_FILE = process.env.STYLE_FILE
   || [path.join(CWD, 'style.md'), path.join(__dirname, 'style.md')].find(p => fs.existsSync(p))
   || path.join(CWD, 'style.md');
@@ -116,7 +119,7 @@ const NO_SLOP =
   'Never produce throat-clearing, vague attribution ("experts agree", "studies show"), empty puffery, ' +
   'faux insight, generic filler, "not just X, but Y" contrasts, robotic parallel rhythm, ' +
   'dramatic one-word fragments, stacked hedging, or decorative emphasis. Prefer concrete, specific wording over general claims. ' +
-  'Do not give tools or abstractions human understanding or intent. ';
+  'Do not give tools or abstractions human understanding or intent. Never invent evidence, sources, numbers or quotations. Preserve factual uncertainty. ';
 
 // A variant several times the length of the selection is the whole-document
 // rewrite failure, not a stylistic choice. Name it once and take the retry.
@@ -137,7 +140,7 @@ async function completeVariants({ system, user, body }) {
       // budget deliberating and returns an empty string. Three short strings
       // cost nothing, so give it the same room /review has.
       maxTokens: 4000,
-      signal: AbortSignal.timeout(90_000),
+      signal: body.signal,
     });
     let variants;
     try {
@@ -147,7 +150,8 @@ async function completeVariants({ system, user, body }) {
       console.warn(`[/rewrite] ${error.message} — retrying (${attempt}/${REWRITE_ATTEMPTS}); model said: ${JSON.stringify(raw.slice(0, 200))}`);
       continue;
     }
-    if (attempt >= REWRITE_ATTEMPTS || !variants.some(variant => variant.length > limit)) return variants;
+    if (!variants.some(variant => variant.length > limit)) return variants;
+    if (attempt >= REWRITE_ATTEMPTS) throw new Error('Rewrites exceeded the selected scope. Try a more specific instruction.');
     console.warn('[/rewrite] out-of-scope variants — retrying with the selection restated');
     prompt = `${user}\n\n---\n\nYour previous answer rewrote text outside the selection. ` +
       `Replace only ${SELECT_OPEN}${selected}${SELECT_CLOSE}, keep every other word of the sentence untouched, ` +
@@ -195,18 +199,52 @@ function sendJson(res, status, value) {
 // ─── Request body ──────────────────────────────────────────────────────────
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', chunk => { data += chunk; });
+    const chunks = [];
+    let bytes = 0;
+    req.on('data', chunk => {
+      bytes += chunk.length;
+      if (bytes > MAX_DOCUMENT_BYTES * 4) { reject(Object.assign(new Error('Request too large'), { status: 413 })); return; }
+      chunks.push(chunk);
+    });
     req.on('end', () => {
-      try { resolve(JSON.parse(data)); }
-      catch (e) { reject(e); }
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected a JSON object');
+        for (const key of ['text', 'revision', 'document', 'selected', 'target', 'context', 'idea', 'instruction', 'selection', 'provider', 'apiKey']) {
+          if (body[key] !== undefined && typeof body[key] !== 'string') throw new Error(`${key} must be a string`);
+        }
+        if (body.document && Buffer.byteLength(body.document) > MAX_DOCUMENT_BYTES) throw new Error('Document exceeds 1 MB');
+        for (const key of ['from', 'cursor']) if (body[key] !== undefined && (!Number.isInteger(body[key]) || body[key] < 0 || body[key] > (body.document ?? '').length)) throw new Error(`Invalid ${key}`);
+        resolve(body);
+      }
+      catch (e) { reject(Object.assign(e, { status: 400 })); }
     });
     req.on('error', reject);
   });
 }
 
 // ─── Server ────────────────────────────────────────────────────────────────
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch(error => {
+    console.error('[request]', error.message);
+    if (!res.headersSent) sendJson(res, error.status || 500, { error: error.message });
+    else res.end();
+  });
+});
+
+async function handleRequest(req, res) {
+  const host = req.headers.host;
+  const port = server.address()?.port;
+  if (![ `127.0.0.1:${port}`, `localhost:${port}` ].includes(host)) return sendJson(res, 403, { error: 'Invalid local host' });
+  if (req.headers.origin && req.headers.origin !== `http://${host}`) return sendJson(res, 403, { error: 'Cross-origin requests are not allowed' });
+  if (req.headers['sec-fetch-site'] === 'cross-site') return sendJson(res, 403, { error: 'Cross-site requests are not allowed' });
+  if (!['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) return sendJson(res, 405, { error: 'Method not allowed' });
+  if (req.method !== 'GET' && req.headers['content-type']?.split(';')[0].trim() !== 'application/json') return sendJson(res, 415, { error: 'Use application/json' });
+  const cancellation = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) cancellation.abort(); });
+  const signal = AbortSignal.any([cancellation.signal, AbortSignal.timeout(120_000)]);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
   const url = new URL(req.url, `http://localhost`);
 
   // Which version is running, and — only when the browser asks with ?check=1,
@@ -248,23 +286,21 @@ const server = http.createServer(async (req, res) => {
   //
   if (url.pathname === '/draft') {
     if (req.method === 'GET') {
-      let text = '';
-      try { text = fs.readFileSync(DRAFT_FILE, 'utf8'); } catch {}
-      sendJson(res, 200, { text, path: DRAFT_FILE });
+      sendJson(res, 200, draftStore.read());
       return;
     }
     if (req.method === 'PUT') {
       try {
         const body = await readBody(req);
-        fs.writeFileSync(DRAFT_FILE, String(body.text ?? ''), 'utf8');
-        sendJson(res, 200, { saved: true });
+        sendJson(res, 200, { saved: true, ...draftStore.write(body.text, body.revision) });
       } catch (error) {
         console.error('[/draft]', error.message);
-        sendJson(res, 500, { error: error.message });
+        sendJson(res, error.status || 500, { error: error.message, current: error.current });
       }
       return;
     }
   }
+  if (req.method === 'GET' && url.pathname === '/draft/history') return sendJson(res, 200, { snapshots: draftStore.history() });
 
   // ── Static
   if (req.method === 'GET') {
@@ -283,7 +319,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST') {
     let body;
     try { body = await readBody(req); }
-    catch { res.writeHead(400); res.end('Bad request'); return; }
+    catch (error) { sendJson(res, error.status || 400, { error: error.message }); return; }
+    body.signal = signal;
+    if ((body.document?.length ?? 0) > 60_000) return sendJson(res, 413, { error: 'AI actions support up to 60,000 characters per draft. Split the document into smaller drafts; editing and export remain available.' });
+    if (url.pathname === '/rewrite' && (!body.selected || !Number.isInteger(body.from) || body.document?.slice(body.from, body.from + body.selected.length) !== body.selected)) return sendJson(res, 400, { error: 'Selected text does not match the document range' });
 
     // POST /idea — SSE stream
     if (url.pathname === '/idea') {
@@ -309,7 +348,7 @@ const server = http.createServer(async (req, res) => {
           systemPrompt: system,
           userPrompt: user,
           selection: body.agent,
-          signal: AbortSignal.timeout(90_000),
+          signal,
           onText: text => res.write(`data: ${JSON.stringify({ text })}\n\n`),
         });
         res.write('data: [DONE]\n\n');
@@ -346,6 +385,7 @@ const server = http.createServer(async (req, res) => {
       );
       const user = [
         `DRAFT:\n${body.document || '(empty)'}`,
+        body.context ? `WRITING BRIEF:\n${body.context}` : '',
         body.selection ? `SELECTED PASSAGE:\n${body.selection}` : '',
       ].filter(Boolean).join('\n\n---\n\n');
 
@@ -359,7 +399,7 @@ const server = http.createServer(async (req, res) => {
           systemPrompt: `${system}\n\n---\n\n${user}`,
           messages: turns,
           selection: body.agent,
-          signal: AbortSignal.timeout(120_000),
+          signal,
           onText: text => res.write(`data: ${JSON.stringify({ text })}\n\n`),
         });
         res.write('data: [DONE]\n\n');
@@ -389,9 +429,7 @@ const server = http.createServer(async (req, res) => {
         'never restate, absorb, or repeat any words outside the markers, and keep roughly the length of the selection. ' +
         'Follow the instruction — it names the specific problem this replacement has to fix. ' +
         NO_SLOP +
-        'Example — selection "Studies show that" in "Studies show that remote teams ship faster.", ' +
-        'instruction "Fix vague attribution": ["Our 2023 delivery data shows that", "Two of the three teams we tracked found that", ' +
-        '"In the six months after the switch,"] — not a rewrite of the whole sentence. ' +
+        'Never invent sources, numbers, dates, quotes, evidence, or stronger certainty. If evidence is missing, preserve uncertainty or ask for a source. ' +
         'Return ONLY a JSON array with exactly 3 strings: ["variant1","variant2","variant3"]. ' +
         'No markdown fences, no commentary, no explanation — just the raw JSON array.'
       );
@@ -436,6 +474,7 @@ const server = http.createServer(async (req, res) => {
       const user = buildReviewUser({ document, target, context: body.context });
       const phases = target ? ['local'] : ['global', 'local'];
       const prompts = phases.map(phase => ({
+        phase,
         systemPrompt: buildSystemPrompt(buildReviewTask({ targeted: Boolean(target), phase })),
         userPrompt: user,
         allowedCodes: reviewCodesForPass(Boolean(target), phase),
@@ -443,11 +482,13 @@ const server = http.createServer(async (req, res) => {
       }));
 
       try {
-        const findings = await requestReview({
+        const result = await requestReview({
           prompts,
           selection: body.agent,
+          signal,
+          detailed: true,
         });
-        sendJson(res, 200, { findings });
+        sendJson(res, 200, result);
       } catch (e) {
         console.error('[/review]', e.message);
         sendJson(res, 500, { error: e.message });
@@ -493,8 +534,8 @@ const server = http.createServer(async (req, res) => {
           systemPrompt: system,
           userPrompt: userMsg,
           selection: body.agent,
-          maxTokens: 80,
-          signal: AbortSignal.timeout(30_000),
+          continuation: true,
+          signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ suggestion: trimOverlap(prefix, suggestion) }));
@@ -507,8 +548,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     res.writeHead(404); res.end('Not found');
+    return;
   }
-});
+  sendJson(res, 405, { error: 'Method not allowed' });
+}
 
 function openBrowser(url) {
   const [cmd, args] = process.platform === 'darwin' ? ['open', [url]]
@@ -532,7 +575,7 @@ function listen(port, attempt = 0) {
     process.exit(1);
   });
   server.once('listening', () => {
-    const url = `http://127.0.0.1:${port}`;
+    const url = `http://127.0.0.1:${server.address().port}`;
     console.log(`Litura → ${url}`);
     console.log(`Draft  → ${DRAFT_FILE}`);
     console.log(`Style  → ${STYLE_FILE}`);

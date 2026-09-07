@@ -402,11 +402,11 @@
         /* Tree.BranchShift */
       ), maxChunk = chunk << 1, minChunk = chunk >> 1;
       let chunked = [], currentLines = 0, currentLen = -1, currentChunk = [];
-      function add(child) {
+      function add2(child) {
         let last;
         if (child.lines > maxChunk && child instanceof _TextNode) {
           for (let node of child.children)
-            add(node);
+            add2(node);
         } else if (child.lines > minChunk && (currentLines > minChunk || !currentLines)) {
           flush();
           chunked.push(child);
@@ -430,7 +430,7 @@
         currentLines = currentChunk.length = 0;
       }
       for (let child of children)
-        add(child);
+        add2(child);
       flush();
       return chunked.length == 1 ? chunked[0] : new _TextNode(chunked, length);
     }
@@ -641,6 +641,12 @@
     if (!surrogateLow2(code1))
       return code0;
     return (code0 - 55296 << 10) + (code1 - 56320) + 65536;
+  }
+  function fromCodePoint(code) {
+    if (code <= 65535)
+      return String.fromCharCode(code);
+    code -= 65536;
+    return String.fromCharCode((code >> 10) + 55296, (code & 1023) + 56320);
   }
   function codePointSize2(code) {
     return code < 65536 ? 1 : 2;
@@ -2505,20 +2511,20 @@
     A single `$` is equivalent to `$1`, and `$$` will produce a
     literal dollar sign.
     */
-    phrase(phrase, ...insert2) {
+    phrase(phrase2, ...insert2) {
       for (let map of this.facet(_EditorState.phrases))
-        if (Object.prototype.hasOwnProperty.call(map, phrase)) {
-          phrase = map[phrase];
+        if (Object.prototype.hasOwnProperty.call(map, phrase2)) {
+          phrase2 = map[phrase2];
           break;
         }
       if (insert2.length)
-        phrase = phrase.replace(/\$(\$|\d*)/g, (m, i) => {
+        phrase2 = phrase2.replace(/\$(\$|\d*)/g, (m, i) => {
           if (i == "$")
             return "$";
           let n = +(i || 1);
           return !n || n > insert2.length ? m : insert2[n - 1];
         });
-      return phrase;
+      return phrase2;
     }
     /**
     Find the values for a given language data field, provided by the
@@ -2773,22 +2779,22 @@
     `Y`.)
     */
     update(updateSpec) {
-      let { add = [], sort = false, filterFrom = 0, filterTo = this.length } = updateSpec;
+      let { add: add2 = [], sort = false, filterFrom = 0, filterTo = this.length } = updateSpec;
       let filter = updateSpec.filter;
-      if (add.length == 0 && !filter)
+      if (add2.length == 0 && !filter)
         return this;
       if (sort)
-        add = add.slice().sort(cmpRange);
+        add2 = add2.slice().sort(cmpRange);
       if (this.isEmpty)
-        return add.length ? _RangeSet.of(add) : this;
+        return add2.length ? _RangeSet.of(add2) : this;
       let cur = new LayerCursor(this, null, -1).goto(0), i = 0, spill = [];
       let builder = new RangeSetBuilder();
-      while (cur.value || i < add.length) {
-        if (i < add.length && (cur.from - add[i].from || cur.startSide - add[i].value.startSide) >= 0) {
-          let range = add[i++];
+      while (cur.value || i < add2.length) {
+        if (i < add2.length && (cur.from - add2[i].from || cur.startSide - add2[i].value.startSide) >= 0) {
+          let range = add2[i++];
           if (!builder.addInner(range.from, range.to, range.value))
             spill.push(range);
-        } else if (cur.rangeIndex == 1 && cur.chunkIndex < this.chunk.length && (i == add.length || this.chunkEnd(cur.chunkIndex) < add[i].from) && (!filter || filterFrom > this.chunkEnd(cur.chunkIndex) || filterTo < this.chunkPos[cur.chunkIndex]) && builder.addChunk(this.chunkPos[cur.chunkIndex], this.chunk[cur.chunkIndex])) {
+        } else if (cur.rangeIndex == 1 && cur.chunkIndex < this.chunk.length && (i == add2.length || this.chunkEnd(cur.chunkIndex) < add2[i].from) && (!filter || filterFrom > this.chunkEnd(cur.chunkIndex) || filterTo < this.chunkPos[cur.chunkIndex]) && builder.addChunk(this.chunkPos[cur.chunkIndex], this.chunk[cur.chunkIndex])) {
           cur.nextChunk();
         } else {
           if (!filter || filterFrom > cur.to || filterTo < cur.from || filter(cur.from, cur.to, cur.value)) {
@@ -3655,6 +3661,35 @@
     if (name2 == "Right") name2 = "ArrowRight";
     if (name2 == "Down") name2 = "ArrowDown";
     return name2;
+  }
+
+  // node_modules/crelt/index.js
+  function crelt() {
+    var elt = arguments[0];
+    if (typeof elt == "string") elt = document.createElement(elt);
+    var i = 1, next = arguments[1];
+    if (next && typeof next == "object" && next.nodeType == null && !Array.isArray(next)) {
+      for (var name2 in next) if (Object.prototype.hasOwnProperty.call(next, name2)) {
+        var value = next[name2];
+        if (typeof value == "string") elt.setAttribute(name2, value);
+        else if (value != null) elt[name2] = value;
+      }
+      i++;
+    }
+    for (; i < arguments.length; i++) add(elt, arguments[i]);
+    return elt;
+  }
+  function add(elt, child) {
+    if (typeof child == "string") {
+      elt.appendChild(document.createTextNode(child));
+    } else if (child == null) {
+    } else if (child.nodeType != null) {
+      elt.appendChild(child);
+    } else if (Array.isArray(child)) {
+      for (var i = 0; i < child.length; i++) add(elt, child[i]);
+    } else {
+      throw new RangeError("Unsupported child node: " + child);
+    }
   }
 
   // node_modules/@codemirror/view/dist/index.js
@@ -4934,9 +4969,9 @@
             update.to = to;
             level = update.inner;
           } else {
-            let add = { from, to, direction, inner: [] };
-            level.push(add);
-            level = add.inner;
+            let add2 = { from, to, direction, inner: [] };
+            level.push(add2);
+            level = add2.inner;
           }
         }
       }
@@ -8601,11 +8636,11 @@
       return new _BlockInfo(this.from, this.length + other.length, this.top, this.height + other.height, content2);
     }
   };
-  var QueryType = /* @__PURE__ */ (function(QueryType2) {
-    QueryType2[QueryType2["ByPos"] = 0] = "ByPos";
-    QueryType2[QueryType2["ByHeight"] = 1] = "ByHeight";
-    QueryType2[QueryType2["ByPosNoHeight"] = 2] = "ByPosNoHeight";
-    return QueryType2;
+  var QueryType = /* @__PURE__ */ (function(QueryType3) {
+    QueryType3[QueryType3["ByPos"] = 0] = "ByPos";
+    QueryType3[QueryType3["ByHeight"] = 1] = "ByHeight";
+    QueryType3[QueryType3["ByPosNoHeight"] = 2] = "ByPosNoHeight";
+    return QueryType3;
   })(QueryType || (QueryType = {}));
   var Epsilon = 1e-3;
   var HeightMap = class _HeightMap {
@@ -11816,6 +11851,9 @@
       Keymaps.set(bindings, map = buildKeymap(bindings.reduce((a, b) => a.concat(b), [])));
     return map;
   }
+  function runScopeHandlers(view, event, scope) {
+    return runHandlers(getKeymap(view.state), event, view, scope);
+  }
   var storedPrefix = null;
   var PrefixTimeout = 4e3;
   function buildKeymap(bindings, platform = currentPlatform) {
@@ -11828,7 +11866,7 @@
       else if (current != is)
         throw new Error("Key binding " + name2 + " is used both as a regular binding and as a multi-stroke prefix");
     };
-    let add = (scope, key, command2, preventDefault, stopPropagation) => {
+    let add2 = (scope, key, command2, preventDefault, stopPropagation) => {
       var _a2, _b;
       let scopeObj = bound[scope] || (bound[scope] = /* @__PURE__ */ Object.create(null));
       let parts = key.split(/ (?!$)/).map((k) => normalizeKeyName(k, platform));
@@ -11878,9 +11916,9 @@
       if (!name2)
         continue;
       for (let scope of scopes) {
-        add(scope, name2, b.run, b.preventDefault, b.stopPropagation);
+        add2(scope, name2, b.run, b.preventDefault, b.stopPropagation);
         if (b.shift)
-          add(scope, "Shift-" + name2, b.shift, b.preventDefault, b.stopPropagation);
+          add2(scope, "Shift-" + name2, b.shift, b.preventDefault, b.stopPropagation);
       }
     }
     return bound;
@@ -12049,6 +12087,260 @@
       }
     }
   });
+  var panelConfig = /* @__PURE__ */ Facet.define({
+    combine(configs) {
+      let topContainer, bottomContainer;
+      for (let c of configs) {
+        topContainer = topContainer || c.topContainer;
+        bottomContainer = bottomContainer || c.bottomContainer;
+      }
+      return { topContainer, bottomContainer };
+    }
+  });
+  function getPanel(view, panel) {
+    let plugin = view.plugin(panelPlugin);
+    let index = plugin ? plugin.specs.indexOf(panel) : -1;
+    return index > -1 ? plugin.panels[index] : null;
+  }
+  var panelPlugin = /* @__PURE__ */ ViewPlugin.fromClass(class {
+    constructor(view) {
+      this.input = view.state.facet(showPanel);
+      this.specs = this.input.filter((s) => s);
+      this.panels = this.specs.map((spec) => spec(view));
+      let conf = view.state.facet(panelConfig);
+      this.top = new PanelGroup(view, true, conf.topContainer);
+      this.bottom = new PanelGroup(view, false, conf.bottomContainer);
+      this.top.sync(this.panels.filter((p) => p.top));
+      this.bottom.sync(this.panels.filter((p) => !p.top));
+      for (let p of this.panels) {
+        p.dom.classList.add("cm-panel");
+        if (p.mount)
+          p.mount();
+      }
+    }
+    update(update) {
+      let conf = update.state.facet(panelConfig);
+      if (this.top.container != conf.topContainer) {
+        this.top.sync([]);
+        this.top = new PanelGroup(update.view, true, conf.topContainer);
+      }
+      if (this.bottom.container != conf.bottomContainer) {
+        this.bottom.sync([]);
+        this.bottom = new PanelGroup(update.view, false, conf.bottomContainer);
+      }
+      this.top.syncClasses();
+      this.bottom.syncClasses();
+      let input = update.state.facet(showPanel);
+      if (input != this.input) {
+        let specs = input.filter((x) => x);
+        let panels = [], top2 = [], bottom = [], mount = [];
+        for (let spec of specs) {
+          let known = this.specs.indexOf(spec), panel;
+          if (known < 0) {
+            panel = spec(update.view);
+            mount.push(panel);
+          } else {
+            panel = this.panels[known];
+            if (panel.update)
+              panel.update(update);
+          }
+          panels.push(panel);
+          (panel.top ? top2 : bottom).push(panel);
+        }
+        this.specs = specs;
+        this.panels = panels;
+        this.top.sync(top2);
+        this.bottom.sync(bottom);
+        for (let p of mount) {
+          p.dom.classList.add("cm-panel");
+          if (p.mount)
+            p.mount();
+        }
+      } else {
+        for (let p of this.panels)
+          if (p.update)
+            p.update(update);
+      }
+    }
+    destroy() {
+      this.top.sync([]);
+      this.bottom.sync([]);
+    }
+  }, {
+    provide: (plugin) => EditorView.scrollMargins.of((view) => {
+      let value = view.plugin(plugin);
+      return value && { top: value.top.scrollMargin(), bottom: value.bottom.scrollMargin() };
+    })
+  });
+  var PanelGroup = class {
+    constructor(view, top2, container) {
+      this.view = view;
+      this.top = top2;
+      this.container = container;
+      this.dom = void 0;
+      this.classes = "";
+      this.panels = [];
+      this.syncClasses();
+    }
+    sync(panels) {
+      for (let p of this.panels)
+        if (p.destroy && panels.indexOf(p) < 0)
+          p.destroy();
+      this.panels = panels;
+      this.syncDOM();
+    }
+    syncDOM() {
+      if (this.panels.length == 0) {
+        if (this.dom) {
+          this.dom.remove();
+          this.dom = void 0;
+        }
+        return;
+      }
+      if (!this.dom) {
+        this.dom = document.createElement("div");
+        this.dom.className = this.top ? "cm-panels cm-panels-top" : "cm-panels cm-panels-bottom";
+        this.dom.style[this.top ? "top" : "bottom"] = "0";
+        let parent = this.container || this.view.dom;
+        parent.insertBefore(this.dom, this.top ? parent.firstChild : null);
+      }
+      let curDOM = this.dom.firstChild;
+      for (let panel of this.panels) {
+        if (panel.dom.parentNode == this.dom) {
+          while (curDOM != panel.dom)
+            curDOM = rm(curDOM);
+          curDOM = curDOM.nextSibling;
+        } else {
+          this.dom.insertBefore(panel.dom, curDOM);
+        }
+      }
+      while (curDOM)
+        curDOM = rm(curDOM);
+    }
+    scrollMargin() {
+      return !this.dom || this.container ? 0 : Math.max(0, this.top ? this.dom.getBoundingClientRect().bottom - Math.max(0, this.view.scrollDOM.getBoundingClientRect().top) : Math.min(innerHeight, this.view.scrollDOM.getBoundingClientRect().bottom) - this.dom.getBoundingClientRect().top);
+    }
+    syncClasses() {
+      if (!this.container || this.classes == this.view.themeClasses)
+        return;
+      for (let cls of this.classes.split(" "))
+        if (cls)
+          this.container.classList.remove(cls);
+      for (let cls of (this.classes = this.view.themeClasses).split(" "))
+        if (cls)
+          this.container.classList.add(cls);
+    }
+  };
+  function rm(node) {
+    let next = node.nextSibling;
+    node.remove();
+    return next;
+  }
+  var showPanel = /* @__PURE__ */ Facet.define({
+    enables: panelPlugin
+  });
+  function showDialog(view, config) {
+    let resolve;
+    let promise = new Promise((r) => resolve = r);
+    let panelCtor = (view2) => createDialog(view2, config, resolve);
+    if (view.state.field(dialogField, false)) {
+      view.dispatch({ effects: openDialogEffect.of(panelCtor) });
+    } else {
+      view.dispatch({ effects: StateEffect.appendConfig.of(dialogField.init(() => [panelCtor])) });
+    }
+    let close = closeDialogEffect.of(panelCtor);
+    return { close, result: promise.then((form) => {
+      let queue = view.win.queueMicrotask || ((f) => view.win.setTimeout(f, 10));
+      queue(() => {
+        if (view.state.field(dialogField).indexOf(panelCtor) > -1)
+          view.dispatch({ effects: close });
+      });
+      return form;
+    }) };
+  }
+  var dialogField = /* @__PURE__ */ StateField.define({
+    create() {
+      return [];
+    },
+    update(dialogs, tr) {
+      for (let e of tr.effects) {
+        if (e.is(openDialogEffect))
+          dialogs = [e.value].concat(dialogs);
+        else if (e.is(closeDialogEffect))
+          dialogs = dialogs.filter((d) => d != e.value);
+      }
+      return dialogs;
+    },
+    provide: (f) => showPanel.computeN([f], (state) => state.field(f))
+  });
+  var openDialogEffect = /* @__PURE__ */ StateEffect.define();
+  var closeDialogEffect = /* @__PURE__ */ StateEffect.define();
+  function createDialog(view, config, result) {
+    let content2 = config.content ? config.content(view, () => done(null)) : null;
+    if (!content2) {
+      content2 = crelt("form");
+      if (config.input) {
+        let input = crelt("input", config.input);
+        if (/^(text|password|number|email|tel|url)$/.test(input.type))
+          input.classList.add("cm-textfield");
+        if (!input.name)
+          input.name = "input";
+        content2.appendChild(crelt("label", (config.label || "") + ": ", input));
+      } else {
+        content2.appendChild(document.createTextNode(config.label || ""));
+      }
+      content2.appendChild(document.createTextNode(" "));
+      content2.appendChild(crelt("button", { class: "cm-button", type: "submit" }, config.submitLabel || "OK"));
+    }
+    let forms = content2.nodeName == "FORM" ? [content2] : content2.querySelectorAll("form");
+    for (let i = 0; i < forms.length; i++) {
+      let form = forms[i];
+      form.addEventListener("keydown", (event) => {
+        if (event.keyCode == 27) {
+          event.preventDefault();
+          done(null);
+        } else if (event.keyCode == 13) {
+          event.preventDefault();
+          done(form);
+        }
+      });
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        done(form);
+      });
+    }
+    let panel = crelt("div", content2, crelt("button", {
+      onclick: () => done(null),
+      "aria-label": view.state.phrase("close"),
+      class: "cm-dialog-close",
+      type: "button"
+    }, ["\xD7"]));
+    if (config.class)
+      panel.className = config.class;
+    panel.classList.add("cm-dialog");
+    function done(form) {
+      if (panel.contains(panel.ownerDocument.activeElement))
+        view.focus();
+      result(form);
+    }
+    return {
+      dom: panel,
+      top: config.top,
+      mount: () => {
+        if (config.focus) {
+          let focus;
+          if (typeof config.focus == "string")
+            focus = content2.querySelector(config.focus);
+          else
+            focus = content2.querySelector("input") || content2.querySelector("button");
+          if (focus && "select" in focus)
+            focus.select();
+          else if (focus && "focus" in focus)
+            focus.focus();
+        }
+      }
+    };
+  }
   var GutterMarker = class extends RangeValue {
     /**
     @internal
@@ -14904,11 +15196,11 @@
     let stack = ast.resolveStack(pos);
     let inner = ast.resolveInner(pos, -1).resolve(pos, 0).enterUnfinishedNodesBefore(pos);
     if (inner != stack.node) {
-      let add = [];
+      let add2 = [];
       for (let cur = inner; cur && !(cur.from < stack.node.from || cur.to > stack.node.to || cur.from == stack.node.from && cur.type == stack.node.type); cur = cur.parent)
-        add.push(cur);
-      for (let i = add.length - 1; i >= 0; i--)
-        stack = { node: add[i], next: stack };
+        add2.push(cur);
+      for (let i = add2.length - 1; i >= 0; i--)
+        stack = { node: add2[i], next: stack };
     }
     return indentFor(stack, cx, pos);
   }
@@ -15431,11 +15723,11 @@
         if (line.from > prevLine && (from == to || to > line.from)) {
           prevLine = line.from;
           let indent = /^\s*/.exec(line.text)[0].length;
-          let empty = indent == line.length;
+          let empty2 = indent == line.length;
           let comment2 = line.text.slice(indent, indent + token.length) == token ? indent : -1;
           if (indent < line.text.length && indent < minIndent)
             minIndent = indent;
-          lines.push({ line, comment: comment2, token, indent, empty, single: false });
+          lines.push({ line, comment: comment2, token, indent, empty: empty2, single: false });
         }
         pos = line.to + 1;
       }
@@ -15449,8 +15741,8 @@
     }
     if (option != 2 && lines.some((l) => l.comment < 0 && (!l.empty || l.single))) {
       let changes = [];
-      for (let { line, token, indent, empty, single } of lines)
-        if (single || !empty)
+      for (let { line, token, indent, empty: empty2, single } of lines)
+        if (single || !empty2)
           changes.push({ from: line.from + indent, insert: token + " " });
       let changeSet = state.changes(changes);
       return { changes: changeSet, selection: state.selection.map(changeSet, 1) };
@@ -16517,15 +16809,12 @@
     const raw = WEIGHTS.tells * lexical + WEIGHTS.burstiness * clamp((ANCHORS.burstinessHuman - metrics.burstiness) / ANCHORS.burstinessHuman) + WEIGHTS.diversity * clamp((ANCHORS.diversityHigh - metrics.diversity) / (ANCHORS.diversityHigh - ANCHORS.diversityLow)) + WEIGHTS.repetition * clamp(metrics.repetition / ANCHORS.repetitionMax);
     return { ...metrics, score: Math.round(100 * raw), structural };
   }
-  function completedSentences(document2) {
-    return [...document2.matchAll(/[^.!?…\n]*[.!?…]+["'»”’)\]]*/g)].map((match) => ({ text: match[0].trim(), from: match.index, to: match.index + match[0].length })).filter((sentence) => sentence.text.length > 0);
-  }
   function locateFindings(document2, findings, occupied = []) {
     const taken = occupied.map(({ from, to }) => ({ from, to }));
     const located = [];
     for (const finding of findings) {
       let from = document2.indexOf(finding.quote);
-      while (from >= 0 && taken.some((range2) => from < range2.to && from + finding.quote.length > range2.from)) {
+      while (from >= 0 && taken.some((range2) => (!range2.code || range2.code === finding.code) && from < range2.to && from + finding.quote.length > range2.from)) {
         from = document2.indexOf(finding.quote, from + 1);
       }
       if (from < 0) continue;
@@ -16566,11 +16855,1045 @@
     return text.split(/\n{2,}/).map((part) => block(part.trim())).join("").replace(PLACEHOLDER, (_, index) => stash[Number(index)]);
   }
 
+  // editing.js
+  function replacementTarget(document2, target) {
+    return target && document2 === target.document && Number.isInteger(target.from) && target.from >= 0 && target.to > target.from && document2.slice(target.from, target.to) === target.text;
+  }
+  function newerVersion(latest, current) {
+    const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value ?? "")?.slice(1).map(Number);
+    const a = parse(latest), b = parse(current);
+    if (!a || !b) return false;
+    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+    return false;
+  }
+  function wordDiff(before, after) {
+    const a = before.match(/\s+|\S+/g) ?? [], b = after.match(/\s+|\S+/g) ?? [];
+    if (a.length * b.length > 4e4) return coarseDiff(a, b);
+    const lcs = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+    for (let i2 = a.length - 1; i2 >= 0; i2--) {
+      for (let j2 = b.length - 1; j2 >= 0; j2--) {
+        lcs[i2][j2] = a[i2] === b[j2] ? lcs[i2 + 1][j2 + 1] + 1 : Math.max(lcs[i2 + 1][j2], lcs[i2][j2 + 1]);
+      }
+    }
+    const ops = [];
+    const push = (type, text) => {
+      const last = ops[ops.length - 1];
+      if (last && last.type === type) last.text += text;
+      else ops.push({ type, text });
+    };
+    let i = 0, j = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) push("keep", a[i++]), j++;
+      else if (lcs[i + 1][j] >= lcs[i][j + 1]) push("del", a[i++]);
+      else push("ins", b[j++]);
+    }
+    while (i < a.length) push("del", a[i++]);
+    while (j < b.length) push("ins", b[j++]);
+    return ops;
+  }
+  function coarseDiff(a, b) {
+    let start = 0, end = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) start++;
+    while (end < a.length - start && end < b.length - start && a[a.length - end - 1] === b[b.length - end - 1]) end++;
+    return [
+      { type: "keep", text: a.slice(0, start).join("") },
+      { type: "del", text: a.slice(start, a.length - end).join("") },
+      { type: "ins", text: b.slice(start, b.length - end).join("") },
+      { type: "keep", text: end ? a.slice(-end).join("") : "" }
+    ].filter((op) => op.text);
+  }
+
+  // node_modules/@codemirror/search/dist/index.js
+  var basicNormalize = typeof String.prototype.normalize == "function" ? (x) => x.normalize("NFKD") : (x) => x;
+  var SearchCursor = class {
+    /**
+    Create a text cursor. The query is the search string, `from` to
+    `to` provides the region to search.
+    
+    When `normalize` is given, it will be called, on both the query
+    string and the content it is matched against, before comparing.
+    You can, for example, create a case-insensitive search by
+    passing `s => s.toLowerCase()`.
+    
+    Text is always normalized with
+    [`.normalize("NFKD")`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/normalize)
+    (when supported).
+    */
+    constructor(text, query, from = 0, to = text.length, normalize, test) {
+      this.test = test;
+      this.value = { from: 0, to: 0 };
+      this.done = false;
+      this.matches = [];
+      this.buffer = "";
+      this.bufferPos = 0;
+      this.iter = text.iterRange(from, to);
+      this.bufferStart = from;
+      this.normalize = normalize ? (x) => normalize(basicNormalize(x)) : basicNormalize;
+      this.query = this.normalize(query);
+    }
+    peek() {
+      if (this.bufferPos == this.buffer.length) {
+        this.bufferStart += this.buffer.length;
+        this.iter.next();
+        if (this.iter.done)
+          return -1;
+        this.bufferPos = 0;
+        this.buffer = this.iter.value;
+      }
+      return codePointAt2(this.buffer, this.bufferPos);
+    }
+    /**
+    Look for the next match. Updates the iterator's
+    [`value`](https://codemirror.net/6/docs/ref/#search.SearchCursor.value) and
+    [`done`](https://codemirror.net/6/docs/ref/#search.SearchCursor.done) properties. Should be called
+    at least once before using the cursor.
+    */
+    next() {
+      while (this.matches.length)
+        this.matches.pop();
+      return this.nextOverlapping();
+    }
+    /**
+    The `next` method will ignore matches that partially overlap a
+    previous match. This method behaves like `next`, but includes
+    such matches.
+    */
+    nextOverlapping() {
+      for (; ; ) {
+        let next = this.peek();
+        if (next < 0) {
+          this.done = true;
+          return this;
+        }
+        let str = fromCodePoint(next), start = this.bufferStart + this.bufferPos;
+        this.bufferPos += codePointSize2(next);
+        let norm = this.normalize(str);
+        if (norm.length)
+          for (let i = 0, pos = start; ; i++) {
+            let code = norm.charCodeAt(i);
+            let match = this.match(code, pos, this.bufferPos + this.bufferStart);
+            if (i == norm.length - 1) {
+              if (match) {
+                this.value = match;
+                return this;
+              }
+              break;
+            }
+            if (pos == start && i < str.length && str.charCodeAt(i) == code)
+              pos++;
+          }
+      }
+    }
+    match(code, pos, end) {
+      let match = null;
+      for (let i = 0; i < this.matches.length; i += 2) {
+        let index = this.matches[i], keep = false;
+        if (this.query.charCodeAt(index) == code) {
+          if (index == this.query.length - 1) {
+            match = { from: this.matches[i + 1], to: end };
+          } else {
+            this.matches[i]++;
+            keep = true;
+          }
+        }
+        if (!keep) {
+          this.matches.splice(i, 2);
+          i -= 2;
+        }
+      }
+      if (this.query.charCodeAt(0) == code) {
+        if (this.query.length == 1)
+          match = { from: pos, to: end };
+        else
+          this.matches.push(1, pos);
+      }
+      if (match && this.test && !this.test(match.from, match.to, this.buffer, this.bufferStart))
+        match = null;
+      return match;
+    }
+  };
+  if (typeof Symbol != "undefined")
+    SearchCursor.prototype[Symbol.iterator] = function() {
+      return this;
+    };
+  var empty = { from: -1, to: -1, match: /* @__PURE__ */ /.*/.exec("") };
+  var baseFlags = "gm" + (/x/.unicode == null ? "" : "u");
+  var RegExpCursor = class {
+    /**
+    Create a cursor that will search the given range in the given
+    document. `query` should be the raw pattern (as you'd pass it to
+    `new RegExp`).
+    */
+    constructor(text, query, options, from = 0, to = text.length) {
+      this.text = text;
+      this.to = to;
+      this.curLine = "";
+      this.done = false;
+      this.value = empty;
+      if (/\\[sWDnr]|\n|\r|\[\^/.test(query))
+        return new MultilineRegExpCursor(text, query, options, from, to);
+      this.re = new RegExp(query, baseFlags + ((options === null || options === void 0 ? void 0 : options.ignoreCase) ? "i" : ""));
+      this.test = options === null || options === void 0 ? void 0 : options.test;
+      this.iter = text.iter();
+      let startLine = text.lineAt(from);
+      this.curLineStart = startLine.from;
+      this.matchPos = toCharEnd(text, from);
+      this.getLine(this.curLineStart);
+    }
+    getLine(skip) {
+      this.iter.next(skip);
+      if (this.iter.lineBreak) {
+        this.curLine = "";
+      } else {
+        this.curLine = this.iter.value;
+        if (this.curLineStart + this.curLine.length > this.to)
+          this.curLine = this.curLine.slice(0, this.to - this.curLineStart);
+        this.iter.next();
+      }
+    }
+    nextLine() {
+      this.curLineStart = this.curLineStart + this.curLine.length + 1;
+      if (this.curLineStart > this.to)
+        this.curLine = "";
+      else
+        this.getLine(0);
+    }
+    /**
+    Move to the next match, if there is one.
+    */
+    next() {
+      for (let off = this.matchPos - this.curLineStart; ; ) {
+        this.re.lastIndex = off;
+        let match = this.matchPos <= this.to && this.re.exec(this.curLine);
+        if (match) {
+          let from = this.curLineStart + match.index, to = from + match[0].length;
+          this.matchPos = toCharEnd(this.text, to + (from == to ? 1 : 0));
+          if (from == this.curLineStart + this.curLine.length)
+            this.nextLine();
+          if ((from < to || from > this.value.to) && (!this.test || this.test(from, to, match))) {
+            this.value = { from, to, match };
+            return this;
+          }
+          off = this.matchPos - this.curLineStart;
+        } else if (this.curLineStart + this.curLine.length < this.to) {
+          this.nextLine();
+          off = 0;
+        } else {
+          this.done = true;
+          return this;
+        }
+      }
+    }
+  };
+  var flattened = /* @__PURE__ */ new WeakMap();
+  var FlattenedDoc = class _FlattenedDoc {
+    constructor(from, text) {
+      this.from = from;
+      this.text = text;
+    }
+    get to() {
+      return this.from + this.text.length;
+    }
+    static get(doc2, from, to) {
+      let cached = flattened.get(doc2);
+      if (!cached || cached.from >= to || cached.to <= from) {
+        let flat = new _FlattenedDoc(from, doc2.sliceString(from, to));
+        flattened.set(doc2, flat);
+        return flat;
+      }
+      if (cached.from == from && cached.to == to)
+        return cached;
+      let { text, from: cachedFrom } = cached;
+      if (cachedFrom > from) {
+        text = doc2.sliceString(from, cachedFrom) + text;
+        cachedFrom = from;
+      }
+      if (cached.to < to)
+        text += doc2.sliceString(cached.to, to);
+      flattened.set(doc2, new _FlattenedDoc(cachedFrom, text));
+      return new _FlattenedDoc(from, text.slice(from - cachedFrom, to - cachedFrom));
+    }
+  };
+  var MultilineRegExpCursor = class {
+    constructor(text, query, options, from, to) {
+      this.text = text;
+      this.to = to;
+      this.done = false;
+      this.value = empty;
+      this.matchPos = toCharEnd(text, from);
+      this.re = new RegExp(query, baseFlags + ((options === null || options === void 0 ? void 0 : options.ignoreCase) ? "i" : ""));
+      this.test = options === null || options === void 0 ? void 0 : options.test;
+      this.flat = FlattenedDoc.get(text, from, this.chunkEnd(
+        from + 5e3
+        /* Chunk.Base */
+      ));
+    }
+    chunkEnd(pos) {
+      return pos >= this.to ? this.to : this.text.lineAt(pos).to;
+    }
+    next() {
+      for (; ; ) {
+        let off = this.re.lastIndex = this.matchPos - this.flat.from;
+        let match = this.re.exec(this.flat.text);
+        if (match && !match[0] && match.index == off) {
+          this.re.lastIndex = off + 1;
+          match = this.re.exec(this.flat.text);
+        }
+        if (match) {
+          let from = this.flat.from + match.index, to = from + match[0].length;
+          if ((this.flat.to >= this.to || match.index + match[0].length <= this.flat.text.length - 10) && (!this.test || this.test(from, to, match))) {
+            this.value = { from, to, match };
+            this.matchPos = toCharEnd(this.text, to + (from == to ? 1 : 0));
+            return this;
+          }
+        }
+        if (this.flat.to == this.to) {
+          this.done = true;
+          return this;
+        }
+        this.flat = FlattenedDoc.get(this.text, this.flat.from, this.chunkEnd(this.flat.from + this.flat.text.length * 2));
+      }
+    }
+  };
+  if (typeof Symbol != "undefined") {
+    RegExpCursor.prototype[Symbol.iterator] = MultilineRegExpCursor.prototype[Symbol.iterator] = function() {
+      return this;
+    };
+  }
+  function validRegExp(source) {
+    try {
+      new RegExp(source, baseFlags);
+      return true;
+    } catch (_a2) {
+      return false;
+    }
+  }
+  function toCharEnd(text, pos) {
+    if (pos >= text.length)
+      return pos;
+    let line = text.lineAt(pos), next;
+    while (pos < line.to && (next = line.text.charCodeAt(pos - line.from)) >= 56320 && next < 57344)
+      pos++;
+    return pos;
+  }
+  var gotoLine = (view) => {
+    let { state } = view;
+    let line = String(state.doc.lineAt(view.state.selection.main.head).number);
+    let { close, result } = showDialog(view, {
+      label: state.phrase("Go to line"),
+      input: { type: "text", name: "line", value: line },
+      focus: true,
+      submitLabel: state.phrase("go")
+    });
+    result.then((form) => {
+      let match = form && /^([+-])?(\d+)?(:\d+)?(%)?$/.exec(form.elements["line"].value);
+      if (!match) {
+        view.dispatch({ effects: close });
+        return;
+      }
+      let startLine = state.doc.lineAt(state.selection.main.head);
+      let [, sign, ln, cl, percent] = match;
+      let col = cl ? +cl.slice(1) : 0;
+      let line2 = ln ? +ln : startLine.number;
+      if (ln && percent) {
+        let pc = line2 / 100;
+        if (sign)
+          pc = pc * (sign == "-" ? -1 : 1) + startLine.number / state.doc.lines;
+        line2 = Math.round(state.doc.lines * pc);
+      } else if (ln && sign) {
+        line2 = line2 * (sign == "-" ? -1 : 1) + startLine.number;
+      }
+      let docLine = state.doc.line(Math.max(1, Math.min(state.doc.lines, line2)));
+      let selection = EditorSelection.cursor(docLine.from + Math.max(0, Math.min(col, docLine.length)));
+      view.dispatch({
+        effects: [close, EditorView.scrollIntoView(selection.from, { y: "center" })],
+        selection
+      });
+    });
+    return true;
+  };
+  var selectWord = ({ state, dispatch }) => {
+    let { selection } = state;
+    let newSel = EditorSelection.create(selection.ranges.map((range) => state.wordAt(range.head) || EditorSelection.cursor(range.head)), selection.mainIndex);
+    if (newSel.eq(selection))
+      return false;
+    dispatch(state.update({ selection: newSel }));
+    return true;
+  };
+  function findNextOccurrence(state, query) {
+    let { main, ranges } = state.selection;
+    let word = state.wordAt(main.head), fullWord = word && word.from == main.from && word.to == main.to;
+    for (let cycled = false, cursor = new SearchCursor(state.doc, query, ranges[ranges.length - 1].to); ; ) {
+      cursor.next();
+      if (cursor.done) {
+        if (cycled)
+          return null;
+        cursor = new SearchCursor(state.doc, query, 0, Math.max(0, ranges[ranges.length - 1].from - 1));
+        cycled = true;
+      } else {
+        if (cycled && ranges.some((r) => r.from == cursor.value.from))
+          continue;
+        if (fullWord) {
+          let word2 = state.wordAt(cursor.value.from);
+          if (!word2 || word2.from != cursor.value.from || word2.to != cursor.value.to)
+            continue;
+        }
+        return cursor.value;
+      }
+    }
+  }
+  var selectNextOccurrence = ({ state, dispatch }) => {
+    let { ranges } = state.selection;
+    if (ranges.some((sel) => sel.from === sel.to))
+      return selectWord({ state, dispatch });
+    let searchedText = state.sliceDoc(ranges[0].from, ranges[0].to);
+    if (state.selection.ranges.some((r) => state.sliceDoc(r.from, r.to) != searchedText))
+      return false;
+    let range = findNextOccurrence(state, searchedText);
+    if (!range)
+      return false;
+    dispatch(state.update({
+      selection: state.selection.addRange(EditorSelection.range(range.from, range.to), false),
+      effects: EditorView.scrollIntoView(range.to)
+    }));
+    return true;
+  };
+  var searchConfigFacet = /* @__PURE__ */ Facet.define({
+    combine(configs) {
+      return combineConfig(configs, {
+        top: false,
+        caseSensitive: false,
+        literal: false,
+        regexp: false,
+        wholeWord: false,
+        createPanel: (view) => new SearchPanel(view),
+        scrollToMatch: (range) => EditorView.scrollIntoView(range)
+      });
+    }
+  });
+  var SearchQuery = class {
+    /**
+    Create a query object.
+    */
+    constructor(config) {
+      this.search = config.search;
+      this.caseSensitive = !!config.caseSensitive;
+      this.literal = !!config.literal;
+      this.regexp = !!config.regexp;
+      this.replace = config.replace || "";
+      this.valid = !!this.search && (!this.regexp || validRegExp(this.search));
+      this.unquoted = this.unquote(this.search);
+      this.wholeWord = !!config.wholeWord;
+      this.test = config.test;
+    }
+    /**
+    @internal
+    */
+    unquote(text) {
+      return this.literal ? text : text.replace(/\\([nrt\\])/g, (_, ch) => ch == "n" ? "\n" : ch == "r" ? "\r" : ch == "t" ? "	" : "\\");
+    }
+    /**
+    Compare this query to another query.
+    */
+    eq(other) {
+      return this.search == other.search && this.replace == other.replace && this.caseSensitive == other.caseSensitive && this.regexp == other.regexp && this.wholeWord == other.wholeWord && this.test == other.test;
+    }
+    /**
+    @internal
+    */
+    create() {
+      return this.regexp ? new RegExpQuery(this) : new StringQuery(this);
+    }
+    /**
+    Get a search cursor for this query, searching through the given
+    range in the given state.
+    */
+    getCursor(state, from = 0, to) {
+      let st = state.doc ? state : EditorState.create({ doc: state });
+      if (to == null)
+        to = st.doc.length;
+      return this.regexp ? regexpCursor(this, st, from, to) : stringCursor(this, st, from, to);
+    }
+  };
+  var QueryType2 = class {
+    constructor(spec) {
+      this.spec = spec;
+    }
+  };
+  function wrapStringTest(test, state, inner) {
+    return (from, to, buffer, bufferPos) => {
+      if (inner && !inner(from, to, buffer, bufferPos))
+        return false;
+      let match = from >= bufferPos && to <= bufferPos + buffer.length ? buffer.slice(from - bufferPos, to - bufferPos) : state.doc.sliceString(from, to);
+      return test(match, state, from, to);
+    };
+  }
+  function stringCursor(spec, state, from, to) {
+    let test;
+    if (spec.wholeWord)
+      test = stringWordTest(state.doc, state.charCategorizer(state.selection.main.head));
+    if (spec.test)
+      test = wrapStringTest(spec.test, state, test);
+    return new SearchCursor(state.doc, spec.unquoted, from, to, spec.caseSensitive ? void 0 : (x) => x.toLowerCase(), test);
+  }
+  function stringWordTest(doc2, categorizer) {
+    return (from, to, buf, bufPos) => {
+      if (bufPos > from || bufPos + buf.length < to) {
+        bufPos = Math.max(0, from - 2);
+        buf = doc2.sliceString(bufPos, Math.min(doc2.length, to + 2));
+      }
+      return (categorizer(charBefore(buf, from - bufPos)) != CharCategory.Word || categorizer(charAfter(buf, from - bufPos)) != CharCategory.Word) && (categorizer(charAfter(buf, to - bufPos)) != CharCategory.Word || categorizer(charBefore(buf, to - bufPos)) != CharCategory.Word);
+    };
+  }
+  var StringQuery = class extends QueryType2 {
+    constructor(spec) {
+      super(spec);
+    }
+    nextMatch(state, curFrom, curTo) {
+      let cursor = stringCursor(this.spec, state, curTo, state.doc.length).nextOverlapping();
+      if (cursor.done) {
+        let end = Math.min(state.doc.length, curFrom + this.spec.unquoted.length);
+        cursor = stringCursor(this.spec, state, 0, end).nextOverlapping();
+      }
+      return cursor.done || cursor.value.from == curFrom && cursor.value.to == curTo ? null : cursor.value;
+    }
+    // Searching in reverse is, rather than implementing an inverted search
+    // cursor, done by scanning chunk after chunk forward.
+    prevMatchInRange(state, from, to) {
+      for (let pos = to; ; ) {
+        let start = Math.max(from, pos - 1e4 - this.spec.unquoted.length);
+        let cursor = stringCursor(this.spec, state, start, pos), range = null;
+        while (!cursor.nextOverlapping().done)
+          range = cursor.value;
+        if (range)
+          return range;
+        if (start == from)
+          return null;
+        pos -= 1e4;
+      }
+    }
+    prevMatch(state, curFrom, curTo) {
+      let found = this.prevMatchInRange(state, 0, curFrom);
+      if (!found)
+        found = this.prevMatchInRange(state, Math.max(0, curTo - this.spec.unquoted.length), state.doc.length);
+      return found && (found.from != curFrom || found.to != curTo) ? found : null;
+    }
+    getReplacement(_result) {
+      return this.spec.unquote(this.spec.replace);
+    }
+    matchAll(state, limit) {
+      let cursor = stringCursor(this.spec, state, 0, state.doc.length), ranges = [];
+      while (!cursor.next().done) {
+        if (ranges.length >= limit)
+          return null;
+        ranges.push(cursor.value);
+      }
+      return ranges;
+    }
+    highlight(state, from, to, add2) {
+      let cursor = stringCursor(this.spec, state, Math.max(0, from - this.spec.unquoted.length), Math.min(to + this.spec.unquoted.length, state.doc.length));
+      while (!cursor.next().done)
+        add2(cursor.value.from, cursor.value.to);
+    }
+  };
+  function wrapRegexpTest(test, state, inner) {
+    return (from, to, match) => {
+      return (!inner || inner(from, to, match)) && test(match[0], state, from, to);
+    };
+  }
+  function regexpCursor(spec, state, from, to) {
+    let test;
+    if (spec.wholeWord)
+      test = regexpWordTest(state.charCategorizer(state.selection.main.head));
+    if (spec.test)
+      test = wrapRegexpTest(spec.test, state, test);
+    return new RegExpCursor(state.doc, spec.search, { ignoreCase: !spec.caseSensitive, test }, from, to);
+  }
+  function charBefore(str, index) {
+    return str.slice(findClusterBreak2(str, index, false), index);
+  }
+  function charAfter(str, index) {
+    return str.slice(index, findClusterBreak2(str, index));
+  }
+  function regexpWordTest(categorizer) {
+    return (_from, _to, match) => !match[0].length || (categorizer(charBefore(match.input, match.index)) != CharCategory.Word || categorizer(charAfter(match.input, match.index)) != CharCategory.Word) && (categorizer(charAfter(match.input, match.index + match[0].length)) != CharCategory.Word || categorizer(charBefore(match.input, match.index + match[0].length)) != CharCategory.Word);
+  }
+  var RegExpQuery = class extends QueryType2 {
+    nextMatch(state, curFrom, curTo) {
+      let cursor = regexpCursor(this.spec, state, curTo, state.doc.length).next();
+      if (cursor.done)
+        cursor = regexpCursor(this.spec, state, 0, curFrom).next();
+      return cursor.done ? null : cursor.value;
+    }
+    prevMatchInRange(state, from, to) {
+      for (let size = 1; ; size++) {
+        let start = Math.max(
+          from,
+          to - size * 1e4
+          /* FindPrev.ChunkSize */
+        );
+        let cursor = regexpCursor(this.spec, state, start, to), range = null;
+        while (!cursor.next().done)
+          range = cursor.value;
+        if (range && (start == from || range.from > start + 10))
+          return range;
+        if (start == from)
+          return null;
+      }
+    }
+    prevMatch(state, curFrom, curTo) {
+      return this.prevMatchInRange(state, 0, curFrom) || this.prevMatchInRange(state, curTo, state.doc.length);
+    }
+    getReplacement(result) {
+      return this.spec.unquote(this.spec.replace).replace(/\$([$&]|\d+)/g, (m, i) => {
+        if (i == "&")
+          return result.match[0];
+        if (i == "$")
+          return "$";
+        for (let l = i.length; l > 0; l--) {
+          let n = +i.slice(0, l);
+          if (n > 0 && n < result.match.length)
+            return result.match[n] + i.slice(l);
+        }
+        return m;
+      });
+    }
+    matchAll(state, limit) {
+      let cursor = regexpCursor(this.spec, state, 0, state.doc.length), ranges = [];
+      while (!cursor.next().done) {
+        if (ranges.length >= limit)
+          return null;
+        ranges.push(cursor.value);
+      }
+      return ranges;
+    }
+    highlight(state, from, to, add2) {
+      let cursor = regexpCursor(this.spec, state, Math.max(
+        0,
+        from - 250
+        /* RegExp.HighlightMargin */
+      ), Math.min(to + 250, state.doc.length));
+      while (!cursor.next().done)
+        add2(cursor.value.from, cursor.value.to);
+    }
+  };
+  var setSearchQuery = /* @__PURE__ */ StateEffect.define();
+  var togglePanel = /* @__PURE__ */ StateEffect.define();
+  var searchState = /* @__PURE__ */ StateField.define({
+    create(state) {
+      return new SearchState(defaultQuery(state).create(), null);
+    },
+    update(value, tr) {
+      for (let effect of tr.effects) {
+        if (effect.is(setSearchQuery))
+          value = new SearchState(effect.value.create(), value.panel);
+        else if (effect.is(togglePanel))
+          value = new SearchState(value.query, effect.value ? createSearchPanel : null);
+      }
+      return value;
+    },
+    provide: (f) => showPanel.from(f, (val) => val.panel)
+  });
+  var SearchState = class {
+    constructor(query, panel) {
+      this.query = query;
+      this.panel = panel;
+    }
+  };
+  var matchMark = /* @__PURE__ */ Decoration.mark({ class: "cm-searchMatch" });
+  var selectedMatchMark = /* @__PURE__ */ Decoration.mark({ class: "cm-searchMatch cm-searchMatch-selected" });
+  var searchHighlighter = /* @__PURE__ */ ViewPlugin.fromClass(class {
+    constructor(view) {
+      this.view = view;
+      this.decorations = this.highlight(view.state.field(searchState));
+    }
+    update(update) {
+      let state = update.state.field(searchState);
+      if (state != update.startState.field(searchState) || update.docChanged || update.selectionSet || update.viewportChanged)
+        this.decorations = this.highlight(state);
+    }
+    highlight({ query, panel }) {
+      if (!panel || !query.spec.valid)
+        return Decoration.none;
+      let { view } = this;
+      let builder = new RangeSetBuilder();
+      for (let i = 0, ranges = view.visibleRanges, l = ranges.length; i < l; i++) {
+        let { from, to } = ranges[i];
+        while (i < l - 1 && to > ranges[i + 1].from - 2 * 250)
+          to = ranges[++i].to;
+        query.highlight(view.state, from, to, (from2, to2) => {
+          let selected = view.state.selection.ranges.some((r) => r.from == from2 && r.to == to2);
+          builder.add(from2, to2, selected ? selectedMatchMark : matchMark);
+        });
+      }
+      return builder.finish();
+    }
+  }, {
+    decorations: (v) => v.decorations
+  });
+  function searchCommand(f) {
+    return (view) => {
+      let state = view.state.field(searchState, false);
+      return state && state.query.spec.valid ? f(view, state) : openSearchPanel(view);
+    };
+  }
+  var findNext = /* @__PURE__ */ searchCommand((view, { query }) => {
+    let { to } = view.state.selection.main;
+    let next = query.nextMatch(view.state, to, to);
+    if (!next)
+      return false;
+    let selection = EditorSelection.single(next.from, next.to);
+    let config = view.state.facet(searchConfigFacet);
+    view.dispatch({
+      selection,
+      effects: [announceMatch(view, next), config.scrollToMatch(selection.main, view)],
+      userEvent: "select.search"
+    });
+    selectSearchInput(view);
+    return true;
+  });
+  var findPrevious = /* @__PURE__ */ searchCommand((view, { query }) => {
+    let { state } = view, { from } = state.selection.main;
+    let prev = query.prevMatch(state, from, from);
+    if (!prev)
+      return false;
+    let selection = EditorSelection.single(prev.from, prev.to);
+    let config = view.state.facet(searchConfigFacet);
+    view.dispatch({
+      selection,
+      effects: [announceMatch(view, prev), config.scrollToMatch(selection.main, view)],
+      userEvent: "select.search"
+    });
+    selectSearchInput(view);
+    return true;
+  });
+  var selectMatches = /* @__PURE__ */ searchCommand((view, { query }) => {
+    let ranges = query.matchAll(view.state, 1e3);
+    if (!ranges || !ranges.length)
+      return false;
+    view.dispatch({
+      selection: EditorSelection.create(ranges.map((r) => EditorSelection.range(r.from, r.to))),
+      userEvent: "select.search.matches"
+    });
+    return true;
+  });
+  var selectSelectionMatches = ({ state, dispatch }) => {
+    let sel = state.selection;
+    if (sel.ranges.length > 1 || sel.main.empty)
+      return false;
+    let { from, to } = sel.main;
+    let ranges = [], main = 0;
+    for (let cur = new SearchCursor(state.doc, state.sliceDoc(from, to)); !cur.next().done; ) {
+      if (ranges.length > 1e3)
+        return false;
+      if (cur.value.from == from)
+        main = ranges.length;
+      ranges.push(EditorSelection.range(cur.value.from, cur.value.to));
+    }
+    dispatch(state.update({
+      selection: EditorSelection.create(ranges, main),
+      userEvent: "select.search.matches"
+    }));
+    return true;
+  };
+  var replaceNext = /* @__PURE__ */ searchCommand((view, { query }) => {
+    let { state } = view, { from, to } = state.selection.main;
+    if (state.readOnly)
+      return false;
+    let match = query.nextMatch(state, from, from);
+    if (!match)
+      return false;
+    let next = match;
+    let changes = [], selection, replacement;
+    let effects = [];
+    if (next.from == from && next.to == to) {
+      replacement = state.toText(query.getReplacement(next));
+      changes.push({ from: next.from, to: next.to, insert: replacement });
+      next = query.nextMatch(state, next.from, next.to);
+      effects.push(EditorView.announce.of(state.phrase("replaced match on line $", state.doc.lineAt(from).number) + "."));
+    }
+    let changeSet = view.state.changes(changes);
+    if (next) {
+      selection = EditorSelection.single(next.from, next.to).map(changeSet);
+      effects.push(announceMatch(view, next));
+      effects.push(state.facet(searchConfigFacet).scrollToMatch(selection.main, view));
+    }
+    view.dispatch({
+      changes: changeSet,
+      selection,
+      effects,
+      userEvent: "input.replace"
+    });
+    return true;
+  });
+  var replaceAll = /* @__PURE__ */ searchCommand((view, { query }) => {
+    if (view.state.readOnly)
+      return false;
+    let changes = query.matchAll(view.state, 1e9).map((match) => {
+      let { from, to } = match;
+      return { from, to, insert: query.getReplacement(match) };
+    });
+    if (!changes.length)
+      return false;
+    let announceText = view.state.phrase("replaced $ matches", changes.length) + ".";
+    view.dispatch({
+      changes,
+      effects: EditorView.announce.of(announceText),
+      userEvent: "input.replace.all"
+    });
+    return true;
+  });
+  function createSearchPanel(view) {
+    return view.state.facet(searchConfigFacet).createPanel(view);
+  }
+  function defaultQuery(state, fallback) {
+    var _a2, _b, _c, _d, _e;
+    let sel = state.selection.main;
+    let selText = sel.empty || sel.to > sel.from + 100 ? "" : state.sliceDoc(sel.from, sel.to);
+    if (fallback && !selText)
+      return fallback;
+    let config = state.facet(searchConfigFacet);
+    return new SearchQuery({
+      search: ((_a2 = fallback === null || fallback === void 0 ? void 0 : fallback.literal) !== null && _a2 !== void 0 ? _a2 : config.literal) ? selText : selText.replace(/\n/g, "\\n"),
+      caseSensitive: (_b = fallback === null || fallback === void 0 ? void 0 : fallback.caseSensitive) !== null && _b !== void 0 ? _b : config.caseSensitive,
+      literal: (_c = fallback === null || fallback === void 0 ? void 0 : fallback.literal) !== null && _c !== void 0 ? _c : config.literal,
+      regexp: (_d = fallback === null || fallback === void 0 ? void 0 : fallback.regexp) !== null && _d !== void 0 ? _d : config.regexp,
+      wholeWord: (_e = fallback === null || fallback === void 0 ? void 0 : fallback.wholeWord) !== null && _e !== void 0 ? _e : config.wholeWord
+    });
+  }
+  function getSearchInput(view) {
+    let panel = getPanel(view, createSearchPanel);
+    return panel && panel.dom.querySelector("[main-field]");
+  }
+  function selectSearchInput(view) {
+    let input = getSearchInput(view);
+    if (input && input == view.root.activeElement)
+      input.select();
+  }
+  var openSearchPanel = (view) => {
+    let state = view.state.field(searchState, false);
+    if (state && state.panel) {
+      let searchInput = getSearchInput(view);
+      if (searchInput && searchInput != view.root.activeElement) {
+        let query = defaultQuery(view.state, state.query.spec);
+        if (query.valid)
+          view.dispatch({ effects: setSearchQuery.of(query) });
+        searchInput.focus();
+        searchInput.select();
+      }
+    } else {
+      view.dispatch({ effects: [
+        togglePanel.of(true),
+        state ? setSearchQuery.of(defaultQuery(view.state, state.query.spec)) : StateEffect.appendConfig.of(searchExtensions)
+      ] });
+    }
+    return true;
+  };
+  var closeSearchPanel = (view) => {
+    let state = view.state.field(searchState, false);
+    if (!state || !state.panel)
+      return false;
+    let panel = getPanel(view, createSearchPanel);
+    if (panel && panel.dom.contains(view.root.activeElement))
+      view.focus();
+    view.dispatch({ effects: togglePanel.of(false) });
+    return true;
+  };
+  var searchKeymap = [
+    { key: "Mod-f", run: openSearchPanel, scope: "editor search-panel" },
+    { key: "F3", run: findNext, shift: findPrevious, scope: "editor search-panel", preventDefault: true },
+    { key: "Mod-g", run: findNext, shift: findPrevious, scope: "editor search-panel", preventDefault: true },
+    { key: "Escape", run: closeSearchPanel, scope: "editor search-panel" },
+    { key: "Mod-Shift-l", run: selectSelectionMatches },
+    { key: "Mod-Alt-g", run: gotoLine },
+    { key: "Mod-d", run: selectNextOccurrence, preventDefault: true }
+  ];
+  var SearchPanel = class {
+    constructor(view) {
+      this.view = view;
+      let query = this.query = view.state.field(searchState).query.spec;
+      this.commit = this.commit.bind(this);
+      this.searchField = crelt("input", {
+        value: query.search,
+        placeholder: phrase(view, "Find"),
+        "aria-label": phrase(view, "Find"),
+        class: "cm-textfield",
+        name: "search",
+        form: "",
+        "main-field": "true",
+        onchange: this.commit,
+        onkeyup: this.commit
+      });
+      this.replaceField = crelt("input", {
+        value: query.replace,
+        placeholder: phrase(view, "Replace"),
+        "aria-label": phrase(view, "Replace"),
+        class: "cm-textfield",
+        name: "replace",
+        form: "",
+        onchange: this.commit,
+        onkeyup: this.commit
+      });
+      this.caseField = crelt("input", {
+        type: "checkbox",
+        name: "case",
+        form: "",
+        checked: query.caseSensitive,
+        onchange: this.commit
+      });
+      this.reField = crelt("input", {
+        type: "checkbox",
+        name: "re",
+        form: "",
+        checked: query.regexp,
+        onchange: this.commit
+      });
+      this.wordField = crelt("input", {
+        type: "checkbox",
+        name: "word",
+        form: "",
+        checked: query.wholeWord,
+        onchange: this.commit
+      });
+      function button(name2, onclick, content2) {
+        return crelt("button", { class: "cm-button", name: name2, onclick, type: "button" }, content2);
+      }
+      this.dom = crelt("div", { onkeydown: (e) => this.keydown(e), class: "cm-search" }, [
+        this.searchField,
+        button("next", () => findNext(view), [phrase(view, "next")]),
+        button("prev", () => findPrevious(view), [phrase(view, "previous")]),
+        button("select", () => selectMatches(view), [phrase(view, "all")]),
+        crelt("label", null, [this.caseField, phrase(view, "match case")]),
+        crelt("label", null, [this.reField, phrase(view, "regexp")]),
+        crelt("label", null, [this.wordField, phrase(view, "by word")]),
+        ...view.state.readOnly ? [] : [
+          crelt("br"),
+          this.replaceField,
+          button("replace", () => replaceNext(view), [phrase(view, "replace")]),
+          button("replaceAll", () => replaceAll(view), [phrase(view, "replace all")])
+        ],
+        crelt("button", {
+          name: "close",
+          onclick: () => closeSearchPanel(view),
+          "aria-label": phrase(view, "close"),
+          type: "button"
+        }, ["\xD7"])
+      ]);
+    }
+    commit() {
+      let query = new SearchQuery({
+        search: this.searchField.value,
+        caseSensitive: this.caseField.checked,
+        regexp: this.reField.checked,
+        wholeWord: this.wordField.checked,
+        replace: this.replaceField.value
+      });
+      if (!query.eq(this.query)) {
+        this.query = query;
+        this.view.dispatch({ effects: setSearchQuery.of(query) });
+      }
+    }
+    keydown(e) {
+      if (runScopeHandlers(this.view, e, "search-panel")) {
+        e.preventDefault();
+      } else if (e.keyCode == 13 && e.target == this.searchField) {
+        e.preventDefault();
+        (e.shiftKey ? findPrevious : findNext)(this.view);
+      } else if (e.keyCode == 13 && e.target == this.replaceField) {
+        e.preventDefault();
+        replaceNext(this.view);
+      }
+    }
+    update(update) {
+      for (let tr of update.transactions)
+        for (let effect of tr.effects) {
+          if (effect.is(setSearchQuery) && !effect.value.eq(this.query))
+            this.setQuery(effect.value);
+        }
+    }
+    setQuery(query) {
+      this.query = query;
+      this.searchField.value = query.search;
+      this.replaceField.value = query.replace;
+      this.caseField.checked = query.caseSensitive;
+      this.reField.checked = query.regexp;
+      this.wordField.checked = query.wholeWord;
+    }
+    mount() {
+      this.searchField.select();
+    }
+    get pos() {
+      return 80;
+    }
+    get top() {
+      return this.view.state.facet(searchConfigFacet).top;
+    }
+  };
+  function phrase(view, phrase2) {
+    return view.state.phrase(phrase2);
+  }
+  var AnnounceMargin = 30;
+  var Break = /[\s\.,:;?!]/;
+  function announceMatch(view, { from, to }) {
+    let line = view.state.doc.lineAt(from), lineEnd = view.state.doc.lineAt(to).to;
+    let start = Math.max(line.from, from - AnnounceMargin), end = Math.min(lineEnd, to + AnnounceMargin);
+    let text = view.state.sliceDoc(start, end);
+    if (start != line.from) {
+      for (let i = 0; i < AnnounceMargin; i++)
+        if (!Break.test(text[i + 1]) && Break.test(text[i])) {
+          text = text.slice(i);
+          break;
+        }
+    }
+    if (end != lineEnd) {
+      for (let i = text.length - 1; i > text.length - AnnounceMargin; i--)
+        if (!Break.test(text[i - 1]) && Break.test(text[i])) {
+          text = text.slice(0, i);
+          break;
+        }
+    }
+    return EditorView.announce.of(`${view.state.phrase("current match")}. ${text} ${view.state.phrase("on line")} ${line.number}.`);
+  }
+  var baseTheme2 = /* @__PURE__ */ EditorView.baseTheme({
+    ".cm-panel.cm-search": {
+      padding: "2px 6px 4px",
+      position: "relative",
+      "& [name=close]": {
+        position: "absolute",
+        top: "0",
+        right: "4px",
+        backgroundColor: "inherit",
+        border: "none",
+        font: "inherit",
+        padding: 0,
+        margin: 0
+      },
+      "& input, & button, & label": {
+        margin: ".2em .6em .2em 0"
+      },
+      "& input[type=checkbox]": {
+        marginRight: ".2em"
+      },
+      "& label": {
+        fontSize: "80%",
+        whiteSpace: "pre"
+      }
+    },
+    "&light .cm-searchMatch": { backgroundColor: "#ffff0054" },
+    "&dark .cm-searchMatch": { backgroundColor: "#00ffff8a" },
+    "&light .cm-searchMatch-selected": { backgroundColor: "#ff6a0054" },
+    "&dark .cm-searchMatch-selected": { backgroundColor: "#ff00ff8a" }
+  });
+  var searchExtensions = [
+    searchState,
+    /* @__PURE__ */ Prec.low(searchHighlighter),
+    baseTheme2
+  ];
+
   // src/app.js
   var editorWrap = document.getElementById("editor-wrapper");
   var settingsOpen = document.getElementById("settings-open");
   var settingsDialog = document.getElementById("settings-dialog");
-  var settingsForm = document.getElementById("settings-form");
   var providerEl = document.getElementById("agent-provider");
   var modelEl = document.getElementById("agent-model");
   var thinkingEl = document.getElementById("agent-thinking");
@@ -16580,7 +17903,6 @@
   var configuredKeys = document.getElementById("configured-keys");
   var settingsError = document.getElementById("settings-error");
   var modelHint = document.getElementById("model-hint");
-  var agentStatusEl = document.getElementById("agent-status");
   var reviewButton = document.getElementById("review-button");
   var chatStream = document.getElementById("chat-stream");
   var chatInput = document.getElementById("chat-input");
@@ -16590,16 +17912,140 @@
   var chatSendButton = document.getElementById("chat-send");
   var chatClear = document.getElementById("chat-clear");
   var scoreEl = document.getElementById("style-score");
+  var scoreValueEl = document.getElementById("style-score-value");
   var chatPanel = document.getElementById("chat");
   var autoReviewEl = document.getElementById("auto-review");
   var updateCheckEl = document.getElementById("update-check");
+  var themeToggleEl = document.getElementById("theme-toggle");
   var updateBadge = document.getElementById("update-badge");
   var updateStatus = document.getElementById("update-status");
+  var systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+  var savedTheme = localStorage.getItem("wa-theme");
+  var currentTheme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : systemTheme.matches ? "dark" : "light";
+  function setTheme(theme2, persist = true) {
+    currentTheme = theme2;
+    document.documentElement.dataset.theme = theme2;
+    document.documentElement.style.colorScheme = theme2;
+    themeToggleEl.checked = theme2 === "dark";
+    if (persist) localStorage.setItem("wa-theme", theme2);
+  }
+  setTheme(currentTheme, false);
+  themeToggleEl.addEventListener("change", () => setTheme(themeToggleEl.checked ? "dark" : "light"));
   var chatHeight = 140;
+  var documentKey = null;
+  var diskRevision = null;
+  var diskText = null;
+  var diskTimer = null;
+  var saving = false;
+  var savePaused = true;
+  var loadingDocument = true;
+  var editVersion = 0;
+  var saveStatus = document.getElementById("save-status");
+  var reviewStatus = document.getElementById("review-status");
+  function setReviewStatus(text, detail, from = "review") {
+    reviewStatus.textContent = text;
+    reviewStatus.title = detail ?? text;
+    reviewStatus.dataset.from = text ? from : "";
+  }
+  var MODEL_ERRORS = {
+    400: "The model rejected the request.",
+    401: "The API key was rejected.",
+    402: "This provider is out of credit.",
+    403: "This key may not use this model.",
+    404: "This model is not available.",
+    408: "The model took too long.",
+    413: "The draft is too long for this model.",
+    429: "The model is rate-limited.",
+    500: "The provider hit an error.",
+    502: "The provider hit an error.",
+    503: "The provider is unavailable.",
+    529: "The provider is overloaded."
+  };
+  function modelError(error) {
+    const detail = error?.message ?? String(error);
+    console.error("[model]", detail);
+    if (/failed to fetch|networkerror|load failed/i.test(detail)) {
+      return { say: "Litura stopped answering.", act: "retry", detail };
+    }
+    const status = Number(/^(?:HTTP |Server error )?([45]\d\d)\b/.exec(detail)?.[1]);
+    return {
+      say: MODEL_ERRORS[status] ?? "The model could not answer.",
+      // Retrying a rejected key or an oversized draft only fails again.
+      act: [401, 402, 403].includes(status) ? "settings" : status === 413 ? null : "retry",
+      detail
+    };
+  }
+  function errorCard(problem, retry) {
+    const card = chatEl("div", "chat-error", problem.say);
+    card.title = problem.detail ?? "";
+    if (problem.act === "settings") {
+      const open = chatEl("button", "chat-again", "Open settings");
+      open.addEventListener("click", openSettings);
+      card.append(open);
+    } else if (problem.act === "retry" && retry) {
+      const again = chatEl("button", "chat-again", "Try again");
+      again.addEventListener("click", () => {
+        card.remove();
+        retry();
+      });
+      card.append(again);
+    }
+    return card;
+  }
+  var tabId;
+  try {
+    tabId = sessionStorage.getItem("litura-tab") || crypto.randomUUID();
+    sessionStorage.setItem("litura-tab", tabId);
+  } catch {
+    tabId = crypto.randomUUID();
+  }
+  var docStorage = {
+    getItem(key) {
+      try {
+        return documentKey ? (key === "wa-working" ? localStorage.getItem(documentKey + key + ":" + tabId) : null) ?? localStorage.getItem(documentKey + key) : null;
+      } catch {
+        return null;
+      }
+    },
+    setItem(key, value) {
+      try {
+        if (documentKey) {
+          localStorage.setItem(documentKey + key, value);
+          if (key === "wa-working") localStorage.setItem(documentKey + key + ":" + tabId, value);
+        }
+      } catch {
+        saveStatus.textContent = "Browser backup unavailable \u2014 keep this tab open until saved";
+      }
+    },
+    removeItem(key) {
+      try {
+        if (documentKey) localStorage.removeItem(documentKey + key);
+      } catch {
+      }
+    }
+  };
+  var jobs = /* @__PURE__ */ new Set();
+  function startJob({ background = false } = {}) {
+    const job = new AbortController();
+    job.background = background;
+    jobs.add(job);
+    syncSend();
+    return job;
+  }
+  function finishJob(job) {
+    jobs.delete(job);
+    syncSend();
+  }
+  function stopJobs() {
+    for (const job of jobs) job.abort();
+    suggestAbort?.abort();
+    clearTimeout(autoReviewTimer);
+    clearTimeout(suggestTimer);
+  }
   var STORAGE_SCHEMA = "1";
   if (localStorage.getItem("wa-schema") !== STORAGE_SCHEMA) {
-    localStorage.removeItem("wa-findings");
-    localStorage.removeItem("wa-chat");
+    docStorage.removeItem("wa-findings");
+    docStorage.removeItem("wa-chat");
     localStorage.setItem("wa-schema", STORAGE_SCHEMA);
   }
   var thinkingNames = { off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
@@ -16621,20 +18067,98 @@
   function currentAgent() {
     return normalizeSelection(agentSelection);
   }
-  function setOptions(select, options, value) {
-    select.replaceChildren(...options.map(({ value: optionValue, label }) => {
-      const option = document.createElement("option");
-      option.value = optionValue;
-      option.textContent = label;
-      return option;
-    }));
-    select.value = options.some((option) => option.value === value) ? value : options[0]?.value ?? "";
-    select.disabled = !options.length;
+  function saveAgentSelection() {
+    const normalized = normalizeSelection(draftSelection);
+    if (!normalized) return;
+    draftSelection = normalized;
+    agentSelection = normalized;
+    localStorage.setItem("wa-agent", JSON.stringify(agentSelection));
   }
-  function updateAgentLabel() {
-    const selection = currentAgent();
-    const model = agentInfo.models.find((item) => item.provider === selection?.provider && item.model === selection?.model);
-    agentStatusEl.textContent = model?.name ?? (agentInfo.available ? "Choose model" : "Pi not configured");
+  var combos = /* @__PURE__ */ new WeakMap();
+  function combobox(trigger) {
+    const popover = document.getElementById(trigger.getAttribute("popovertarget"));
+    const search = popover.querySelector(".combo-search");
+    const list = popover.querySelector(".combo-list");
+    const empty2 = popover.querySelector(".combo-empty");
+    const state = { options: [], value: "", render };
+    combos.set(trigger, state);
+    function render() {
+      const query = search.value.trim().toLowerCase();
+      const shown = state.options.filter((option) => !query || option.label.toLowerCase().includes(query) || option.value.toLowerCase().includes(query));
+      list.replaceChildren(...shown.map((option) => {
+        const item = chatEl("button", "combo-item", "");
+        item.type = "button";
+        item.dataset.value = option.value;
+        item.setAttribute("role", "option");
+        item.setAttribute("aria-selected", String(option.value === state.value));
+        item.append(chatEl("span", "", option.label));
+        return item;
+      }));
+      empty2.hidden = shown.length > 0;
+    }
+    trigger.addEventListener("click", () => {
+      const box = trigger.getBoundingClientRect();
+      popover.style.left = `${box.left}px`;
+      popover.style.top = `${box.bottom + 4}px`;
+      popover.style.width = `${Math.max(box.width, 260)}px`;
+    });
+    popover.addEventListener("toggle", (event) => {
+      if (event.newState !== "open") return;
+      search.value = "";
+      render();
+      const current = list.querySelector('[aria-selected="true"]');
+      current?.classList.add("is-active");
+      current?.scrollIntoView({ block: "center" });
+      search.focus();
+    });
+    search.addEventListener("input", render);
+    search.addEventListener("keydown", (event) => {
+      const items = [...list.children];
+      if (event.key === "Enter") {
+        event.preventDefault();
+        (list.querySelector(".is-active") ?? items[0])?.click();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      const at = items.findIndex((item) => item.classList.contains("is-active"));
+      const next = items[Math.min(Math.max(at + (event.key === "ArrowDown" ? 1 : -1), 0), items.length - 1)];
+      for (const item of items) item.classList.remove("is-active");
+      next?.classList.add("is-active");
+      next?.scrollIntoView({ block: "nearest" });
+    });
+    list.addEventListener("click", (event) => {
+      const item = event.target.closest("[data-value]");
+      if (!item) return;
+      state.value = item.dataset.value;
+      popover.hidePopover();
+      trigger.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+  combobox(providerEl);
+  combobox(modelEl);
+  function setOptions(field, options, value) {
+    const combo = combos.get(field);
+    const chosen = options.find((option) => option.value === value) ?? options[0];
+    field.disabled = !options.length;
+    if (!combo) {
+      field.replaceChildren(...options.map(({ value: optionValue, label }) => {
+        const option = document.createElement("option");
+        option.value = optionValue;
+        option.textContent = label;
+        return option;
+      }));
+      field.value = chosen?.value ?? "";
+      return;
+    }
+    combo.options = options;
+    combo.value = chosen?.value ?? "";
+    field.querySelector(".combo-value").textContent = chosen?.label ?? "None available";
+    combo.render();
+  }
+  function fieldValue(field) {
+    const combo = combos.get(field);
+    return combo ? combo.value : field.value;
   }
   function renderModelSettings() {
     draftSelection = normalizeSelection(draftSelection) ?? normalizeSelection(agentInfo.defaultSelection) ?? (agentInfo.models[0] ? normalizeSelection({ ...agentInfo.models[0], thinkingLevel: "medium" }) : null);
@@ -16643,14 +18167,13 @@
       value: id,
       label: agentInfo.providers.find((provider) => provider.id === id)?.name ?? id
     })), draftSelection?.provider);
-    const models = agentInfo.models.filter((model2) => model2.provider === providerEl.value);
+    const models = agentInfo.models.filter((model2) => model2.provider === fieldValue(providerEl));
     setOptions(modelEl, models.map((model2) => ({ value: model2.model, label: model2.name || model2.model })), draftSelection?.model);
-    const model = models.find((item) => item.model === modelEl.value);
+    const model = models.find((item) => item.model === fieldValue(modelEl));
     const levels = levelsFor(model);
     setOptions(thinkingEl, levels.map((level) => ({ value: level, label: thinkingNames[level] ?? level })), draftSelection?.thinkingLevel);
-    draftSelection = model ? { provider: model.provider, model: model.model, thinkingLevel: thinkingEl.value } : null;
+    draftSelection = model ? { provider: model.provider, model: model.model, thinkingLevel: fieldValue(thinkingEl) } : null;
     modelHint.textContent = agentInfo.models.length ? "" : "Add an API key or configure Pi authentication to see models.";
-    document.getElementById("settings-save").disabled = !draftSelection;
   }
   function renderCredentials() {
     setOptions(keyProviderEl, agentInfo.authProviders.map((provider) => ({ value: provider.id, label: provider.name })), keyProviderEl.value || "openai");
@@ -16686,7 +18209,6 @@
       agentSelection = normalized;
       localStorage.setItem("wa-agent", JSON.stringify(agentSelection));
     }
-    updateAgentLabel();
     return agentInfo;
   }
   async function openSettings() {
@@ -16702,7 +18224,12 @@
     if (!settingsDialog.open) settingsDialog.showModal();
   }
   settingsOpen.addEventListener("click", openSettings);
+  settingsDialog.querySelector(".dialog-close").addEventListener("click", () => settingsDialog.close());
   async function ensureAgent() {
+    if (loadingDocument) {
+      saveStatus.textContent = "Wait until the draft is loaded";
+      return false;
+    }
     if (currentAgent()) return true;
     try {
       await refreshAgent();
@@ -16714,31 +18241,26 @@
     return false;
   }
   providerEl.addEventListener("change", () => {
-    const first = agentInfo.models.find((model) => model.provider === providerEl.value);
-    draftSelection = first ? { provider: first.provider, model: first.model, thinkingLevel: "medium" } : null;
+    const first = agentInfo.models.find((model) => model.provider === fieldValue(providerEl));
+    if (first) draftSelection = { provider: first.provider, model: first.model, thinkingLevel: "medium" };
     renderModelSettings();
+    saveAgentSelection();
   });
   modelEl.addEventListener("change", () => {
-    draftSelection = { provider: providerEl.value, model: modelEl.value, thinkingLevel: draftSelection?.thinkingLevel ?? "medium" };
+    draftSelection = { provider: fieldValue(providerEl), model: fieldValue(modelEl), thinkingLevel: draftSelection?.thinkingLevel ?? "medium" };
     renderModelSettings();
+    saveAgentSelection();
+  });
+  settingsDialog.addEventListener("close", () => {
+    for (const popover of document.querySelectorAll(".combo")) {
+      if (popover.matches(":popover-open")) popover.hidePopover();
+    }
   });
   thinkingEl.addEventListener("change", () => {
-    if (draftSelection) draftSelection = { ...draftSelection, thinkingLevel: thinkingEl.value };
+    if (draftSelection) draftSelection = { ...draftSelection, thinkingLevel: fieldValue(thinkingEl) };
+    saveAgentSelection();
   });
   keyProviderEl.addEventListener("change", renderCredentials);
-  settingsForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (event.submitter?.value === "cancel") {
-      settingsDialog.close();
-      return;
-    }
-    const normalized = normalizeSelection(draftSelection);
-    if (!normalized) return;
-    agentSelection = normalized;
-    localStorage.setItem("wa-agent", JSON.stringify(agentSelection));
-    updateAgentLabel();
-    settingsDialog.close();
-  });
   keyAddEl.addEventListener("click", async () => {
     settingsError.textContent = "";
     keyAddEl.disabled = true;
@@ -16766,10 +18288,7 @@
       settingsError.textContent = error.message;
     }
   }
-  refreshAgent().catch((error) => {
-    agentStatusEl.textContent = "Pi error";
-    console.error("[pi]", error.message);
-  });
+  refreshAgent().catch((error) => console.error("[pi]", error.message));
   var GhostWidget = class extends WidgetType {
     constructor(text) {
       super();
@@ -16875,7 +18394,8 @@
     update(decorations2, tr) {
       for (const effect of tr.effects) {
         if (effect.is(setAttachFx)) {
-          return effect.value ? Decoration.set([Decoration.mark({ class: "cm-attached" }).range(effect.value.from, effect.value.to)]) : Decoration.none;
+          const cls = effect.value?.finding ? "cm-attached cm-attached-finding" : "cm-attached";
+          return effect.value ? Decoration.set([Decoration.mark({ class: cls }).range(effect.value.from, effect.value.to)]) : Decoration.none;
         }
       }
       if (!tr.docChanged) return decorations2;
@@ -16897,33 +18417,39 @@
     });
     return found;
   }
-  function currentRanges() {
-    const ranges = [];
-    workView.state.field(reviewField).between(0, workView.state.doc.length, (from, to) => {
-      ranges.push({ from, to });
-    });
-    return ranges;
-  }
   function syncReviewLabel() {
     const count = workView.state.field(reviewField).size;
     reviewButton.classList.toggle("has-findings", count > 0);
-    reviewButton.textContent = count ? `${count} suggestion${count === 1 ? "" : "s"}` : "Review";
-    reviewButton.title = count ? "Jump to the next finding \u2014 Shift-click to review again" : "Review writing and structure";
+    reviewButton.textContent = reviewButton.disabled ? "Reviewing\u2026" : "Review";
   }
   var jumpFrom = -1;
-  function jumpToNextFinding() {
-    const ranges = currentRanges();
-    if (!ranges.length) return;
-    const next = ranges.find((range) => range.from > jumpFrom) ?? ranges[0];
-    jumpFrom = next.from;
-    workView.dispatch({
-      selection: { anchor: next.from, head: next.to },
-      effects: EditorView.scrollIntoView(next.from, { y: "center" })
-    });
-    workView.focus();
+  function jumpToNextFinding(direction = 1) {
+    const live = reviewFindings.map((finding) => ({ finding, range: findingRange(finding.id) })).filter((item) => item.range).sort((a, b) => a.range.from - b.range.from || a.finding.id - b.finding.id);
+    if (!live.length) return;
+    const index = live.findIndex((item) => item.finding.id === jumpFrom);
+    const next = live[(index + direction + live.length) % live.length];
+    jumpFrom = next.finding.id;
+    openFinding(next.finding, true);
   }
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "F8") {
+      event.preventDefault();
+      jumpToNextFinding(event.shiftKey ? -1 : 1);
+    }
+    if (event.key === "Escape" && preview) {
+      preview.index = -1;
+      endPreview();
+      workView.focus();
+    }
+  });
   function dismissFinding(id) {
-    reviewFindings = reviewFindings.filter((finding) => finding.id !== id);
+    const finding = reviewFindings.find((item) => item.id === id);
+    const dismissed = JSON.parse(docStorage.getItem("dismissed") || "[]");
+    if (finding) dismissed.push({ code: finding.code, quote: finding.quote, document: workView.state.doc.toString() });
+    docStorage.setItem("dismissed", JSON.stringify(dismissed.slice(-100)));
+    reviewFindings = reviewFindings.filter((finding2) => finding2.id !== id);
+    findingCards.get(id)?.remove();
+    findingCards.delete(id);
     workView.dispatch({ effects: dropReviewFx.of(id) });
     if (activeFinding?.id === id) detach();
     saveFindings();
@@ -16931,84 +18457,112 @@
   }
   function saveFindings() {
     const live = reviewFindings.filter((finding) => findingRange(finding.id)).map(({ code, quote, pattern, reason, fix }) => ({ code, quote, pattern, reason, fix }));
-    localStorage.setItem("wa-findings", JSON.stringify(live));
+    docStorage.setItem("wa-findings", JSON.stringify({ document: workView.state.doc.toString(), findings: live }));
   }
   function restoreFindings() {
     let saved = [];
     try {
-      saved = JSON.parse(localStorage.getItem("wa-findings") || "[]");
+      saved = JSON.parse(docStorage.getItem("wa-findings") || "[]");
     } catch {
     }
-    if (saved.length && mergeFindings(saved)) syncReviewLabel();
+    if (saved.document === workView.state.doc.toString() && saved.findings?.length && mergeFindings(saved.findings)) syncReviewLabel();
   }
   function clearReview() {
+    for (const card of findingCards.values()) card.remove();
+    findingCards.clear();
     reviewFindings = [];
     checkedSentences.clear();
     workView.dispatch({ effects: setReviewFx.of([]) });
-    localStorage.removeItem("wa-findings");
+    docStorage.removeItem("wa-findings");
     syncReviewLabel();
   }
   function mergeFindings(rawFindings) {
-    const located = locateFindings(workView.state.doc.toString(), rawFindings || [], currentRanges()).map((finding) => ({ ...finding, id: findingSeq++ }));
+    const document2 = workView.state.doc.toString();
+    const dismissed = JSON.parse(docStorage.getItem("dismissed") || "[]");
+    const filtered = (rawFindings || []).filter((finding) => !dismissed.some((item) => item.document === document2 && item.code === finding.code && item.quote === finding.quote) && !reviewFindings.some((item) => findingRange(item.id) && item.code === finding.code && item.quote === finding.quote));
+    const located = locateFindings(document2, filtered).map((finding) => ({ ...finding, id: findingSeq++ }));
     if (!located.length) return 0;
     reviewFindings.push(...located);
     workView.dispatch({ effects: addReviewFx.of(located) });
     saveFindings();
     return located.length;
   }
-  async function reviewRequest(body) {
-    const data = await api("/review", {
-      method: "POST",
-      body: JSON.stringify({ agent: currentAgent(), ...body })
-    });
-    return mergeFindings(data.findings);
+  async function reviewRequest(body, replaceAll2 = false) {
+    if (body.document !== workView.state.doc.toString()) throw new Error("Draft changed before review started. Run Review again.");
+    const version = editVersion;
+    const job = startJob({ background: Boolean(body.target) });
+    try {
+      const data = await api("/review", {
+        method: "POST",
+        signal: job.signal,
+        body: JSON.stringify({ agent: currentAgent(), ...body })
+      });
+      if (version !== editVersion) throw new Error("Draft changed during review. Run Review again.");
+      if (replaceAll2) clearReview();
+      const added = mergeFindings(data.findings);
+      if (data.failedPasses?.length) setReviewStatus(`Partial review (${data.failedPasses.join(", ")}) \u2014 run Review to retry`);
+      else if (reviewStatus.dataset.from === "review") setReviewStatus("");
+      return { added, complete: !data.failedPasses?.length };
+    } finally {
+      finishJob(job);
+    }
   }
   async function runReview() {
     const document2 = workView.state.doc.toString();
-    if (!document2.trim()) {
-      clearReview();
-      return;
-    }
+    if (loadingDocument || !document2.trim()) return;
     if (!await ensureAgent()) return;
     jumpFrom = -1;
     reviewButton.disabled = true;
-    reviewButton.textContent = "Reviewing\u2026";
-    clearReview();
+    syncReviewLabel();
+    setReviewStatus("");
     try {
-      const added = await reviewRequest({ document: document2 });
-      for (const sentence of completedSentences(workView.state.doc.toString())) {
-        checkedSentences.add(sentence.text);
-      }
-      if (added) syncReviewLabel();
-      else reviewButton.textContent = "No slop found";
+      const result = await reviewRequest({ document: document2 }, true);
+      if (result.complete) for (const paragraph of reviewParagraphs(document2)) checkedSentences.add(paragraph.key);
     } catch (error) {
-      console.error("[/review]", error.message);
-      reviewButton.textContent = "Review failed";
+      setReviewStatus(error.name === "AbortError" ? "Review stopped \u2014 findings kept" : `Review failed. ${modelError(error).say}`, error.message);
     } finally {
       reviewButton.disabled = false;
+      syncReviewLabel();
     }
   }
-  reviewButton.addEventListener("click", (event) => {
-    if (workView.state.field(reviewField).size && !event.shiftKey) jumpToNextFinding();
-    else runReview();
+  reviewButton.addEventListener("click", () => {
+    workView.focus();
+    runReview();
+  });
+  reviewButton.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      workView.focus();
+    }
   });
   var AUTO_REVIEW_DELAY = 1500;
   var AUTO_REVIEW_MIN = 25;
-  var AUTO_REVIEW_THRESHOLD = 20;
   var checkedSentences = /* @__PURE__ */ new Set();
   var autoReviewTimer = null;
   var autoReviewBusy = false;
   var autoReviewOn = localStorage.getItem("wa-autoreview") !== "off";
+  var autoSuggestOn = localStorage.getItem("wa-autosuggest") !== "off";
+  var autoSuggestEl = document.getElementById("auto-suggest");
+  autoSuggestEl.checked = autoSuggestOn;
+  autoSuggestEl.addEventListener("change", () => {
+    autoSuggestOn = autoSuggestEl.checked;
+    localStorage.setItem("wa-autosuggest", autoSuggestOn ? "on" : "off");
+    clearTimeout(suggestTimer);
+    suggestAbort?.abort();
+    ghostClear(workView);
+  });
   autoReviewEl.checked = autoReviewOn;
   autoReviewEl.addEventListener("change", () => {
     autoReviewOn = autoReviewEl.checked;
+    clearTimeout(autoReviewTimer);
+    if (autoReviewOn) autoReviewSchedule();
     localStorage.setItem("wa-autoreview", autoReviewOn ? "on" : "off");
   });
   var UPDATE_INTERVAL = 24 * 60 * 60 * 1e3;
-  var updateCheckOn = localStorage.getItem("wa-updatecheck") === "on";
+  var updateCheckOn = localStorage.getItem("wa-updatecheck") !== "off";
   updateCheckEl.checked = updateCheckOn;
   function renderUpdate({ current, latest, error }) {
-    const stale = Boolean(latest) && latest !== current;
+    const stale = newerVersion(latest, current);
     updateBadge.hidden = !stale;
     if (stale) {
       updateBadge.textContent = `${latest} available`;
@@ -17038,13 +18592,11 @@
   refreshUpdate();
   function syncStyleScore() {
     const text = workView.state.doc.toString();
+    scoreEl.hidden = !text.trim() || !isLatinScript(text);
+    if (scoreEl.hidden) return;
     const { score, structural } = styleScore(text);
-    if (!text.trim() || !isLatinScript(text)) {
-      scoreEl.textContent = "";
-      return;
-    }
-    scoreEl.textContent = `${score}`;
-    scoreEl.title = structural ? `Local AI-tell score ${score}/100 (0 = clean). Click to see what raised it.` : `Local AI-tell score ${score}/100, wording only \u2014 too short to judge rhythm or variety. Click for detail.`;
+    scoreValueEl.textContent = `${score}`;
+    scoreEl.title = structural ? `Local slop score ${score}/100 (0 = clean). Click to see what raised it.` : `Local slop score ${score}/100, wording only \u2014 too short to judge rhythm or variety. Click for detail.`;
     scoreEl.classList.toggle("warn", score >= 40);
   }
   function showScoreCard() {
@@ -17061,45 +18613,52 @@
     }
     const card = chatEl("div", "chat-card");
     card.append(
-      chatEl("strong", "", `Local score ${score}/100`),
+      chatEl("strong", "", `Local slop score ${score}/100`),
       chatEl("span", "", hits.length ? `Known tells: ${hits.join(", ")}` : "No known tell words or phrases."),
-      chatEl("small", "", notes.join(" ") || "Rhythm and variety read as human.")
+      chatEl("small", "", `${notes.join(" ")} An English word list and sentence rhythm, nothing else: it does not read your meaning. Use Review for that.`)
     );
     chatAdd(card);
   }
   scoreEl.addEventListener("click", showScoreCard);
   function autoReviewSchedule() {
+    if (!autoReviewOn || loadingDocument || savePaused) return;
     clearTimeout(autoReviewTimer);
     autoReviewTimer = setTimeout(autoReviewRun, AUTO_REVIEW_DELAY);
   }
+  function reviewParagraphs(document2) {
+    return [...document2.matchAll(/[^\n]+(?:\n(?!\s*\n)[^\n]+)*/g)].map((match) => ({ text: match[0].trim(), from: match.index, to: match.index + match[0].length })).map((paragraph, i, paragraphs) => ({ ...paragraph, key: JSON.stringify([
+      paragraph.text,
+      paragraphs[i - 1]?.text.slice(-400),
+      paragraphs[i + 1]?.text.slice(0, 400),
+      currentAgent()
+    ]) }));
+  }
   function autoReviewPending(state) {
     const cursor = state.selection.main.head;
-    return completedSentences(state.doc.toString()).filter((sentence) => sentence.text.length >= AUTO_REVIEW_MIN && !checkedSentences.has(sentence.text) && // Strictly inside → the writer is still working on it. Resting at the
-    // closing punctuation means the sentence is finished, so check it.
-    !(cursor > sentence.from && cursor < sentence.to) && worthReviewing(sentence.text));
-  }
-  function worthReviewing(text) {
-    if (!isLatinScript(text)) return true;
-    return styleScore(text).score >= AUTO_REVIEW_THRESHOLD;
+    return reviewParagraphs(state.doc.toString()).filter((paragraph) => paragraph.text.length >= AUTO_REVIEW_MIN && !checkedSentences.has(paragraph.key) && (paragraph.to < state.doc.length || /[.!?…。！？]["'»”’)\]]*$/.test(paragraph.text)) && !(cursor >= paragraph.from && cursor < paragraph.to));
   }
   async function autoReviewRun() {
-    if (!autoReviewOn || autoReviewBusy || reviewButton.disabled || !currentAgent()) return;
-    const pending = autoReviewPending(workView.state);
+    if (!autoReviewOn || loadingDocument || savePaused || autoReviewBusy || reviewButton.disabled || !currentAgent()) return;
+    const pending = autoReviewPending(workView.state).slice(0, 3);
     if (!pending.length) return;
+    const version = editVersion;
     autoReviewBusy = true;
     reviewButton.classList.add("is-busy");
-    for (const sentence of pending) checkedSentences.add(sentence.text);
+    let complete = false;
     try {
-      if (await reviewRequest({
+      const result = await reviewRequest({
         document: workView.state.doc.toString(),
-        target: pending.map((sentence) => sentence.text).join("\n\n")
-      })) syncReviewLabel();
+        target: pending.map((paragraph) => paragraph.text).join("\n\n")
+      });
+      complete = result.complete;
+      if (complete) for (const paragraph of pending) checkedSentences.add(paragraph.key);
+      syncReviewLabel();
     } catch (error) {
-      for (const sentence of pending) checkedSentences.delete(sentence.text);
-      console.error("[/review auto]", error.message);
+      setReviewStatus(error.name === "AbortError" ? "Automatic review stopped" : `Automatic review failed. ${modelError(error).say}`, error.message);
     } finally {
       autoReviewBusy = false;
       reviewButton.classList.remove("is-busy");
+      if (complete || version !== editVersion) autoReviewSchedule();
     }
   }
   var suggestTimer = null;
@@ -17115,6 +18674,7 @@
     return state.doc.line(line.number + 1).text.trim() === "";
   }
   function suggestSchedule() {
+    if (!autoSuggestOn || loadingDocument || savePaused) return;
     clearTimeout(suggestTimer);
     if (suggestAbort) {
       suggestAbort.abort();
@@ -17128,13 +18688,14 @@
   async function suggestFetch() {
     const view = workView;
     const state = view.state;
-    if (state.readOnly || !currentAgent()) return;
+    if (state.readOnly || !autoSuggestOn || !currentAgent()) return;
     if (!atParagraphEnd(state)) return;
     const doc2 = state.doc.toString();
     const pos = state.selection.main.head;
     const line = state.doc.lineAt(pos);
     if (/^\/idea/i.test(line.text)) return;
-    suggestAbort = new AbortController();
+    const job = startJob({ background: true });
+    suggestAbort = job;
     try {
       const res = await fetch("/suggest", {
         method: "POST",
@@ -17147,16 +18708,20 @@
         signal: suggestAbort.signal
       });
       if (!res.ok) {
-        console.error("[suggest] server error", res.status);
+        const problem = modelError(new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`));
+        setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, "suggest");
         return;
       }
       const data = await res.json();
-      if (data.suggestion && styleMetrics(data.suggestion).tells > 0) return;
       if (data.suggestion && view.state.doc.toString() === doc2 && view.state.selection.main.head === pos && !view.state.readOnly) {
         ghostShow(view, data.suggestion);
       }
-    } catch (e) {
-      if (e.name !== "AbortError") console.error("[suggest]", e.message);
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      const problem = modelError(error);
+      setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, "suggest");
+    } finally {
+      finishJob(job);
     }
   }
   var readonlyComp = new Compartment();
@@ -17178,66 +18743,35 @@
     return true;
   }
   async function runIdeaExpansion(view, line) {
-    const idea = line.text.slice("/idea".length).trim();
-    view.dispatch({
-      changes: { from: line.from, to: line.to, insert: "" },
-      selection: { anchor: line.from }
-    });
-    editorSetReadonly(view, true);
-    let insertPos = line.from;
+    const target = { from: line.from, to: line.to, text: line.text, document: view.state.doc.toString() };
+    if (!await ensureAgent()) return;
+    const job = startJob();
+    const bubble = chatAdd(chatEl("div", "chat-message is-agent", "Expanding idea\u2026 Your draft is unchanged."));
+    let answer = "";
     try {
       const res = await fetch("/idea", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          document: view.state.doc.toString(),
-          idea,
-          agent: currentAgent()
-        })
+        signal: job.signal,
+        body: JSON.stringify({ document: target.document, idea: line.text.slice(5).trim(), agent: currentAgent() })
       });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop();
-        for (const rawLine of lines) {
-          if (!rawLine.startsWith("data: ")) continue;
-          const raw = rawLine.slice(6).trim();
-          if (raw === "[DONE]") continue;
-          let event;
-          try {
-            event = JSON.parse(raw);
-          } catch {
-            continue;
-          }
-          if (event.error) throw new Error(event.error);
-          if (!event.text) continue;
-          view.dispatch({
-            changes: { from: insertPos, insert: event.text },
-            selection: { anchor: insertPos + event.text.length }
-          });
-          insertPos += event.text.length;
-        }
+      if (!res.ok) throw new Error("Could not expand idea");
+      for await (const chunk of sseChunks(res)) {
+        if (chunk.error) throw new Error(chunk.error);
+        answer += chunk.text ?? "";
+        bubble.textContent = answer;
       }
-    } catch (err) {
-      console.error("[/idea]", err);
-      view.dispatch({
-        changes: { from: line.from, insert: `/idea ${idea}` },
-        selection: { anchor: line.from + `/idea ${idea}`.length }
-      });
+      if (!answer.trim()) throw new Error("The model returned no passage");
+      bubble.remove();
+      showPreview([answer], null, target);
+    } catch (error) {
+      bubble.title = error.message;
+      bubble.textContent = (answer ? answer + "\n\n" : "") + (job.signal.aborted ? "Stopped. " : `${modelError(error).say} `) + "The original idea is unchanged.";
     } finally {
-      editorSetReadonly(view, false);
-      view.focus();
-      save();
+      finishJob(job);
     }
   }
   var CHAT_PLACEHOLDER = "Ask anything, or select text to rewrite";
-  var DELTA_MATERIAL = 5;
   var attached = null;
   var activeFinding = null;
   var chatHistory = [];
@@ -17253,12 +18787,12 @@
     if (stick) chatStream.scrollTop = chatStream.scrollHeight;
   }
   function saveChat() {
-    localStorage.setItem("wa-chat", JSON.stringify(chatHistory.slice(-20)));
+    docStorage.setItem("wa-chat", JSON.stringify(chatHistory.slice(-20)));
   }
   function restoreChat() {
     let saved = [];
     try {
-      saved = JSON.parse(localStorage.getItem("wa-chat") || "[]");
+      saved = JSON.parse(docStorage.getItem("wa-chat") || "[]");
     } catch {
     }
     if (!Array.isArray(saved) || !saved.length) return;
@@ -17273,7 +18807,82 @@
       }
     }
   }
+  var rail = document.getElementById("rail");
+  var railAnchors = /* @__PURE__ */ new Map();
+  var railHomes = /* @__PURE__ */ new Map();
+  var RAIL_WIDTH = 240;
+  var RAIL_GUTTER = 24;
+  var railOn = false;
+  function syncRail() {
+    const margin = parseFloat(getComputedStyle(workView.contentDOM).paddingRight) || 0;
+    const fits = margin >= RAIL_WIDTH + RAIL_GUTTER;
+    if (fits) {
+      const box = workView.contentDOM.getBoundingClientRect();
+      const pane = document.getElementById("pane-work").getBoundingClientRect();
+      rail.style.left = `${box.right - margin - pane.left + RAIL_GUTTER}px`;
+    }
+    if (fits === railOn) return;
+    railOn = fits;
+    rail.hidden = !fits;
+    for (const node of railAnchors.keys()) {
+      if (!node.isConnected) continue;
+      node.style.top = "";
+      node.style.visibility = "";
+      if (fits) rail.append(node);
+      else placeHome(node);
+    }
+    if (!fits) chatScroll(true);
+  }
+  function placeHome(node) {
+    const home = railHomes.get(node) ?? chatStream;
+    if (home === chatStream) chatAdd(node);
+    else home.insertBefore(node, document.getElementById("review-status"));
+  }
+  function railAdd(node, anchor, home = chatStream) {
+    railAnchors.set(node, anchor);
+    railHomes.set(node, home);
+    syncRail();
+    if (railOn) rail.append(node);
+    else placeHome(node);
+    layoutRail();
+    return node;
+  }
+  function layoutRail() {
+    syncRail();
+    if (!railOn || !rail.children.length) return;
+    const top2 = rail.getBoundingClientRect().top;
+    const placed = [...rail.children].map((node) => {
+      const position = railAnchors.get(node)?.();
+      const coords = position == null ? null : workView.coordsAtPos(position);
+      return { node, at: coords && coords.top - top2 };
+    }).filter((item) => item.at !== null && item.at !== void 0).sort((a, b) => a.at - b.at);
+    for (const node of rail.children) node.style.visibility = "hidden";
+    let floor = 0;
+    for (const item of placed) {
+      const at = Math.max(item.at, floor);
+      item.node.style.top = `${at}px`;
+      item.node.style.visibility = "visible";
+      floor = at + item.node.offsetHeight + 8;
+    }
+  }
+  new MutationObserver(layoutRail).observe(rail, { childList: true });
+  window.addEventListener("resize", layoutRail);
+  function setChatOpen(open) {
+    if (open) chatStream.hidden = false;
+    chatClear.textContent = open ? "\xD7" : "Conversation";
+    chatClear.setAttribute("aria-label", open ? "Close the conversation" : "Show the conversation");
+    chatClear.title = open ? "Close \u2014 nothing is discarded" : "Show the conversation";
+    if (open) {
+      chatScroll(true);
+      return;
+    }
+    chatStream.hidden = true;
+    detach();
+    for (const card of findingCards.values()) card.remove();
+    findingCards.clear();
+  }
   function chatAdd(node) {
+    setChatOpen(true);
     const stick = chatAtBottom();
     chatStream.append(node);
     chatScroll(stick);
@@ -17283,35 +18892,119 @@
   function attach(range, finding = null, focusComposer = true) {
     attached = range;
     activeFinding = finding;
-    chatChip.classList.remove("hidden");
+    chatChip.classList.toggle("hidden", !!finding);
     chatChipText.textContent = finding?.pattern ?? "Selected text";
-    workView.dispatch({ effects: setAttachFx.of({ from: range.from, to: range.to }) });
-    chatInput.placeholder = "Describe the change";
+    workView.dispatch({ effects: setAttachFx.of({ from: range.from, to: range.to, finding: !!finding }) });
+    chatInput.placeholder = finding ? "Ask about this finding" : "Describe the change";
+    syncActiveCard();
     if (focusComposer) chatInput.focus();
   }
   function detach() {
+    cancelPreview();
     attached = null;
     activeFinding = null;
     chatChip.classList.add("hidden");
+    syncActiveCard();
     chatInput.placeholder = CHAT_PLACEHOLDER;
     workView.dispatch({ effects: setAttachFx.of(null) });
   }
   function attachedRange() {
     if (!attached) return null;
-    if (!activeFinding || attached.fixed) return attached;
-    return findingRange(activeFinding.id) ?? attached;
+    let range = null;
+    workView.state.field(attachField).between(0, workView.state.doc.length, (from, to) => {
+      range = { from, to, text: workView.state.sliceDoc(from, to) };
+    });
+    return range;
   }
-  function paragraphAround(state, from, to) {
-    let first = state.doc.lineAt(from).number;
-    let last = state.doc.lineAt(to).number;
-    while (first > 1 && state.doc.line(first - 1).text.trim()) first--;
-    while (last < state.doc.lines && state.doc.line(last + 1).text.trim()) last++;
-    const range = { from: state.doc.line(first).from, to: state.doc.line(last).to };
-    return { ...range, text: state.sliceDoc(range.from, range.to), fixed: true };
+  var REVERT_MS = 700;
+  var VariantWidget = class extends WidgetType {
+    constructor(text, original, block2, reverting) {
+      super();
+      this.text = text;
+      this.original = original;
+      this.block = block2;
+      this.reverting = reverting;
+    }
+    eq(other) {
+      return other.text === this.text && other.block === this.block && other.reverting === this.reverting;
+    }
+    toDOM() {
+      const node = document.createElement(this.block ? "div" : "span");
+      node.className = this.reverting ? "cm-variant is-reverting" : "cm-variant";
+      node.append(variantNodes(this.original, this.text));
+      return node;
+    }
+  };
+  var WORD_STEP = 90;
+  var WORD_STEPS_MAX = 10;
+  function variantNodes(original, text) {
+    const fragment = document.createDocumentFragment();
+    let step = 0;
+    for (const op of wordDiff(original, text)) {
+      if (op.type === "keep") {
+        fragment.append(op.text);
+        continue;
+      }
+      if (op.type === "del" && op.text.length > 120) continue;
+      const part = document.createElement(op.type === "del" ? "del" : "ins");
+      part.className = op.type === "del" ? "cm-variant-old" : "cm-variant-new";
+      part.textContent = op.text;
+      part.style.animationDelay = `${Math.min(step++, WORD_STEPS_MAX) * WORD_STEP}ms`;
+      fragment.append(part);
+    }
+    return fragment;
   }
-  function applyText(text, card) {
-    const range = attachedRange();
-    if (!range) return;
+  function reservedHeight(target, variants) {
+    const line = workView.state.doc.lineAt(target.from);
+    if (line.number !== workView.state.doc.lineAt(target.to).number) return 0;
+    const at = workView.domAtPos(line.from).node;
+    const lineEl = (at.nodeType === 1 ? at : at.parentElement)?.closest(".cm-line");
+    if (!lineEl) return 0;
+    const probe = document.createElement("div");
+    probe.className = lineEl.className;
+    probe.style.cssText = `position:absolute;visibility:hidden;pointer-events:none;width:${lineEl.clientWidth}px`;
+    lineEl.parentElement.append(probe);
+    const before = workView.state.sliceDoc(line.from, target.from);
+    const after = workView.state.sliceDoc(target.to, line.to);
+    let tallest = 0;
+    try {
+      for (const option of [target.text, ...variants]) {
+        probe.replaceChildren(before, variantNodes(target.text, option), after);
+        tallest = Math.max(tallest, probe.offsetHeight);
+      }
+    } finally {
+      probe.remove();
+    }
+    return tallest;
+  }
+  var setVariantFx = StateEffect.define();
+  var variantField = StateField.define({
+    create: () => null,
+    update(value, tr) {
+      if (tr.docChanged) return null;
+      for (const effect of tr.effects) if (effect.is(setVariantFx)) return effect.value;
+      return value;
+    },
+    provide: (field) => EditorView.decorations.from(field, (value) => {
+      if (!value) return Decoration.none;
+      const marks2 = [];
+      if (value.reserve) {
+        marks2.push(Decoration.line({ attributes: { style: `min-height:${value.reserve}px` } }).range(value.lineFrom));
+      }
+      marks2.push(Decoration.replace({
+        widget: new VariantWidget(value.text, value.original, value.block, value.reverting),
+        block: value.block
+      }).range(value.from, value.to));
+      return Decoration.set(marks2, true);
+    })
+  });
+  function applyText(text, target) {
+    if (!replacementTarget(workView.state.doc.toString(), target) || workView.state.readOnly) {
+      chatAdd(chatEl("div", "chat-error", "The draft changed since this answer. Select the passage and request new options."));
+      return;
+    }
+    const range = target;
+    saveSnapshot("Before AI replacement");
     workView.dispatch({
       changes: { from: range.from, to: range.to, insert: text },
       selection: { anchor: range.from + text.length }
@@ -17319,11 +19012,17 @@
     workView.focus();
     save();
     detach();
-    card?.classList.add("is-applied");
-    card?.parentElement?.classList.add("is-spent");
   }
-  function findingCard(finding, instruction) {
+  function markFor(id) {
+    return workView.dom.querySelector(`.cm-slop[data-slop-id="${id}"]`);
+  }
+  function syncActiveCard() {
+    for (const [id, card] of findingCards) card.classList.toggle("is-active", id === activeFinding?.id);
+  }
+  function findingCard(finding) {
     const card = chatEl("div", "chat-card");
+    card.addEventListener("mouseenter", () => markFor(finding.id)?.classList.add("is-hot"));
+    card.addEventListener("mouseleave", () => markFor(finding.id)?.classList.remove("is-hot"));
     const dismiss = chatEl("button", "chat-card-dismiss", "\xD7");
     dismiss.type = "button";
     dismiss.title = "Dismiss this finding";
@@ -17331,7 +19030,7 @@
     dismiss.addEventListener("click", () => {
       chatAbort?.abort();
       dismissFinding(finding.id);
-      if (card.nextElementSibling?.classList.contains("chat-variants")) card.nextElementSibling.remove();
+      cancelPreview();
       card.remove();
     });
     card.append(
@@ -17340,85 +19039,197 @@
       chatEl("span", "", finding.reason),
       chatEl("small", "", finding.fix)
     );
-    const offer = chatEl("button", "chat-offer", "Offer rewrites");
+    const offer = chatEl("button", "chat-offer", "Options");
     offer.type = "button";
     offer.addEventListener("click", () => {
-      offer.remove();
-      if (activeFinding?.id !== finding.id) openFinding(finding);
-      requestVariants(instruction);
+      const live = findingRange(finding.id);
+      if (!live) {
+        if (!card.querySelector(".chat-error")) card.append(chatEl("div", "chat-error", "This passage has changed. Run Review again."));
+        return;
+      }
+      const target = { ...live, text: workView.state.sliceDoc(live.from, live.to) };
+      attach(target, finding, false);
+      requestVariants(`Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`, null, card);
     });
     card.append(offer);
     return card;
   }
-  function variantCards(variants, instruction) {
-    const doc2 = workView.state.doc.toString();
-    const range = attachedRange();
-    const measurable = isLatinScript(doc2) && range;
-    const base2 = measurable ? styleScore(doc2).score : null;
-    const scored = variants.map((text) => ({
-      text,
-      score: measurable ? styleScore(doc2.slice(0, range.from) + text + doc2.slice(range.to)).score : null
-    }));
-    if (measurable) scored.sort((a, b) => a.score - b.score);
-    const wrap = chatEl("div", "chat-variants");
-    scored.forEach(({ text, score }, index) => {
-      const card = chatEl("div", "variant-card");
-      const label = chatEl("div", "variant-label", `Option ${index + 1}`);
-      if (score !== null) {
-        const move = score - base2;
-        const tone = move <= -DELTA_MATERIAL ? " is-better" : move >= DELTA_MATERIAL ? " is-worse" : "";
-        const delta = chatEl("span", `variant-delta${tone}`, `${base2} \u2192 ${score}`);
-        delta.title = "Local AI-tell score for the whole draft if you pick this variant";
-        label.append(delta);
-      }
-      card.append(label, chatEl("div", "", text));
-      card.addEventListener("click", () => {
-        if (!wrap.classList.contains("is-spent")) applyText(text, card);
-      });
-      wrap.append(card);
-    });
-    const again = chatEl("button", "chat-again", "Try again");
-    again.type = "button";
-    again.addEventListener("click", () => {
-      if (wrap.classList.contains("is-spent")) return;
-      wrap.remove();
-      requestVariants(instruction);
-    });
-    wrap.append(again);
-    return wrap;
+  var previewStrip = document.getElementById("chat-preview");
+  var cardContent = /* @__PURE__ */ new WeakMap();
+  function cardShow(card, ...nodes) {
+    if (!cardContent.has(card)) cardContent.set(card, [...card.childNodes]);
+    card.classList.add("is-bare");
+    card.replaceChildren(...nodes);
   }
-  function skeletonCards(count = 3) {
-    const wrap = chatEl("div", "chat-variants");
-    for (let i = 0; i < count; i++) {
-      const card = chatEl("div", "variant-card is-loading");
-      card.setAttribute("aria-busy", "true");
-      card.append(
-        chatEl("div", "skeleton skeleton-label"),
-        chatEl("div", "skeleton skeleton-line"),
-        chatEl("div", "skeleton skeleton-line is-short")
-      );
-      wrap.append(card);
+  function cardRestore(card) {
+    const saved = cardContent.get(card);
+    if (!saved) return;
+    card.classList.remove("is-bare");
+    card.replaceChildren(...saved);
+    cardContent.delete(card);
+  }
+  var previewCount = document.getElementById("preview-count");
+  var previewKept = document.getElementById("preview-kept");
+  var preview = null;
+  var keptTimer = null;
+  var revertTimer = null;
+  function renderPreview() {
+    reviewButton.hidden = !!preview;
+    previewStrip.hidden = !preview;
+    if (!preview) {
+      clearTimeout(revertTimer);
+      workView.dispatch({ effects: setVariantFx.of(null) });
+      return;
     }
-    return wrap;
+    const { target, index, variants } = preview;
+    const original = index < 0;
+    previewCount.textContent = original ? "Original" : `${index + 1} of ${variants.length}`;
+    document.getElementById("preview-again").hidden = preview.instruction === null;
+    const text = original ? target.text : variants[index];
+    const against = original ? variants[preview.shown] : target.text;
+    if (!original) preview.shown = index;
+    workView.dispatch({
+      effects: [
+        setVariantFx.of({
+          from: target.from,
+          to: target.to,
+          lineFrom: workView.state.doc.lineAt(target.from).from,
+          reserve: preview.reserve,
+          text,
+          original: against,
+          reverting: original,
+          block: workView.state.doc.lineAt(target.from).number !== workView.state.doc.lineAt(target.to).number
+        }),
+        EditorView.scrollIntoView(target.from, { y: "center" })
+      ]
+    });
+    clearTimeout(revertTimer);
+    if (original) {
+      revertTimer = setTimeout(() => {
+        if (preview?.index === -1) workView.dispatch({ effects: setVariantFx.of(null) });
+      }, REVERT_MS);
+    }
   }
-  async function requestVariants(instruction) {
-    const range = attachedRange();
+  function showPreview(variants, instruction, target, card = null) {
+    hideKept();
+    preview = { variants, instruction, target, index: 0, shown: 0, card };
+    preview.reserve = reservedHeight(target, variants);
+    previewStrip.hidden = false;
+    if (card) cardShow(card, previewStrip);
+    else railAdd(previewStrip, () => preview?.target.from ?? null, document.querySelector(".chat-recipes"));
+    renderPreview();
+    document.getElementById("preview-next").focus();
+  }
+  function cancelPreview() {
+    if (!preview) return;
+    const { card } = preview;
+    preview = null;
+    railAnchors.delete(previewStrip);
+    previewStrip.style.top = "";
+    previewStrip.style.visibility = "";
+    document.querySelector(".chat-recipes").insertBefore(previewStrip, document.getElementById("review-status"));
+    if (card) cardRestore(card);
+    renderPreview();
+  }
+  function endPreview() {
+    if (!preview) return;
+    const { variants, index, target, card } = preview;
+    cancelPreview();
+    if (index < 0) return;
+    applyText(variants[index], target);
+    card?.remove();
+    showKept(variants[index], target);
+  }
+  function stepPreview(delta) {
+    if (!preview) return;
+    const stops = preview.variants.length + 1;
+    preview.index = (preview.index + 1 + delta + stops) % stops - 1;
+    renderPreview();
+  }
+  var KEPT_MS = 8e3;
+  function showKept(text, target) {
+    clearTimeout(keptTimer);
+    railAdd(previewKept, () => target.from, document.querySelector(".chat-recipes"));
+    previewKept.hidden = false;
+    previewKept.dataset.from = target.from;
+    previewKept.dataset.applied = text;
+    previewKept.dataset.previous = target.text;
+    previewKept.style.setProperty("--kept-ms", `${KEPT_MS}ms`);
+    previewKept.classList.remove("is-counting");
+    void previewKept.offsetWidth;
+    previewKept.classList.add("is-counting");
+    keptTimer = setTimeout(hideKept, KEPT_MS);
+  }
+  function hideKept() {
+    clearTimeout(keptTimer);
+    previewKept.hidden = true;
+    previewKept.classList.remove("is-counting");
+    railAnchors.delete(previewKept);
+    previewKept.style.top = "";
+    previewKept.style.visibility = "";
+    document.querySelector(".chat-recipes").insertBefore(previewKept, document.getElementById("review-status"));
+  }
+  document.getElementById("preview-undo").addEventListener("click", () => {
+    const from = Number(previewKept.dataset.from);
+    const { applied, previous } = previewKept.dataset;
+    hideKept();
+    if (workView.state.sliceDoc(from, from + applied.length) !== applied) {
+      chatAdd(chatEl("div", "chat-error", "That passage has changed since. Use the editor\u2019s undo instead."));
+      return;
+    }
+    workView.dispatch({ changes: { from, to: from + applied.length, insert: previous }, selection: { anchor: from + previous.length } });
+    workView.focus();
+    save();
+  });
+  document.getElementById("preview-prev").addEventListener("click", () => stepPreview(-1));
+  document.getElementById("preview-next").addEventListener("click", () => stepPreview(1));
+  document.getElementById("preview-again").addEventListener("click", () => {
+    if (!preview) return;
+    const { instruction, target, card } = preview;
+    cancelPreview();
+    if (!replacementTarget(workView.state.doc.toString(), target)) {
+      chatAdd(chatEl("div", "chat-error", "This answer is out of date. Select the passage again."));
+      return;
+    }
+    requestVariants(instruction, target, card);
+  });
+  previewStrip.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      stepPreview(-1);
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      stepPreview(1);
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      endPreview();
+      workView.focus();
+    }
+  });
+  async function requestVariants(instruction, existingTarget = null, card = null) {
+    const range = existingTarget ?? attachedRange();
+    const target = existingTarget ?? (range && { ...range, document: workView.state.doc.toString() });
     if (!range) {
       chatAdd(chatEl("div", "chat-error", "That passage is no longer attached \u2014 select it again."));
       return;
     }
     if (!await ensureAgent()) return;
-    const placeholder2 = chatAdd(skeletonCards());
+    if (!replacementTarget(workView.state.doc.toString(), target)) return;
+    cancelPreview();
+    if (card) cardShow(card, chatEl("div", "card-working", "Looking for options\u2026"));
     chatAbort?.abort();
-    chatAbort = new AbortController();
+    const job = startJob();
+    chatAbort = job;
     try {
       const res = await fetch("/rewrite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: chatAbort.signal,
         body: JSON.stringify({
-          document: workView.state.doc.toString(),
-          selected: range.text,
+          document: target.document,
+          selected: target.text,
           from: range.from,
           // exact span, so the server marks the right occurrence
           instruction,
@@ -17427,33 +19238,31 @@
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
-      const stick = chatAtBottom();
-      placeholder2.replaceWith(variantCards(data.variants, instruction));
-      chatScroll(stick);
+      if (!replacementTarget(workView.state.doc.toString(), target)) throw new Error("The draft changed while the rewrites were coming back. Select the passage again.");
+      showPreview(data.variants, instruction, target, card);
     } catch (error) {
-      if (error.name === "AbortError") {
-        placeholder2.remove();
-        return;
-      }
+      if (card) cardRestore(card);
+      if (error.name === "AbortError") return;
       console.error("[/rewrite]", error);
-      placeholder2.replaceWith(chatEl("div", "chat-error", error.message));
+      chatAdd(errorCard(modelError(error), () => requestVariants(instruction, target, card)));
+    } finally {
+      finishJob(job);
+      if (chatAbort === job) chatAbort = null;
     }
   }
   var findingCards = /* @__PURE__ */ new Map();
-  function openFinding(finding) {
+  function openFinding(finding, center = false) {
+    endPreview();
     const range = findingRange(finding.id);
     if (!range) return;
-    const structural = finding.code?.startsWith("level-");
-    const scope = structural ? paragraphAround(workView.state, range.from, range.to) : { ...range, text: workView.state.sliceDoc(range.from, range.to) };
-    attach(scope, finding, false);
-    workView.dispatch({ effects: EditorView.scrollIntoView(scope.from, { y: "center" }) });
-    if (structural) chatInput.placeholder = "Ask how to revise this part";
+    attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding, false);
+    if (center) workView.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: "center" }) });
     if (findingCards.get(finding.id)?.isConnected) {
       chatScroll(true);
       return;
     }
-    const instruction = structural ? `Rewrite this whole paragraph to fix ${finding.pattern}: ${finding.fix.replace(/\.?$/, ".")} You may reorder and rejoin its sentences. Keep every fact, the level of detail, and the author's voice; add no new claims.` : `Fix ${finding.pattern}: ${finding.fix.replace(/\.?$/, ".")} Preserve facts, voice, and specific details; add no new claims.`;
-    findingCards.set(finding.id, chatAdd(findingCard(finding, instruction)));
+    findingCards.set(finding.id, railAdd(findingCard(finding), () => findingRange(finding.id)?.from ?? null));
+    syncActiveCard();
   }
   async function chatSend() {
     const text = chatInput.value.trim();
@@ -17462,7 +19271,7 @@
     chatInput.value = "";
     chatResize();
     chatAdd(chatEl("div", "chat-message is-user", text));
-    if (attached && !activeFinding?.code?.startsWith("level-")) {
+    if (attached && !activeFinding) {
       requestVariants(text);
       return;
     }
@@ -17476,10 +19285,11 @@ Editing direction: ${activeFinding.fix}`,
       display: text
     } : { role: "user", content: text });
     saveChat();
-    const reply = chatAdd(chatEl("div", "chat-message is-agent"));
+    const reply = chatAdd(chatEl("div", "chat-message is-agent is-markdown"));
     reply.append(chatEl("span", "chat-caret"));
     chatAbort?.abort();
-    chatAbort = new AbortController();
+    const job = startJob();
+    chatAbort = job;
     let answer = "";
     try {
       const res = await fetch("/chat", {
@@ -17489,6 +19299,7 @@ Editing direction: ${activeFinding.fix}`,
         body: JSON.stringify({
           messages: chatHistory.map(({ role, content: content2 }) => ({ role, content: content2 })),
           document: workView.state.doc.toString(),
+          selection: attachedRange()?.text,
           agent: currentAgent()
         })
       });
@@ -17497,20 +19308,22 @@ Editing direction: ${activeFinding.fix}`,
         if (chunk.error) throw new Error(chunk.error);
         const stick = chatAtBottom();
         answer += chunk.text ?? "";
-        reply.textContent = answer;
+        reply.innerHTML = renderMarkdown(answer);
         chatScroll(stick);
       }
-      reply.classList.add("is-markdown");
-      reply.innerHTML = renderMarkdown(answer);
       chatHistory.push({ role: "assistant", content: answer });
       saveChat();
     } catch (error) {
       if (error.name === "AbortError") {
-        reply.remove();
+        reply.innerHTML = renderMarkdown(answer ? answer + "\n\n[Stopped \u2014 incomplete]" : "Stopped");
         return;
       }
       console.error("[/chat]", error);
-      reply.replaceWith(chatEl("div", "chat-error", error.message));
+      reply.title = error.message;
+      reply.innerHTML = renderMarkdown((answer ? answer + "\n\n" : "") + modelError(error).say);
+    } finally {
+      finishJob(job);
+      if (chatAbort === job) chatAbort = null;
     }
   }
   async function* sseChunks(res) {
@@ -17519,7 +19332,7 @@ Editing direction: ${activeFinding.fix}`,
     let buffer = "";
     while (true) {
       const { done, value } = await reader.read();
-      if (done) return;
+      if (done) throw new Error("Connection ended before the answer completed. Retry.");
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop();
@@ -17527,19 +19340,26 @@ Editing direction: ${activeFinding.fix}`,
         if (!line.startsWith("data: ")) continue;
         const payload = line.slice(6);
         if (payload === "[DONE]") return;
-        try {
-          yield JSON.parse(payload);
-        } catch {
-        }
+        yield JSON.parse(payload);
       }
     }
   }
   function chatResize() {
     chatInput.style.height = "auto";
     chatInput.style.height = `${Math.min(chatInput.scrollHeight, 160)}px`;
-    chatSendButton.disabled = !chatInput.value.trim();
+    syncSend();
+  }
+  function syncSend() {
+    const busy = [...jobs].some((job) => !job.background);
+    chatSendButton.classList.toggle("is-busy", busy);
+    chatSendButton.disabled = !busy && !chatInput.value.trim();
+    chatSendButton.setAttribute("aria-label", busy ? "Stop" : "Send");
   }
   chatSendButton.addEventListener("click", () => {
+    if ([...jobs].some((job) => !job.background)) {
+      stopJobs();
+      return;
+    }
     chatSend();
     chatInput.focus();
   });
@@ -17563,12 +19383,7 @@ Editing direction: ${activeFinding.fix}`,
     chatInput.focus();
   });
   chatClear.addEventListener("click", () => {
-    chatAbort?.abort();
-    chatStream.replaceChildren();
-    chatHistory = [];
-    localStorage.removeItem("wa-chat");
-    chatClear.hidden = true;
-    detach();
+    setChatOpen(chatStream.hidden);
     chatInput.focus();
   });
   document.addEventListener("keydown", (event) => {
@@ -17579,7 +19394,7 @@ Editing direction: ${activeFinding.fix}`,
       else chatInput.focus();
     }
   });
-  var isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  var isDark = currentTheme === "dark";
   var editorTheme = EditorView.theme({
     // Root element — fills the #editor-wrapper flex container
     "&": {
@@ -17613,7 +19428,7 @@ Editing direction: ${activeFinding.fix}`,
     },
     // Selection highlight
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
-      background: isDark ? "rgba(122, 160, 197, 0.25) !important" : "rgba(91, 127, 165, 0.2) !important"
+      background: "color-mix(in srgb, var(--accent) 22%, transparent) !important"
     },
     // ── Suggestion panel ───────────────────────────────────────────────────────
     //
@@ -17649,32 +19464,49 @@ Editing direction: ${activeFinding.fix}`,
       fontSize: "11px",
       letterSpacing: ".02em"
     },
-    // The attached passage. Survives losing focus, unlike a native selection.
+    // The attached passage. Survives losing focus, unlike a native selection —
+    // that is the only job this mark has for a plain selection, which carries
+    // no marking of its own.
     ".cm-attached": {
-      background: "color-mix(in srgb, var(--accent) 18%, transparent)",
+      background: "var(--attached-tint)",
       borderRadius: "3px",
-      boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent)"
+      boxShadow: "0 0 0 2px var(--attached-tint)"
     },
+    // A finding already marks its own span. Layering the selection tint over it
+    // read as the sentence being highlighted rather than a remark being opened —
+    // so here the decoration keeps tracking the live position (that is what lets
+    // an edit end the attachment) and gives up the look entirely.
+    ".cm-attached.cm-attached-finding": {
+      background: "transparent",
+      boxShadow: "none"
+    },
+    // A quiet band, not a spell-checker's wavy red. Findings run over whole
+    // clauses here, and a wave under three lines of prose reads as an error the
+    // writer must clear rather than a remark they may weigh.
     ".cm-slop": {
-      textDecorationLine: "underline",
-      textDecorationStyle: "wavy",
-      textDecorationColor: "var(--accent)",
-      textUnderlineOffset: "3px",
-      cursor: "pointer"
+      background: "var(--slop-tint)",
+      borderRadius: "2px",
+      boxShadow: "inset 0 -1px 0 var(--slop-line)",
+      cursor: "pointer",
+      transition: "background .12s ease"
     },
+    ".cm-slop:hover": { background: "var(--slop-tint-hover)" },
     // Slightly dim the content while /idea is streaming
     "&.streaming .cm-content": { opacity: "0.8" },
     // Placeholder text (shown when doc is empty)
+    // It carries the only instructions in the product now, so it has to be
+    // readable, not a watermark.
     ".cm-placeholder": {
       color: "var(--muted)",
-      opacity: "0.5"
+      opacity: "0.75",
+      lineHeight: "1.7"
     },
     // Hide gutters and fold markers — this is a prose editor
     ".cm-gutters": { display: "none" }
   }, { dark: isDark });
   var workView = new EditorView({
     state: EditorState.create({
-      doc: localStorage.getItem("wa-working") || "",
+      doc: "",
       extensions: [
         // Undo/redo
         history(),
@@ -17690,7 +19522,7 @@ Editing direction: ${activeFinding.fix}`,
             key: "Tab",
             run(view) {
               if (ghostAccept(view)) return true;
-              return true;
+              return false;
             }
           },
           {
@@ -17711,20 +19543,25 @@ Editing direction: ${activeFinding.fix}`,
           }
         ])),
         // Standard text-editing and history keymaps
-        keymap.of([...historyKeymap, ...defaultKeymap]),
+        keymap.of([...searchKeymap, ...historyKeymap, ...defaultKeymap]),
+        EditorView.contentAttributes.of({ "aria-label": "Draft editor" }),
         // Ghost text state + decoration provider
         ghostField,
         reviewField,
         attachField,
+        variantField,
         // Read-only compartment — toggled during /idea streaming
-        readonlyComp.of(EditorState.readOnly.of(false)),
+        readonlyComp.of(EditorState.readOnly.of(true)),
         // Word wrap (essential for prose)
         EditorView.lineWrapping,
         // Reserve the covered strip so CodeMirror scrolls the caret above the
         // panel instead of under it.
         EditorView.scrollMargins.of(() => ({ bottom: chatHeight })),
-        // Placeholder shown when document is empty
-        placeholder("Start writing..."),
+        // The empty draft is the only place an explanation is read: it is where
+        // the writer is already looking and the only moment nothing is at stake.
+        placeholder(
+          "Start writing, or open a file."
+        ),
         // Visual theme
         editorTheme,
         // Both gestures attach the passage to the composer instead of opening a
@@ -17738,6 +19575,11 @@ Editing direction: ${activeFinding.fix}`,
             openFinding(finding);
             return false;
           },
+          // Reaching for the text means the writer is done choosing.
+          mousedown() {
+            endPreview();
+            return false;
+          },
           contextmenu(event, view) {
             const sel = view.state.selection.main;
             if (sel.empty) return false;
@@ -17747,19 +19589,26 @@ Editing direction: ${activeFinding.fix}`,
           }
         }),
         // Save on every edit + schedule a suggestion
+        // Anything that moves the text moves the cards beside it.
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged || update.geometryChanged || update.viewportChanged) layoutRail();
+        }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
+            editVersion++;
+            setReviewStatus(reviewFindings.length ? "Review is out of date" : "");
             if (attached && update.state.field(attachField).size === 0) {
               queueMicrotask(() => {
                 chatAbort?.abort();
                 detach();
               });
             }
+            if (preview) queueMicrotask(cancelPreview);
             if (reviewFindings.length) {
               syncReviewLabel();
               saveFindings();
             }
-            save();
+            if (!loadingDocument) save();
             suggestSchedule();
             autoReviewSchedule();
             syncStyleScore();
@@ -17776,95 +19625,347 @@ Editing direction: ${activeFinding.fix}`,
       effects: EditorView.scrollIntoView(workView.state.selection.main.head, { y: "nearest" })
     });
   }).observe(chatPanel);
-  var diskTimer = null;
-  var diskText = null;
-  function saveToDisk() {
-    clearTimeout(diskTimer);
-    diskTimer = setTimeout(() => {
-      const text = workView.state.doc.toString();
-      fetch("/draft", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text })
-      }).then(() => {
-        diskText = text;
-      }).catch((error) => console.error("[/draft]", error.message));
-    }, 800);
+  function saveSnapshot(label) {
+    const snapshots = JSON.parse(docStorage.getItem("snapshots") || "[]");
+    snapshots.unshift({ text: workView.state.doc.toString(), at: (/* @__PURE__ */ new Date()).toISOString(), label });
+    docStorage.setItem("snapshots", JSON.stringify(snapshots.slice(0, 10)));
   }
-  function save() {
-    localStorage.setItem("wa-working", workView.state.doc.toString());
-    saveToDisk();
+  function exportText(text, name2 = "draft.md") {
+    const url = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name2;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1e3);
+  }
+  function dialog(title) {
+    const trigger = document.activeElement;
+    const modal = chatEl("dialog", "settings-dialog document-dialog");
+    const heading2 = chatEl("h2", "", title);
+    heading2.id = "document-dialog-" + crypto.randomUUID();
+    modal.setAttribute("aria-labelledby", heading2.id);
+    const close = chatEl("button", "dialog-close", "\xD7");
+    close.setAttribute("aria-label", "Close");
+    close.addEventListener("click", () => modal.close());
+    const head = chatEl("header", "");
+    head.append(heading2, close);
+    modal.append(head);
+    document.body.append(modal);
+    modal.addEventListener("close", () => {
+      modal.remove();
+      if (trigger?.isConnected) trigger.focus();
+    });
+    modal.showModal();
+    return modal;
   }
   function loadFromDisk(text) {
+    loadingDocument = true;
+    for (const job of jobs) job.abort();
+    suggestAbort?.abort();
+    saveSnapshot("Before replacing document");
+    detach();
     workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: text } });
     clearReview();
+    chatHistory = [];
+    chatStream.replaceChildren();
+    findingCards.clear();
+    docStorage.removeItem("wa-chat");
+    docStorage.removeItem("dismissed");
+    loadingDocument = false;
   }
-  var driftAtStartup = null;
-  api("/draft").then(({ text }) => {
-    diskText = text;
-    if (!localStorage.getItem("wa-working")) {
-      if (text) loadFromDisk(text);
+  function saveToDisk() {
+    clearTimeout(diskTimer);
+    if (savePaused || loadingDocument) return;
+    saveStatus.textContent = "Unsaved changes";
+    diskTimer = setTimeout(flushSave, 800);
+  }
+  async function flushSave() {
+    if (saving || savePaused || loadingDocument) return;
+    const text = workView.state.doc.toString();
+    if (text === diskText && diskRevision !== "missing") {
+      saveStatus.textContent = "Saved";
       return;
     }
-    if (text && text !== workView.state.doc.toString()) driftAtStartup = text;
-    else saveToDisk();
-  }).catch((error) => console.error("[/draft]", error.message)).finally(() => {
-    restoreFindings();
-    restoreChat();
-    if (driftAtStartup) promptDiskDrift(driftAtStartup);
-  });
-  var diskPrompt = null;
-  function promptDiskDrift(text) {
-    const note = chatEl("div", "chat-card");
-    const load = chatEl("button", "chat-again", "Load from disk");
-    load.type = "button";
-    load.addEventListener("click", () => {
-      loadFromDisk(text);
-      save();
-      note.remove();
-    });
-    note.append(
-      chatEl("strong", "", "draft.md changed outside Litura"),
-      chatEl("span", "", "Loading it replaces the draft in this window; keeping this draft overwrites the file on your next edit."),
-      load
-    );
-    diskPrompt = chatAdd(note);
-  }
-  async function checkDiskDrift() {
-    if (diskPrompt?.isConnected) return;
+    saving = true;
+    saveStatus.textContent = "Saving\u2026";
     try {
-      const { text } = await api("/draft");
-      if (text === diskText || text === workView.state.doc.toString()) return;
+      const response = await fetch("/draft", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, revision: diskRevision })
+      });
+      const data = await response.json();
+      if (response.status === 409) {
+        promptDiskDrift(data.current);
+        return;
+      }
+      if (!response.ok) throw new Error(data.error || "Save failed");
       diskText = text;
-      promptDiskDrift(text);
+      diskRevision = data.revision;
+      saveStatus.textContent = "Saved";
     } catch (error) {
-      console.error("[/draft]", error.message);
+      savePaused = true;
+      saveStatus.textContent = "Not saved: " + error.message + " \u2014 use Export or retry";
+      const retry = chatEl("button", "chat-again", "Retry saving");
+      retry.addEventListener("click", () => {
+        retry.remove();
+        savePaused = false;
+        saveToDisk();
+      });
+      chatAdd(retry);
+    } finally {
+      saving = false;
+      if (!savePaused && workView.state.doc.toString() !== diskText) saveToDisk();
+    }
+  }
+  function save() {
+    docStorage.setItem("wa-working", workView.state.doc.toString());
+    saveToDisk();
+  }
+  var diskPrompt = null;
+  function promptDiskDrift(current) {
+    savePaused = true;
+    clearTimeout(diskTimer);
+    saveStatus.textContent = "Conflict \u2014 autosave paused";
+    diskPrompt?.close();
+    const modal = dialog("Two versions of this document");
+    diskPrompt = modal;
+    modal.append(chatEl("p", "", "Autosave is paused. Both copies remain available until you choose. A disk backup is kept before overwriting."));
+    const compare2 = document.createElement("details");
+    compare2.append(
+      chatEl("summary", "", "Compare browser and disk"),
+      chatEl("h3", "", "Browser"),
+      chatEl("pre", "passage-preview", workView.state.doc.toString()),
+      chatEl("h3", "", "Disk"),
+      chatEl("pre", "passage-preview", current.text)
+    );
+    modal.append(compare2);
+    const load = chatEl("button", "", "Use disk copy");
+    load.addEventListener("click", () => {
+      loadFromDisk(current.text);
+      diskText = current.text;
+      diskRevision = current.revision;
+      savePaused = false;
+      save();
+      modal.close();
+    });
+    const keep = chatEl("button", "", "Keep browser copy");
+    keep.addEventListener("click", () => {
+      saveSnapshot("Browser copy at conflict");
+      diskText = current.text;
+      diskRevision = current.revision;
+      savePaused = false;
+      save();
+      modal.close();
+    });
+    const both = chatEl("button", "", "Export browser copy");
+    both.addEventListener("click", () => exportText(workView.state.doc.toString(), "recovered-browser-draft.md"));
+    modal.append(load, keep, both);
+    const reopen = chatEl("button", "chat-again", "Resolve file conflict");
+    reopen.addEventListener("click", async () => {
+      try {
+        promptDiskDrift(await api("/draft"));
+        reopen.remove();
+      } catch (error) {
+        saveStatus.textContent = error.message;
+      }
+    });
+    chatAdd(reopen);
+  }
+  async function initializeDocument() {
+    try {
+      const current = await api("/draft");
+      documentKey = "litura:" + current.id + ":";
+      document.getElementById("document-name").textContent = current.path.split(/[\\/]/).pop();
+      document.getElementById("document-name").title = current.path;
+      diskText = current.text;
+      diskRevision = current.revision;
+      const cached = docStorage.getItem("wa-working");
+      workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: cached ?? current.text } });
+      loadingDocument = false;
+      editorSetReadonly(workView, false);
+      for (const paragraph of reviewParagraphs(workView.state.doc.toString())) checkedSentences.add(paragraph.key);
+      syncReviewLabel();
+      savePaused = false;
+      restoreFindings();
+      restoreChat();
+      if (cached !== null && cached !== current.text) promptDiskDrift(current);
+      else saveStatus.textContent = "Saved";
+      const legacy = localStorage.getItem("wa-working");
+      if (legacy !== null && legacy !== current.text && !docStorage.getItem("legacy-offered")) {
+        const recover = chatEl("button", "chat-again", "Export draft from the previous Litura version");
+        recover.addEventListener("click", () => {
+          exportText(legacy, "legacy-draft.md");
+          docStorage.setItem("legacy-offered", "yes");
+          recover.remove();
+        });
+        chatAdd(recover);
+      }
+    } catch (error) {
+      saveStatus.textContent = "Cannot open draft: " + error.message;
+      const retry = chatEl("button", "chat-again", "Retry opening document");
+      retry.addEventListener("click", () => {
+        retry.remove();
+        initializeDocument();
+      });
+      chatAdd(retry);
+    }
+  }
+  initializeDocument();
+  async function checkDiskDrift() {
+    if (loadingDocument || saving || diskPrompt?.open) return;
+    try {
+      const current = await api("/draft");
+      if (current.revision !== diskRevision) promptDiskDrift(current);
+    } catch (error) {
+      saveStatus.textContent = "Cannot check disk: " + error.message;
     }
   }
   window.addEventListener("focus", checkDiskDrift);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) checkDiskDrift();
+    if (!document.hidden) {
+      checkDiskDrift();
+      refreshUpdate();
+    }
+  });
+  window.addEventListener("beforeunload", (event) => {
+    if (!loadingDocument && (saving || workView.state.doc.toString() !== diskText)) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
+  document.getElementById("file-new").addEventListener("click", () => {
+    if (workView.state.doc.length) {
+      loadFromDisk("");
+      save();
+    }
+    workView.focus();
+  });
+  document.getElementById("file-export").addEventListener("click", () => {
+    const modal = dialog("Save as new file");
+    const form = chatEl("form", "save-as-form");
+    const label = chatEl("label", "", "File name");
+    const input = document.createElement("input");
+    input.required = true;
+    input.value = document.getElementById("document-name").textContent;
+    label.append(input);
+    const actions = chatEl("div", "save-as-actions");
+    const cancel = chatEl("button", "", "Cancel");
+    cancel.type = "button";
+    cancel.addEventListener("click", () => modal.close());
+    const submit = chatEl("button", "", "Save");
+    submit.type = "submit";
+    actions.append(cancel, submit);
+    form.append(label, actions);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const name2 = input.value.trim();
+      exportText(workView.state.doc.toString(), /\.[a-z0-9]+$/i.test(name2) ? name2 : `${name2}.md`);
+      modal.close();
+    });
+    modal.append(form);
+    input.focus();
+    input.select();
   });
   document.addEventListener("keydown", (event) => {
     if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "s") return;
     event.preventDefault();
-    const url = URL.createObjectURL(new Blob([workView.state.doc.toString()], { type: "text/markdown" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "draft.md";
-    link.click();
-    URL.revokeObjectURL(url);
+    clearTimeout(diskTimer);
+    flushSave();
+  });
+  async function importFile(file) {
+    if (!file || loadingDocument) return;
+    if (file.size > 1024 * 1024 || !/\.(md|markdown|txt)$/i.test(file.name)) {
+      alert("Open a Markdown or text file under 1 MB.");
+      return;
+    }
+    try {
+      const text = await file.text();
+      if (!confirm(`Import ${file.name} into this workspace draft? The current text will be kept in History.`)) return;
+      loadFromDisk(text);
+      save();
+    } catch (error) {
+      saveStatus.textContent = "Import failed: " + error.message;
+    }
+  }
+  var documentMenu = document.getElementById("document-menu");
+  var documentMenuButton = document.getElementById("document-menu-button");
+  documentMenuButton.addEventListener("click", () => {
+    const box = documentMenuButton.getBoundingClientRect();
+    documentMenu.style.left = `${box.left}px`;
+    documentMenu.style.top = `${box.bottom + 6}px`;
+  });
+  documentMenu.addEventListener("click", (event) => {
+    if (event.target.closest("button")) documentMenu.hidePopover();
+  });
+  var fileInput = document.getElementById("file-input");
+  document.getElementById("file-open").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    importFile(fileInput.files[0]);
+    fileInput.value = "";
   });
   editorWrap.addEventListener("dragover", (event) => event.preventDefault());
-  editorWrap.addEventListener("drop", async (event) => {
-    const file = event.dataTransfer?.files?.[0];
-    if (!file) return;
+  editorWrap.addEventListener("drop", (event) => {
     event.preventDefault();
-    const text = await file.text();
-    if (workView.state.doc.length && !confirm(`Replace the current draft with ${file.name}?`)) return;
-    loadFromDisk(text);
-    save();
+    importFile(event.dataTransfer?.files?.[0]);
   });
+  document.getElementById("file-history").addEventListener("click", async () => {
+    const modal = dialog("Document history");
+    const current = workView.state.doc.toString();
+    const list = chatEl("div", "history-list");
+    modal.append(list);
+    try {
+      const { snapshots } = await api("/draft/history");
+      const local = JSON.parse(docStorage.getItem("snapshots") || "[]");
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key.startsWith(documentKey + "wa-working:") && !key.endsWith(":" + tabId)) {
+          const text = localStorage.getItem(key);
+          if (text !== current) local.push({ text, at: (/* @__PURE__ */ new Date()).toISOString(), label: "Copy from another tab" });
+        }
+      }
+      const versions = [...local, ...snapshots].sort((a, b) => b.at.localeCompare(a.at));
+      for (const item of versions) {
+        const row = chatEl("div", "history-item");
+        const words = item.text.match(/\S+/g)?.length ?? 0;
+        row.append(chatEl(
+          "div",
+          "history-when",
+          `${new Date(item.at).toLocaleString()} \xB7 ${item.label || "Saved to disk"} \xB7 ${words} ${words === 1 ? "word" : "words"}`
+        ));
+        row.append(chatEl(
+          "div",
+          "history-excerpt",
+          item.text.trim().replace(/\s+/g, " ").slice(0, 120) || "Empty document"
+        ));
+        if (item.text === current) {
+          row.append(chatEl("div", "history-current", "Same as the text you have now"));
+        } else {
+          const full = document.createElement("details");
+          full.append(chatEl("summary", "", "Full text"), chatEl("pre", "passage-preview", item.text));
+          const restore = chatEl("button", "", "Restore");
+          restore.addEventListener("click", () => {
+            if (confirm("Restore this version? The current text is kept in History.")) {
+              loadFromDisk(item.text);
+              save();
+              modal.close();
+            }
+          });
+          row.append(full, restore);
+        }
+        list.append(row);
+      }
+      if (!versions.length) list.append(chatEl("p", "", "No previous versions yet. One is kept before every save, import, and AI replacement."));
+      modal.append(chatEl(
+        "small",
+        "history-note",
+        "Last 20 disk versions and 10 browser checkpoints. Disk copies sit beside the draft in .litura-history and are never deleted automatically."
+      ));
+    } catch (error) {
+      list.append(chatEl("p", "chat-error", error.message));
+    }
+  });
+  workView.scrollDOM.addEventListener("scroll", layoutRail, { passive: true });
   workView.focus();
   syncStyleScore();
 })();
