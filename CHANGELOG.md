@@ -5,6 +5,10 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.3.5 — 2026-09-07
+
+- Refreshed the README preview with natural generic-writing highlights and meaningful rewrite options in a full-screen review flow.
+
 ## 0.3.4 — 2026-09-07
 
 - Refreshed the README preview with a full-screen Litura review flow and three rewrite options.
