@@ -18566,10 +18566,21 @@
     updateBadge.hidden = !stale;
     if (stale) {
       updateBadge.textContent = `${latest} available`;
-      updateBadge.title = `Running ${current}. Restart with npx to pick it up; a global install needs npm i -g.`;
+      updateBadge.title = "Copy npx litura-app to update";
     }
     updateStatus.textContent = error ? `Running ${current} \u2014 npm could not be reached.` : stale ? `Running ${current}; npm publishes ${latest}.` : latest ? `Running ${current} \u2014 the published version.` : `Running ${current}.`;
   }
+  updateBadge.addEventListener("click", async () => {
+    if (updateBadge.hidden) return;
+    const command2 = "npx litura-app";
+    try {
+      await navigator.clipboard.writeText(command2);
+      updateBadge.textContent = `Copied: ${command2}`;
+    } catch {
+      updateBadge.textContent = `Run: ${command2}`;
+    }
+    updateBadge.title = command2;
+  });
   async function refreshUpdate({ force = false } = {}) {
     let cached = null;
     try {

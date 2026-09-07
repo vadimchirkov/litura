@@ -806,7 +806,7 @@ function renderUpdate({ current, latest, error }) {
   updateBadge.hidden = !stale;
   if (stale) {
     updateBadge.textContent = `${latest} available`;
-    updateBadge.title = `Running ${current}. Restart with npx to pick it up; a global install needs npm i -g.`;
+    updateBadge.title = 'Copy npx litura-app to update';
   }
   updateStatus.textContent =
     error  ? `Running ${current} — npm could not be reached.` :
@@ -814,6 +814,18 @@ function renderUpdate({ current, latest, error }) {
     latest ? `Running ${current} — the published version.` :
              `Running ${current}.`;
 }
+
+updateBadge.addEventListener('click', async () => {
+  if (updateBadge.hidden) return;
+  const command = 'npx litura-app';
+  try {
+    await navigator.clipboard.writeText(command);
+    updateBadge.textContent = `Copied: ${command}`;
+  } catch {
+    updateBadge.textContent = `Run: ${command}`;
+  }
+  updateBadge.title = command;
+});
 
 async function refreshUpdate({ force = false } = {}) {
   let cached = null;

@@ -5,6 +5,10 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.3.1 — 2026-09-07
+
+- The update badge now copies `npx litura-app` instead of opening a changelog, so the next update command is ready to paste.
+
 ## 0.3.0 — 2026-09-07
 
 - Review remarks stay beside the passage they describe without shifting the draft when opened or clicked.
