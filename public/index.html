@@ -33,21 +33,23 @@
           <button type="button" id="file-history">History</button>
         </div>
         <span id="save-status" role="status"></span>
-        <button type="button" class="style-score" id="style-score" hidden title="Local slop score">
-          <span class="style-score-label">Slop Score</span>
-          <span id="style-score-value"></span>
-        </button>
         <!-- Only shown when a newer version exists. Clicking it copies the
              update command; the running process is never replaced in place. -->
         <button type="button" class="update-badge" id="update-badge" hidden></button>
-        <button class="settings-open" id="settings-open" title="Model and access" aria-label="Model and access">
-          <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <path d="M3 5h14M3 10h14M3 15h14"/>
-            <circle cx="7" cy="5" r="1.5" fill="var(--surface)"/>
-            <circle cx="13" cy="10" r="1.5" fill="var(--surface)"/>
-            <circle cx="9" cy="15" r="1.5" fill="var(--surface)"/>
-          </svg>
-        </button>
+        <div class="header-actions">
+          <button type="button" class="style-score" id="style-score" hidden title="Local slop score">
+            <span class="style-score-label">Slop Score</span>
+            <span id="style-score-value"></span>
+          </button>
+          <button class="settings-open" id="settings-open" title="Model and access" aria-label="Model and access">
+            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M3 5h14M3 10h14M3 15h14"/>
+              <circle cx="7" cy="5" r="1.5" fill="var(--surface)"/>
+              <circle cx="13" cy="10" r="1.5" fill="var(--surface)"/>
+              <circle cx="9" cy="15" r="1.5" fill="var(--surface)"/>
+            </svg>
+          </button>
+        </div>
       </div>
       <div id="editor-wrapper"></div>
       <!-- Remarks about a place in the text stand next to that place. Below

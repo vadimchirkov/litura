@@ -5,6 +5,10 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.3.2 — 2026-09-07
+
+- Moved the Slop Score next to the settings control in the editor header.
+
 ## 0.3.1 — 2026-09-07
 
 - The update badge now copies `npx litura-app` instead of opening a changelog, so the next update command is ready to paste.
