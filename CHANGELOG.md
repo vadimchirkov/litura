@@ -5,6 +5,10 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.3.6 — 2026-09-07
+
+- Published the latest editor interface and behavior updates together with the product audit and local draft history.
+
 ## 0.3.5 — 2026-09-07
 
 - Refreshed the README preview with natural generic-writing highlights and meaningful rewrite options in a full-screen review flow.
