@@ -68,7 +68,7 @@
 /* Review actions live in the assistant panel. The status line is the last
    item and takes the leftover width, truncating rather than wrapping. */
 .chat-recipes { display: flex; align-items: center; gap: 8px; padding: 0 4px 8px; }
-.chat-recipes:not(:has(> #chat-preview:not([hidden]), > #ai-stop:not([hidden]), > #review-status:not(:empty))) { display: none; }
+.chat-recipes:not(:has(> #review-status:not(:empty))) { display: none; }
 .recipe {
   padding: 5px 12px;
   border: 1px solid var(--border);
@@ -84,8 +84,6 @@
 .recipe:hover { background: var(--surface-3); }
 .recipe.has-findings { color: var(--accent); border-color: var(--accent); }
 .recipe.is-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; padding: 5px 6px; text-align: center; }
-.preview-step { display: inline-flex; align-items: center; gap: 6px; }
-.preview-hint { display: none; }
 #review-status { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 12px; }
 
 #document-menu-button, .document-dialog button {
@@ -396,36 +394,7 @@ html, body {
 
 #rail .chat-offer { margin-top: 7px; padding: 3px 10px; font-size: 12px; }
 
-/* A card is a box while it is a remark. What comes after — waiting for
-   options, stepping through them, the way back — is passing state, and a
-   bordered panel around a status line or one button is more furniture than
-   the moment deserves. The card keeps its place in the rail and gives up its
-   walls. */
-.chat-card.is-bare {
-  padding: 0;
-  border: 0;
-  background: none;
-}
 .card-working { color: var(--muted); font-size: 13px; }
-
-/* Bare too: the controls are the interface, nothing needs to hold them. */
-#rail #chat-preview {
-  position: relative;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-/* Asking for three more is a corner action, not a step in the ring: it sits
-   out of the reading order, at the end of the row the stepper starts. */
-#rail #preview-again {
-  margin-left: auto;
-  border: 0;
-  background: none;
-  color: var(--muted);
-}
-#rail #preview-again:hover { color: var(--text); background: none; }
-#rail .preview-hint { display: block; flex: 1 0 100%; color: var(--muted); font-size: 11px; }
 
 .pane-header {
   position: relative;
@@ -685,6 +654,20 @@ html, body {
 }
 .chat-again:hover { background: var(--surface-2); color: var(--text); }
 .chat-error .chat-again { margin-left: auto; align-self: center; }
+
+/* Icon-only retry under the options: a quiet refresh mark, not a second pill
+   shouting next to the cards. Text retries elsewhere keep the pill. */
+.chat-again.is-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 5px 6px;
+  color: var(--muted);
+}
+.chat-again.is-icon:hover { color: var(--text); }
+.chat-again.is-icon svg { display: block; }
 
 /* Rendered reply: block spacing comes from the tags, not from pre-wrap */
 .chat-message.is-markdown { white-space: normal; }
@@ -957,90 +940,176 @@ html, body {
    its content, so the reserved space is measured, not guessed. */
 #editor-wrapper .cm-content { padding-bottom: var(--chat-height, 140px); }
 
-/* ── Rewrite preview ──────────────────────────────────── */
-/* The proposal is a clean sheet laid over the draft: the same white the chat
-   cards use, not another accent. Colour in here belongs to the edit itself —
-   what was added and what was cut — and a blue wash underneath drowns both. */
-.cm-variant {
+/* ── Rewrite variants (0.2 cards, tightened) ────────────────────────── */
+/* A hover/focus preview is a clean sheet laid over the draft: the same white
+   the chat cards use, not another accent — and deliberately no red/green.
+   NOTE: the coloured word-diff (cm-variant-old/new + wordDiff) is kept in the
+   tree as a noted option for another place (e.g. history compare); it is not
+   used on this path. */
+.cm-variant-plain {
   background: var(--overlay);
   box-shadow: 0 0 0 2px var(--overlay);
   border-bottom: 1px solid var(--border-strong);
+  border-radius: 2px;
   white-space: pre-wrap;
 }
 
-/* What this option changes stays on the line — struck words stay struck, added
-   words stay added. Only the colour is temporary: it walks through the edit in
-   reading order, holds for a couple of seconds, and leaves the same way, so
-   the sentence ends up readable as a sentence instead of as a coloured diff.
-   Nothing here animates size: the line's reserved height is measured against
-   this, and a highlight that moved the text would make that measurement a
-   lie. */
-.cm-variant-new {
-  border-radius: var(--r-xs);
-  text-decoration: none;
-  animation: word-add 2.6s var(--ease) both;
-}
-
-.cm-variant-old {
-  border-radius: var(--r-xs);
-  text-decoration: line-through;
-  text-decoration-thickness: 1px;
-  animation: word-cut 2.6s var(--ease) both;
-}
-
-@keyframes word-add {
-  0%        { background: transparent; }
-  10%, 65%  { background: var(--added-tint); }
-  100%      { background: transparent; }
-}
-
-@keyframes word-cut {
-  0%        { background: transparent; color: inherit; }
-  10%, 65%  { background: var(--removed-tint); color: var(--danger); }
-  100%      { background: transparent; color: var(--muted); }
-}
-
-/* The cut word and the word taking its place are adjacent in the edit script
-   — the space between them belongs to neither, so it has to be drawn. */
-.cm-variant-old + .cm-variant-new { margin-left: .28em; }
-
-/* Stepping back to the writer's wording: the option's words are the ones
-   struck, and the words coming back are the writer's own — nothing lights up
-   for them, they were never a proposal. */
-.is-reverting .cm-variant-new { animation: none; background: transparent; }
-
-/* The controls belong to the row above the composer, not to a box of their
-   own — display:contents lets them sit in that flex row directly. */
-.preview-controls { display: contents; }
-#preview-count { color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
-#rail #preview-kept .recipe { box-shadow: var(--shadow-sm); }
-/* The same card the options sat in, holding the way back instead: the box
-   stays put, only what is inside it changes. The bar drains over the same
-   window Undo is good for, so the writer sees the time running out rather
-   than guessing when the offer expires. */
-/* One button, no panel around it. The countdown lives in the button itself:
-   the control is the timer, so there is nothing to draw but the control. */
-#rail #preview-kept { display: flex; }
-#rail #preview-undo { position: relative; overflow: hidden; }
-/* Gated behind a class, not the bare selector: JS restarts the drain by
-   toggling it off and on across a reflow, which a plain animation on the
-   selector itself would not replay. */
-#rail #preview-kept.is-counting #preview-undo::after {
-  content: '';
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 2px;
-  background: var(--muted);
-  transform-origin: left;
-  animation: kept-countdown linear forwards;
-  animation-duration: var(--kept-ms, 8000ms);
-}
-@keyframes kept-countdown {
-  from { transform: scaleX(1); }
-  to   { transform: scaleX(0); }
-}
-/* A pressed toggle has to look pressed wherever the strip is living. */
+/* A pressed toggle has to look pressed wherever it lives. */
 .recipe[aria-pressed="true"] { background: var(--surface-3); border-color: var(--border-strong); }
+
+/* Stack of options under a finding card (or in the stream for a selection).
+   One quiet column: the option owns the card, the score is metadata. */
+.chat-variants {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* An option reads as a small card, not as running chat text: a firm header
+   row (Option N + score delta), then the prose itself. The whole card is the
+   button — hover previews it in place, click keeps it. */
+.variant-card {
+  padding: 10px 14px 11px;
+  border-radius: var(--r-field);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--border-strong);
+  background: var(--overlay);
+  cursor: pointer;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transition: border-color .12s ease, background .12s ease, box-shadow .12s ease, translate .12s var(--ease);
+  animation: chat-in .2s var(--ease);
+}
+
+.variant-card:hover,
+.variant-card:focus-visible {
+  background: var(--surface-2);
+  border-left-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+  outline: none;
+}
+
+.variant-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.variant-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-family: var(--ui-font);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+/* Draft score if you pick this variant. Informational — never fed to the model. */
+.variant-delta {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.variant-delta.is-better { color: var(--ok); }
+.variant-delta.is-worse { color: var(--danger); }
+
+.variant-text { color: var(--text); }
+
+.variant-card.is-loading { cursor: default; border-left-color: var(--border-subtle); }
+.variant-card.is-loading:hover { background: var(--overlay); box-shadow: none; }
+
+/* Once one option is applied the others point at a range that is gone. Stop
+   advertising a click that would silently do nothing. */
+.chat-variants.is-spent .variant-card { cursor: default; opacity: .45; }
+.chat-variants.is-spent .variant-card:hover,
+.chat-variants.is-spent .variant-card:focus-visible {
+  background: var(--overlay);
+  border-left-color: var(--border-subtle);
+  box-shadow: none;
+}
+
+.chat-variants.is-spent .variant-card.is-applied {
+  opacity: 1;
+  border-left-color: var(--accent);
+}
+
+.variant-card.is-applied .variant-label::after {
+  content: 'applied';
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+/* Footer: hint left (what hover/click do), Try again right. Quiet by design —
+   three disliked options are a dead end without the button, but the button
+   must not shout louder than the options. */
+.variant-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.variant-hint {
+  color: var(--muted);
+  font-family: var(--ui-font);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.chat-variants > .variant-hint { padding: 0 2px; }
+
+/* The way back on the kept card: one quiet Undo with no timer, sitting under
+   the applied text. It stays good until the passage changes under it. */
+.variant-undo-row { display: flex; margin-top: 8px; }
+.variant-undo-row .chat-again { align-self: flex-start; }
+
+/* Rail: same cards, tighter — they are margin notes, not the conversation. */
+#rail .chat-variants { gap: 6px; }
+#rail .variant-card { padding: 9px 12px 10px; font-size: 13px; }
+#rail .variant-hint { font-size: 11px; }
+
+/* Loading skeletons: same shape as the cards coming, so nothing jumps. */
+.skeleton {
+  border-radius: var(--r-xs);
+  background: linear-gradient(90deg, var(--surface-3) 25%, var(--surface-2) 37%, var(--surface-3) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-sheen 1.4s ease-in-out infinite;
+}
+
+.skeleton-label {
+  width: 72px;
+  height: 10px;
+  margin-bottom: 8px;
+}
+
+.skeleton-line {
+  height: 12px;
+  margin-top: 7px;
+}
+
+.skeleton-line.is-short { width: 62%; }
+
+@keyframes skeleton-sheen {
+  from { background-position: 100% 50%; }
+  to { background-position: 0 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+  .variant-card { animation: none; transition: none; }
+}
 
 .error-msg {
   padding: 12px 14px;

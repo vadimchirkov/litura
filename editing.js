@@ -18,6 +18,10 @@ export function newerVersion(latest, current) {
 // reading order, so the change can be shown one word at a time instead of as
 // one opaque block. Spaces the rewrite did not touch stay untouched.
 //
+// NOTE: kept as a noted option for another place (e.g. history compare or a
+// future coloured diff). Rewrite variants currently preview on a plain white
+// sheet with no red/green — this helper is not on that path right now.
+//
 // ponytail: plain LCS table, O(words²) — a sentence or a paragraph, not a
 // book. Past the guard it falls back to a single changed run, which is what
 // the coarse version always did.

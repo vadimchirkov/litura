@@ -16866,42 +16866,6 @@
     for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
     return false;
   }
-  function wordDiff(before, after) {
-    const a = before.match(/\s+|\S+/g) ?? [], b = after.match(/\s+|\S+/g) ?? [];
-    if (a.length * b.length > 4e4) return coarseDiff(a, b);
-    const lcs = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
-    for (let i2 = a.length - 1; i2 >= 0; i2--) {
-      for (let j2 = b.length - 1; j2 >= 0; j2--) {
-        lcs[i2][j2] = a[i2] === b[j2] ? lcs[i2 + 1][j2 + 1] + 1 : Math.max(lcs[i2 + 1][j2], lcs[i2][j2 + 1]);
-      }
-    }
-    const ops = [];
-    const push = (type, text) => {
-      const last = ops[ops.length - 1];
-      if (last && last.type === type) last.text += text;
-      else ops.push({ type, text });
-    };
-    let i = 0, j = 0;
-    while (i < a.length && j < b.length) {
-      if (a[i] === b[j]) push("keep", a[i++]), j++;
-      else if (lcs[i + 1][j] >= lcs[i][j + 1]) push("del", a[i++]);
-      else push("ins", b[j++]);
-    }
-    while (i < a.length) push("del", a[i++]);
-    while (j < b.length) push("ins", b[j++]);
-    return ops;
-  }
-  function coarseDiff(a, b) {
-    let start = 0, end = 0;
-    while (start < a.length && start < b.length && a[start] === b[start]) start++;
-    while (end < a.length - start && end < b.length - start && a[a.length - end - 1] === b[b.length - end - 1]) end++;
-    return [
-      { type: "keep", text: a.slice(0, start).join("") },
-      { type: "del", text: a.slice(start, a.length - end).join("") },
-      { type: "ins", text: b.slice(start, b.length - end).join("") },
-      { type: "keep", text: end ? a.slice(-end).join("") : "" }
-    ].filter((op) => op.text);
-  }
 
   // node_modules/@codemirror/search/dist/index.js
   var basicNormalize = typeof String.prototype.normalize == "function" ? (x) => x.normalize("NFKD") : (x) => x;
@@ -18436,9 +18400,8 @@
       event.preventDefault();
       jumpToNextFinding(event.shiftKey ? -1 : 1);
     }
-    if (event.key === "Escape" && preview) {
-      preview.index = -1;
-      endPreview();
+    if (event.key === "Escape" && plainPreview) {
+      clearPlainPreview();
       workView.focus();
     }
   });
@@ -18448,10 +18411,16 @@
     if (finding) dismissed.push({ code: finding.code, quote: finding.quote, document: workView.state.doc.toString() });
     docStorage.setItem("dismissed", JSON.stringify(dismissed.slice(-100)));
     reviewFindings = reviewFindings.filter((finding2) => finding2.id !== id);
-    findingCards.get(id)?.remove();
+    const card = findingCards.get(id);
+    if (card) {
+      railAnchors.delete(card);
+      railHomes.delete(card);
+      card.remove();
+    }
     findingCards.delete(id);
     workView.dispatch({ effects: dropReviewFx.of(id) });
     if (activeFinding?.id === id) detach();
+    else clearPlainPreview();
     saveFindings();
     syncReviewLabel();
   }
@@ -18468,8 +18437,9 @@
     if (saved.document === workView.state.doc.toString() && saved.findings?.length && mergeFindings(saved.findings)) syncReviewLabel();
   }
   function clearReview() {
-    for (const card of findingCards.values()) card.remove();
-    findingCards.clear();
+    discardFindingCards();
+    for (const stale of document.querySelectorAll(".chat-variants")) stale.remove();
+    clearPlainPreview();
     reviewFindings = [];
     checkedSentences.clear();
     workView.dispatch({ effects: setReviewFx.of([]) });
@@ -18774,7 +18744,7 @@
       }
       if (!answer.trim()) throw new Error("The model returned no passage");
       bubble.remove();
-      showPreview([answer], null, target);
+      showVariants([answer], null, target, null);
     } catch (error) {
       bubble.title = error.message;
       bubble.textContent = (answer ? answer + "\n\n" : "") + (job.signal.aborted ? "Stopped. " : `${modelError(error).say} `) + "The original idea is unchanged.";
@@ -18846,7 +18816,7 @@
   }
   function placeHome(node) {
     const home = railHomes.get(node) ?? chatStream;
-    if (home === chatStream) chatAdd(node);
+    if (home === chatStream) streamAppend(node);
     else home.insertBefore(node, document.getElementById("review-status"));
   }
   function railAdd(node, anchor, home = chatStream) {
@@ -18884,16 +18854,32 @@
     chatClear.setAttribute("aria-label", open ? "Close the conversation" : "Show the conversation");
     chatClear.title = open ? "Close \u2014 nothing is discarded" : "Show the conversation";
     if (open) {
+      chatClear.hidden = false;
       chatScroll(true);
       return;
     }
     chatStream.hidden = true;
     detach();
-    for (const card of findingCards.values()) card.remove();
+    discardFindingCards();
+    for (const stale of document.querySelectorAll(".chat-variants")) {
+      if (!stale.querySelector(".variant-card.is-applied")) stale.remove();
+    }
+    chatClear.hidden = chatStream.children.length === 0;
+    layoutRail();
+  }
+  function discardFindingCards() {
+    for (const card of findingCards.values()) {
+      railAnchors.delete(card);
+      railHomes.delete(card);
+      card.remove();
+    }
     findingCards.clear();
   }
   function chatAdd(node) {
     setChatOpen(true);
+    return streamAppend(node);
+  }
+  function streamAppend(node) {
     const stick = chatAtBottom();
     chatStream.append(node);
     chatScroll(stick);
@@ -18911,7 +18897,7 @@
     if (focusComposer) chatInput.focus();
   }
   function detach() {
-    cancelPreview();
+    clearPlainPreview();
     attached = null;
     activeFinding = null;
     chatChip.classList.add("hidden");
@@ -18927,94 +18913,69 @@
     });
     return range;
   }
-  var REVERT_MS = 700;
-  var VariantWidget = class extends WidgetType {
-    constructor(text, original, block2, reverting) {
+  var DELTA_MATERIAL = 5;
+  var PlainVariantWidget = class extends WidgetType {
+    constructor(text, block2) {
       super();
       this.text = text;
-      this.original = original;
       this.block = block2;
-      this.reverting = reverting;
     }
     eq(other) {
-      return other.text === this.text && other.block === this.block && other.reverting === this.reverting;
+      return other.text === this.text && other.block === this.block;
     }
     toDOM() {
       const node = document.createElement(this.block ? "div" : "span");
-      node.className = this.reverting ? "cm-variant is-reverting" : "cm-variant";
-      node.append(variantNodes(this.original, this.text));
+      node.className = "cm-variant-plain";
+      node.textContent = this.text;
       return node;
     }
+    ignoreEvent() {
+      return true;
+    }
   };
-  var WORD_STEP = 90;
-  var WORD_STEPS_MAX = 10;
-  function variantNodes(original, text) {
-    const fragment = document.createDocumentFragment();
-    let step = 0;
-    for (const op of wordDiff(original, text)) {
-      if (op.type === "keep") {
-        fragment.append(op.text);
-        continue;
-      }
-      if (op.type === "del" && op.text.length > 120) continue;
-      const part = document.createElement(op.type === "del" ? "del" : "ins");
-      part.className = op.type === "del" ? "cm-variant-old" : "cm-variant-new";
-      part.textContent = op.text;
-      part.style.animationDelay = `${Math.min(step++, WORD_STEPS_MAX) * WORD_STEP}ms`;
-      fragment.append(part);
-    }
-    return fragment;
-  }
-  function reservedHeight(target, variants) {
-    const line = workView.state.doc.lineAt(target.from);
-    if (line.number !== workView.state.doc.lineAt(target.to).number) return 0;
-    const at = workView.domAtPos(line.from).node;
-    const lineEl = (at.nodeType === 1 ? at : at.parentElement)?.closest(".cm-line");
-    if (!lineEl) return 0;
-    const probe = document.createElement("div");
-    probe.className = lineEl.className;
-    probe.style.cssText = `position:absolute;visibility:hidden;pointer-events:none;width:${lineEl.clientWidth}px`;
-    lineEl.parentElement.append(probe);
-    const before = workView.state.sliceDoc(line.from, target.from);
-    const after = workView.state.sliceDoc(target.to, line.to);
-    let tallest = 0;
-    try {
-      for (const option of [target.text, ...variants]) {
-        probe.replaceChildren(before, variantNodes(target.text, option), after);
-        tallest = Math.max(tallest, probe.offsetHeight);
-      }
-    } finally {
-      probe.remove();
-    }
-    return tallest;
-  }
-  var setVariantFx = StateEffect.define();
-  var variantField = StateField.define({
+  var setPlainVariantFx = StateEffect.define();
+  var variantPlainField = StateField.define({
     create: () => null,
     update(value, tr) {
       if (tr.docChanged) return null;
-      for (const effect of tr.effects) if (effect.is(setVariantFx)) return effect.value;
+      for (const effect of tr.effects) if (effect.is(setPlainVariantFx)) return effect.value;
       return value;
     },
     provide: (field) => EditorView.decorations.from(field, (value) => {
       if (!value) return Decoration.none;
-      const marks2 = [];
-      if (value.reserve) {
-        marks2.push(Decoration.line({ attributes: { style: `min-height:${value.reserve}px` } }).range(value.lineFrom));
-      }
-      marks2.push(Decoration.replace({
-        widget: new VariantWidget(value.text, value.original, value.block, value.reverting),
+      return Decoration.set([Decoration.replace({
+        widget: new PlainVariantWidget(value.text, value.block),
         block: value.block
-      }).range(value.from, value.to));
-      return Decoration.set(marks2, true);
+      }).range(value.from, value.to)], true);
     })
   });
-  function applyText(text, target) {
+  var plainPreview = null;
+  function showPlainPreview(text, target) {
+    plainPreview = { target };
+    workView.dispatch({
+      effects: [setPlainVariantFx.of({
+        from: target.from,
+        to: target.to,
+        text,
+        block: workView.state.doc.lineAt(target.from).number !== workView.state.doc.lineAt(target.to).number
+      })]
+    });
+  }
+  function clearPlainPreview() {
+    if (!plainPreview) return;
+    plainPreview = null;
+    try {
+      workView.dispatch({ effects: setPlainVariantFx.of(null) });
+    } catch {
+    }
+  }
+  function applyText(text, target, wrap = null, card = null) {
     if (!replacementTarget(workView.state.doc.toString(), target) || workView.state.readOnly) {
       chatAdd(chatEl("div", "chat-error", "The draft changed since this answer. Select the passage and request new options."));
       return;
     }
     const range = target;
+    clearPlainPreview();
     saveSnapshot("Before AI replacement");
     workView.dispatch({
       changes: { from: range.from, to: range.to, insert: text },
@@ -19023,6 +18984,48 @@
     workView.focus();
     save();
     detach();
+    if (card) card.classList.add("is-applied");
+    if (wrap) {
+      wrap.classList.add("is-spent");
+      for (const sibling of wrap.querySelectorAll(".variant-card")) {
+        if (sibling !== card) sibling.hidden = true;
+      }
+      const foot = wrap.querySelector(".variant-foot");
+      if (foot) foot.hidden = true;
+      const soloHint = wrap.querySelector(":scope > .variant-hint");
+      if (soloHint) soloHint.hidden = true;
+      attachUndo(card, text, target);
+      setChatOpen(false);
+    }
+  }
+  function attachUndo(card, text, target) {
+    if (!card) return;
+    let row = card.querySelector(".variant-undo-row");
+    if (!row) {
+      row = chatEl("div", "variant-undo-row");
+      const undo3 = chatEl("button", "chat-again", "Undo");
+      undo3.type = "button";
+      undo3.title = "Put the passage back as it was";
+      undo3.addEventListener("click", () => {
+        const at = Number(undo3.dataset.from);
+        const { applied, previous } = undo3.dataset;
+        if (workView.state.sliceDoc(at, at + applied.length) !== applied) {
+          chatAdd(chatEl("div", "chat-error", "That passage has changed since. Use the editor\u2019s undo instead."));
+          return;
+        }
+        workView.dispatch({ changes: { from: at, to: at + applied.length, insert: previous }, selection: { anchor: at + previous.length } });
+        workView.focus();
+        save();
+        undo3.closest(".chat-variants")?.remove();
+        if (chatStream.children.length === 0) setChatOpen(false);
+      });
+      row.append(undo3);
+      card.append(row);
+    }
+    const undo2 = row.querySelector("button");
+    undo2.dataset.from = String(target.from);
+    undo2.dataset.applied = text;
+    undo2.dataset.previous = target.text;
   }
   function markFor(id) {
     return workView.dom.querySelector(`.cm-slop[data-slop-id="${id}"]`);
@@ -19030,7 +19033,7 @@
   function syncActiveCard() {
     for (const [id, card] of findingCards) card.classList.toggle("is-active", id === activeFinding?.id);
   }
-  function findingCard(finding) {
+  function findingCard(finding, instruction) {
     const card = chatEl("div", "chat-card");
     card.addEventListener("mouseenter", () => markFor(finding.id)?.classList.add("is-hot"));
     card.addEventListener("mouseleave", () => markFor(finding.id)?.classList.remove("is-hot"));
@@ -19040,9 +19043,8 @@
     dismiss.setAttribute("aria-label", "Dismiss this finding");
     dismiss.addEventListener("click", () => {
       chatAbort?.abort();
+      clearPlainPreview();
       dismissFinding(finding.id);
-      cancelPreview();
-      card.remove();
     });
     card.append(
       dismiss,
@@ -19058,167 +19060,131 @@
         if (!card.querySelector(".chat-error")) card.append(chatEl("div", "chat-error", "This passage has changed. Run Review again."));
         return;
       }
-      const target = { ...live, text: workView.state.sliceDoc(live.from, live.to) };
-      attach(target, finding, false);
-      requestVariants(`Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`, null, card);
+      offer.disabled = true;
+      offer.textContent = "Looking\u2026";
+      if (activeFinding?.id !== finding.id) {
+        const target = { ...live, text: workView.state.sliceDoc(live.from, live.to) };
+        attach(target, finding, false);
+      }
+      requestVariants(instruction, null, card);
     });
     card.append(offer);
     return card;
   }
-  var previewStrip = document.getElementById("chat-preview");
-  var cardContent = /* @__PURE__ */ new WeakMap();
-  function cardShow(card, ...nodes) {
-    if (!cardContent.has(card)) cardContent.set(card, [...card.childNodes]);
-    card.classList.add("is-bare");
-    card.replaceChildren(...nodes);
-  }
-  function cardRestore(card) {
-    const saved = cardContent.get(card);
-    if (!saved) return;
-    card.classList.remove("is-bare");
-    card.replaceChildren(...saved);
-    cardContent.delete(card);
-  }
-  var previewCount = document.getElementById("preview-count");
-  var previewKept = document.getElementById("preview-kept");
-  var preview = null;
-  var keptTimer = null;
-  var revertTimer = null;
-  function renderPreview() {
-    reviewButton.hidden = !!preview;
-    previewStrip.hidden = !preview;
-    if (!preview) {
-      clearTimeout(revertTimer);
-      workView.dispatch({ effects: setVariantFx.of(null) });
-      return;
-    }
-    const { target, index, variants } = preview;
-    const original = index < 0;
-    previewCount.textContent = original ? "Original" : `${index + 1} of ${variants.length}`;
-    document.getElementById("preview-again").hidden = preview.instruction === null;
-    const text = original ? target.text : variants[index];
-    const against = original ? variants[preview.shown] : target.text;
-    if (!original) preview.shown = index;
-    workView.dispatch({
-      effects: [
-        setVariantFx.of({
-          from: target.from,
-          to: target.to,
-          lineFrom: workView.state.doc.lineAt(target.from).from,
-          reserve: preview.reserve,
-          text,
-          original: against,
-          reverting: original,
-          block: workView.state.doc.lineAt(target.from).number !== workView.state.doc.lineAt(target.to).number
-        }),
-        EditorView.scrollIntoView(target.from, { y: "center" })
-      ]
+  function variantCards(variants, instruction, target, card = null) {
+    const doc2 = workView.state.doc.toString();
+    const measurable = isLatinScript(doc2);
+    const base2 = measurable ? styleScore(doc2).score : null;
+    const scored = variants.map((text) => ({
+      text,
+      score: measurable ? styleScore(doc2.slice(0, target.from) + text + doc2.slice(target.to)).score : null
+    }));
+    if (measurable) scored.sort((a, b) => a.score - b.score);
+    const wrap = chatEl("div", "chat-variants");
+    wrap.setAttribute("role", "list");
+    wrap.dataset.targetFrom = String(target.from);
+    scored.forEach(({ text, score }, index) => {
+      const item = chatEl("div", "variant-card");
+      item.setAttribute("role", "listitem");
+      item.tabIndex = 0;
+      item.setAttribute("role", "button");
+      item.setAttribute("aria-label", `Apply option ${index + 1}`);
+      const label = chatEl("div", "variant-label", `Option ${index + 1}`);
+      if (score !== null) {
+        const move = score - base2;
+        const tone = move <= -DELTA_MATERIAL ? " is-better" : move >= DELTA_MATERIAL ? " is-worse" : "";
+        const delta = chatEl("span", `variant-delta${tone}`, `${base2} \u2192 ${score}`);
+        delta.title = "Local AI-tell score for the whole draft if you pick this variant";
+        label.append(delta);
+      }
+      const body = chatEl("div", "variant-text", text);
+      item.append(label, body);
+      const previewIt = () => {
+        if (wrap.classList.contains("is-spent")) return;
+        if (!replacementTarget(workView.state.doc.toString(), target)) return;
+        showPlainPreview(text, target);
+      };
+      const unpreview = () => clearPlainPreview();
+      item.addEventListener("mouseenter", previewIt);
+      item.addEventListener("mouseleave", unpreview);
+      item.addEventListener("focus", previewIt);
+      item.addEventListener("blur", unpreview);
+      const apply = () => {
+        if (!wrap.classList.contains("is-spent")) applyText(text, target, wrap, item);
+      };
+      item.addEventListener("click", apply);
+      item.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          apply();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          unpreview();
+          item.blur();
+          workView.focus();
+        }
+      });
+      wrap.append(item);
     });
-    clearTimeout(revertTimer);
-    if (original) {
-      revertTimer = setTimeout(() => {
-        if (preview?.index === -1) workView.dispatch({ effects: setVariantFx.of(null) });
-      }, REVERT_MS);
+    if (instruction !== null) {
+      const foot = chatEl("div", "variant-foot");
+      const again = chatEl("button", "chat-again is-icon");
+      again.type = "button";
+      again.setAttribute("aria-label", "Try again \u2014 ask for three more");
+      again.title = "Try again \u2014 ask for three more";
+      again.innerHTML = '<svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="19.17 3.33 19.17 8.33 14.17 8.33"/><path d="M17.07 12.5a7.5 7.5 0 1 1-1.77-7.8l3.87 3.63"/></svg>';
+      again.addEventListener("click", () => {
+        if (wrap.classList.contains("is-spent")) return;
+        clearPlainPreview();
+        wrap.remove();
+        requestVariants(instruction, target, card);
+      });
+      const hint = chatEl("span", "variant-hint", "Hover to preview \xB7 Click to apply \xB7 Esc to dismiss");
+      foot.append(hint, again);
+      wrap.append(foot);
+    } else {
+      const hint = chatEl("div", "variant-hint", "Hover to preview \xB7 Click to apply \xB7 Esc to dismiss");
+      wrap.append(hint);
+    }
+    return wrap;
+  }
+  function skeletonCards(count = 3) {
+    const wrap = chatEl("div", "chat-variants is-loading");
+    wrap.setAttribute("aria-busy", "true");
+    for (let i = 0; i < count; i++) {
+      const item = chatEl("div", "variant-card is-loading");
+      item.append(
+        chatEl("div", "skeleton skeleton-label"),
+        chatEl("div", "skeleton skeleton-line"),
+        chatEl("div", "skeleton skeleton-line is-short")
+      );
+      wrap.append(item);
+    }
+    return wrap;
+  }
+  function hideFindingCard(card) {
+    if (!card || card.hidden) return;
+    card.hidden = true;
+    layoutRail();
+  }
+  function restoreFindingCard(card) {
+    if (!card) return;
+    const offer = card.querySelector(".chat-offer:disabled");
+    if (offer) {
+      offer.disabled = false;
+      offer.textContent = "Options";
+    }
+    if (!card.hidden) return;
+    card.hidden = false;
+    layoutRail();
+  }
+  function showVariants(variants, instruction, target) {
+    chatAdd(variantCards(variants, instruction, target));
+    try {
+      workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "center" }) });
+    } catch {
     }
   }
-  function showPreview(variants, instruction, target, card = null) {
-    hideKept();
-    preview = { variants, instruction, target, index: 0, shown: 0, card };
-    preview.reserve = reservedHeight(target, variants);
-    previewStrip.hidden = false;
-    if (card) cardShow(card, previewStrip);
-    else railAdd(previewStrip, () => preview?.target.from ?? null, document.querySelector(".chat-recipes"));
-    renderPreview();
-    document.getElementById("preview-next").focus();
-  }
-  function cancelPreview() {
-    if (!preview) return;
-    const { card } = preview;
-    preview = null;
-    railAnchors.delete(previewStrip);
-    previewStrip.style.top = "";
-    previewStrip.style.visibility = "";
-    document.querySelector(".chat-recipes").insertBefore(previewStrip, document.getElementById("review-status"));
-    if (card) cardRestore(card);
-    renderPreview();
-  }
-  function endPreview() {
-    if (!preview) return;
-    const { variants, index, target, card } = preview;
-    cancelPreview();
-    if (index < 0) return;
-    applyText(variants[index], target);
-    card?.remove();
-    showKept(variants[index], target);
-  }
-  function stepPreview(delta) {
-    if (!preview) return;
-    const stops = preview.variants.length + 1;
-    preview.index = (preview.index + 1 + delta + stops) % stops - 1;
-    renderPreview();
-  }
-  var KEPT_MS = 8e3;
-  function showKept(text, target) {
-    clearTimeout(keptTimer);
-    railAdd(previewKept, () => target.from, document.querySelector(".chat-recipes"));
-    previewKept.hidden = false;
-    previewKept.dataset.from = target.from;
-    previewKept.dataset.applied = text;
-    previewKept.dataset.previous = target.text;
-    previewKept.style.setProperty("--kept-ms", `${KEPT_MS}ms`);
-    previewKept.classList.remove("is-counting");
-    void previewKept.offsetWidth;
-    previewKept.classList.add("is-counting");
-    keptTimer = setTimeout(hideKept, KEPT_MS);
-  }
-  function hideKept() {
-    clearTimeout(keptTimer);
-    previewKept.hidden = true;
-    previewKept.classList.remove("is-counting");
-    railAnchors.delete(previewKept);
-    previewKept.style.top = "";
-    previewKept.style.visibility = "";
-    document.querySelector(".chat-recipes").insertBefore(previewKept, document.getElementById("review-status"));
-  }
-  document.getElementById("preview-undo").addEventListener("click", () => {
-    const from = Number(previewKept.dataset.from);
-    const { applied, previous } = previewKept.dataset;
-    hideKept();
-    if (workView.state.sliceDoc(from, from + applied.length) !== applied) {
-      chatAdd(chatEl("div", "chat-error", "That passage has changed since. Use the editor\u2019s undo instead."));
-      return;
-    }
-    workView.dispatch({ changes: { from, to: from + applied.length, insert: previous }, selection: { anchor: from + previous.length } });
-    workView.focus();
-    save();
-  });
-  document.getElementById("preview-prev").addEventListener("click", () => stepPreview(-1));
-  document.getElementById("preview-next").addEventListener("click", () => stepPreview(1));
-  document.getElementById("preview-again").addEventListener("click", () => {
-    if (!preview) return;
-    const { instruction, target, card } = preview;
-    cancelPreview();
-    if (!replacementTarget(workView.state.doc.toString(), target)) {
-      chatAdd(chatEl("div", "chat-error", "This answer is out of date. Select the passage again."));
-      return;
-    }
-    requestVariants(instruction, target, card);
-  });
-  previewStrip.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      stepPreview(-1);
-    }
-    if (event.key === "ArrowRight") {
-      event.preventDefault();
-      stepPreview(1);
-    }
-    if (event.key === "Enter") {
-      event.preventDefault();
-      endPreview();
-      workView.focus();
-    }
-  });
   async function requestVariants(instruction, existingTarget = null, card = null) {
     const range = existingTarget ?? attachedRange();
     const target = existingTarget ?? (range && { ...range, document: workView.state.doc.toString() });
@@ -19228,8 +19194,9 @@
     }
     if (!await ensureAgent()) return;
     if (!replacementTarget(workView.state.doc.toString(), target)) return;
-    cancelPreview();
-    if (card) cardShow(card, chatEl("div", "card-working", "Looking for options\u2026"));
+    clearPlainPreview();
+    if (card) hideFindingCard(card);
+    const placeholder2 = chatAdd(skeletonCards());
     chatAbort?.abort();
     const job = startJob();
     chatAbort = job;
@@ -19250,11 +19217,24 @@
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
       if (!replacementTarget(workView.state.doc.toString(), target)) throw new Error("The draft changed while the rewrites were coming back. Select the passage again.");
-      showPreview(data.variants, instruction, target, card);
+      const stick = chatAtBottom();
+      const wrap = variantCards(data.variants, instruction, target);
+      if (placeholder2.isConnected) {
+        placeholder2.replaceWith(wrap);
+        chatScroll(stick);
+      } else {
+        placeholder2.remove();
+        chatAdd(wrap);
+      }
     } catch (error) {
-      if (card) cardRestore(card);
-      if (error.name === "AbortError") return;
+      if (error.name === "AbortError") {
+        placeholder2.remove();
+        restoreFindingCard(card);
+        return;
+      }
       console.error("[/rewrite]", error);
+      placeholder2.remove();
+      restoreFindingCard(card);
       chatAdd(errorCard(modelError(error), () => requestVariants(instruction, target, card)));
     } finally {
       finishJob(job);
@@ -19263,7 +19243,7 @@
   }
   var findingCards = /* @__PURE__ */ new Map();
   function openFinding(finding, center = false) {
-    endPreview();
+    clearPlainPreview();
     const range = findingRange(finding.id);
     if (!range) return;
     attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding, false);
@@ -19272,7 +19252,10 @@
       chatScroll(true);
       return;
     }
-    findingCards.set(finding.id, railAdd(findingCard(finding), () => findingRange(finding.id)?.from ?? null));
+    const instruction = `Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`;
+    const card = findingCard(finding, instruction);
+    findingCards.set(finding.id, railAdd(card, () => card.hidden ? null : findingRange(finding.id)?.from ?? null));
+    if (card.parentElement === chatStream) setChatOpen(true);
     syncActiveCard();
   }
   async function chatSend() {
@@ -19393,9 +19376,11 @@ Editing direction: ${activeFinding.fix}`,
     detach();
     chatInput.focus();
   });
+  chatClear.addEventListener("mousedown", (event) => event.preventDefault());
   chatClear.addEventListener("click", () => {
-    setChatOpen(chatStream.hidden);
-    chatInput.focus();
+    const open = chatStream.hidden;
+    setChatOpen(open);
+    (open ? chatInput : workView).focus();
   });
   document.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -19502,6 +19487,15 @@ Editing direction: ${activeFinding.fix}`,
       transition: "background .12s ease"
     },
     ".cm-slop:hover": { background: "var(--slop-tint-hover)" },
+    // Hover preview of a variant: a plain white sheet over the passage, no
+    // colours. The attached tint stays underneath for the passage itself; this
+    // replace decoration only shows while a card is hovered or focused.
+    ".cm-variant-plain": {
+      background: "var(--overlay)",
+      borderRadius: "2px",
+      boxShadow: "0 0 0 2px var(--overlay)",
+      borderBottom: "1px solid var(--border-strong)"
+    },
     // Slightly dim the content while /idea is streaming
     "&.streaming .cm-content": { opacity: "0.8" },
     // Placeholder text (shown when doc is empty)
@@ -19560,7 +19554,7 @@ Editing direction: ${activeFinding.fix}`,
         ghostField,
         reviewField,
         attachField,
-        variantField,
+        variantPlainField,
         // Read-only compartment — toggled during /idea streaming
         readonlyComp.of(EditorState.readOnly.of(true)),
         // Word wrap (essential for prose)
@@ -19586,9 +19580,10 @@ Editing direction: ${activeFinding.fix}`,
             openFinding(finding);
             return false;
           },
-          // Reaching for the text means the writer is done choosing.
+          // Reaching for the text dismisses a hover preview; the cards stay —
+          // choosing is a click on a card, not a click in the draft.
           mousedown() {
-            endPreview();
+            clearPlainPreview();
             return false;
           },
           contextmenu(event, view) {
@@ -19614,7 +19609,7 @@ Editing direction: ${activeFinding.fix}`,
                 detach();
               });
             }
-            if (preview) queueMicrotask(cancelPreview);
+            if (plainPreview) queueMicrotask(clearPlainPreview);
             if (reviewFindings.length) {
               syncReviewLabel();
               saveFindings();
@@ -19682,6 +19677,7 @@ Editing direction: ${activeFinding.fix}`,
     findingCards.clear();
     docStorage.removeItem("wa-chat");
     docStorage.removeItem("dismissed");
+    setChatOpen(false);
     loadingDocument = false;
   }
   function saveToDisk() {
