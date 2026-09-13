@@ -5,6 +5,10 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.4.0 — 2026-09-13
+
+- Added spell checking. Misspelled words are marked in the editor using a vendored en_US Hunspell dictionary, checked client-side alongside the existing style-tell markers.
+
 ## 0.3.7 — 2026-09-13
 
 - Litura is now also a desktop app. A Tauri shell picks the writing folder, starts the same server on a free port, and shows it in its own window; it carries its own Node runtime, so nothing has to be installed first.

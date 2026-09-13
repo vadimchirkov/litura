@@ -23,6 +23,7 @@ import { findingContext, isLatinScript, locateFindings, styleMarkers, styleScore
 import { renderMarkdown } from '../markdown.js';
 import { replacementTarget, newerVersion } from '../editing.js';
 import { locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
+import { loadSpellDictionary, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
 
 // Naming a shortcut with the wrong modifier is worse than not naming it.
@@ -679,6 +680,35 @@ const styleMarkerField = StateField.define({
     }).range(marker.from, marker.to)), true)),
 });
 
+// ─── Spelling marks ─────────────────────────────────────────────────────────
+//
+//  A deterministic, offline check for actual misspellings — distinct from the
+//  style tells above, which flag wording choices rather than errors. Fixes
+//  are instant word swaps, so they skip the finding-card/model path entirely.
+//
+// ponytail: dictionary loads once at startup; a word added via the bubble's
+// "Ignore" only survives the tab session. Persist to localStorage if writers
+// hit the same false positive across reloads.
+let spellChecker = null;
+const refreshSpellFx = StateEffect.define();
+function visibleSpellMarkers(text) {
+  return spellingMarkers(text, spellChecker);
+}
+const spellMarkerField = StateField.define({
+  create: state => visibleSpellMarkers(state.doc.toString()),
+  update: (markers, tr) => {
+    for (const effect of tr.effects) {
+      if (effect.is(refreshSpellFx)) return visibleSpellMarkers(tr.newDoc.toString());
+    }
+    return tr.docChanged ? visibleSpellMarkers(tr.newDoc.toString()) : markers;
+  },
+  provide: field => EditorView.decorations.from(field, markers => Decoration.set(markers.map(marker =>
+    Decoration.mark({
+      class: 'cm-spell-marker',
+      attributes: { 'data-spell-from': String(marker.from), title: 'Possible misspelling — click for suggestions' },
+    }).range(marker.from, marker.to)), true)),
+});
+
 const setReviewFx = StateEffect.define();
 const addReviewFx = StateEffect.define();
 const dropReviewFx = StateEffect.define();  // one finding the writer disagreed with
@@ -726,12 +756,10 @@ const attachField = StateField.define({
   update(decorations, tr) {
     for (const effect of tr.effects) {
       if (effect.is(setAttachFx)) {
-        // A finding's span already carries its own warm band; layering the
-        // plain-selection tint on top of it read as the sentence being
-        // selected. The attachment draws a blue underline over the band
-        // instead — same hue family as the selection, different shape.
-        // The decoration still has to exist — it is what tracks the live
-        // position and ends the attachment on an edit — only its look differs.
+        // A finding already reads as a background band; the attachment washes
+        // over it in its own hue instead of drawing a second shape. The
+        // decoration still has to exist — it is what tracks the live
+        // position and ends the attachment on an edit — only its look is shared.
         const cls = effect.value?.finding ? 'cm-attached cm-attached-finding' : 'cm-attached';
         return effect.value
           ? Decoration.set([Decoration.mark({ class: cls }).range(effect.value.from, effect.value.to)])
@@ -749,6 +777,45 @@ const attachField = StateField.define({
   },
   provide: field => EditorView.decorations.from(field),
 });
+
+// ─── Open-variants target ───────────────────────────────────────────────────
+//
+//  The passage whose options are currently on screen. Options no longer
+//  attach to the composer, so without this the draft would give no sign of
+//  which phrase is being decided. One live group at a time means one mark.
+const setVariantTargetFx = StateEffect.define();
+
+const variantTargetField = StateField.define({
+  create: () => Decoration.none,
+  update(decorations, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setVariantTargetFx)) {
+        return effect.value
+          ? Decoration.set([Decoration.mark({ class: 'cm-variant-target' }).range(effect.value.from, effect.value.to)])
+          : Decoration.none;
+      }
+    }
+    if (!tr.docChanged) return decorations;
+    // An edit inside the passage invalidates the open options with it.
+    const edited = [];
+    tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => edited.push([fromB, toB]));
+    return decorations.map(tr.changes).update({
+      filter: (from, to) => !edited.some(([a, b]) => a < to && b > from),
+    });
+  },
+  provide: field => EditorView.decorations.from(field),
+});
+
+function markVariantTarget(target) {
+  try { workView.dispatch({ effects: setVariantTargetFx.of(target ? { from: target.from, to: target.to } : null) }); } catch {}
+}
+
+// The mark follows the last live group: clear it only when no undecided
+// group remains on screen, so dismissing one card never steals the mark of
+// another card's open options.
+function syncVariantTarget() {
+  if (!document.querySelector('.chat-variants:not(.is-spent):not(.is-loading)')) markVariantTarget(null);
+}
 
 // Live position of a finding — decorations move with the document, the
 // from/to captured at review time do not.
@@ -808,8 +875,6 @@ document.addEventListener('copy', () => { if (bubbleMode === 'selection') hideMa
 // counter keeps advertising work the writer already rejected.
 function dismissFinding(id) {
   if (id === -1) { if (localFinding) keepStyleMarker(localFinding); return; }
-  clearTimeout(appliedHideTimers.get(id));
-  appliedHideTimers.delete(id);
   const finding = reviewFindings.find(item => item.id === id);
   const document = workView.state.doc.toString();
   const range = findingRange(id);
@@ -819,7 +884,7 @@ function dismissFinding(id) {
   docStorage.setItem('dismissed', JSON.stringify(dismissed.slice(-100)));
   reviewFindings = reviewFindings.filter(finding => finding.id !== id);
   const card = findingCards.get(id);
-  if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); }
+  if (card) { railAnchors.delete(card); railHomes.delete(card); fadeRemove(card); }
   findingCards.delete(id);
   workView.dispatch({ effects: dropReviewFx.of(id) });
   hideMarkBubble();
@@ -827,6 +892,7 @@ function dismissFinding(id) {
   else clearPlainPreview();
   refocusAfterRemoval(id);
   saveFindings();
+  syncVariantTarget();
   syncReviewLabel();
   workView.focus();
   if (decision) showEditFeedback('Kept as is', () => {
@@ -861,6 +927,7 @@ function clearReview() {
   reviewFindings = [];
   checkedSentences.clear();
   workView.dispatch({ effects: setReviewFx.of([]) });
+  markVariantTarget(null);
   docStorage.removeItem('wa-findings');
   syncReviewLabel();
 }
@@ -1103,7 +1170,7 @@ function keepStyleMarker(marker) {
 }
 function removeLocalFinding() {
   const card = findingCards.get(-1);
-  if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); findingCards.delete(-1); }
+  if (card) { railAnchors.delete(card); railHomes.delete(card); fadeRemove(card); findingCards.delete(-1); }
   localFinding = null;
   if (activeFinding?.id === -1) detach();
 }
@@ -1380,9 +1447,34 @@ function chatEl(tag, className, text) {
 const chatAtBottom = () =>
   chatStream.scrollHeight - chatStream.scrollTop - chatStream.clientHeight < 48;
 
-function chatScroll(stick) {
-  chatStream.scrollTop = chatStream.scrollHeight;
+const reduceMotion = () =>
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Discrete jumps glide; token-by-token follow stays instant — smooth scrolling
+// lags behind a live stream and stutters.
+function chatScroll(stick, smooth = false) {
   void stick;
+  const top = chatStream.scrollHeight;
+  if (smooth && !reduceMotion()) {
+    try { chatStream.scrollTo({ top, behavior: 'smooth' }); return; } catch {}
+  }
+  chatStream.scrollTop = top;
+}
+
+// Bring a node into view without yanking when it is already fully visible.
+function scrollToNode(node, block = 'nearest') {
+  if (!node?.isConnected) return;
+  try { node.scrollIntoView({ block, behavior: reduceMotion() ? 'auto' : 'smooth' }); }
+  catch { try { node.scrollIntoView(); } catch {} }
+}
+
+// Soft way out: fade first, detach after. Bulk operations (document switch,
+// conversation reset) still remove instantly — one farewell at a time.
+function fadeRemove(node, ms = 160) {
+  if (!node?.isConnected) return;
+  if (reduceMotion()) { node.remove(); return; }
+  node.classList.add('is-leaving');
+  setTimeout(() => node.remove(), ms);
 }
 
 function saveChat() {
@@ -1444,10 +1536,18 @@ function chatEditCard(edit) {
   const apply = button('Apply', () => changeChatEdit(edit));
   apply.classList.add('is-primary');
   const keep = button('Keep original', () => { clearPlainPreview(); edit.state = 'kept'; saveChat(); syncChatEditCards(); undo.focus(); });
-  const undo = button('Undo', () => {
+  // Undo speaks the same receipt language as applied variants: one quiet pill
+  // in its own footer row, not another button in the action row.
+  const undoFoot = chatEl('div', 'variant-undo-row');
+  undoFoot.hidden = true;
+  const undo = chatEl('button', 'chat-again', 'Undo');
+  undo.type = 'button';
+  undo.title = 'Put the passage back as it was';
+  undo.addEventListener('click', () => {
     if (edit.state === 'kept') { edit.state = 'pending'; saveChat(); syncChatEditCards(); apply.focus(); }
     else changeChatEdit(edit, true);
   });
+  undoFoot.append(undo);
   const refresh = button('Request new edit', () => {
     if (edit.state === 'unlocated') {
       chatInput.value = `Prepare an edit for the passage I select. Previous suggestion: ${edit.label}`;
@@ -1457,19 +1557,23 @@ function chatEditCard(edit) {
     chatSend();
   });
   const status = chatEl('p', 'chat-edit-status'); status.setAttribute('role', 'status');
-  // The status leads the row: message left, actions right — so Applied stands
-  // directly before Undo instead of on a line of its own.
   actions.prepend(status);
-  card.append(actions);
-  chatEditCards.set(edit, { card, preview, apply, keep, undo, refresh, status });
+  card.append(actions, undoFoot);
+  chatEditCards.set(edit, { card, actions, preview, apply, keep, undo, undoFoot, refresh, status });
   syncChatEditCard(edit, chatEditCards.get(edit));
   return card;
 }
 function syncChatEditCard(edit, ui) {
   const valid = chatEditMatches(edit, workView.state.doc.toString());
   const pending = edit.state === 'pending' && valid;
+  const showUndo = valid && ['applied', 'kept'].includes(edit.state);
+  const appliedNow = valid && edit.state === 'applied';
   ui.preview.hidden = ui.apply.hidden = ui.keep.hidden = !pending;
-  ui.undo.hidden = !valid || !['applied', 'kept'].includes(edit.state);
+  ui.undo.hidden = !showUndo;
+  ui.undoFoot.hidden = !showUndo;
+  // Applied is a receipt: tag in the title, Undo in its footer, nothing else.
+  ui.card.classList.toggle('is-applied', appliedNow);
+  ui.actions.hidden = appliedNow;
   ui.refresh.hidden = valid;
   ui.refresh.textContent = edit.state === 'unlocated' ? 'Choose passage' : 'Request new edit';
   // Unlocated proposals need an explicit selection, then a fresh response.
@@ -1477,11 +1581,11 @@ function syncChatEditCard(edit, ui) {
   ui.preview.setAttribute('aria-pressed', String(plainPreview?.edit === edit));
   ui.apply.disabled = ui.undo.disabled = workView.state.readOnly || loadingDocument || savePaused;
   // A stale card names no problem — the Request button beside it is the way
-  // forward, so the status line stays out of the way.
+  // forward, so the status line stays out of the way. Applied needs no status
+  // either: the tag in the title says it.
   ui.status.textContent = !valid ? (edit.state === 'unlocated' ? 'Select the intended passage and request this edit again.' : '')
-    : edit.state === 'applied' ? 'Applied' : edit.state === 'kept' ? 'Original kept' : '';
+    : edit.state === 'kept' ? 'Original kept' : '';
   ui.status.hidden = !ui.status.textContent;
-  ui.status.classList.toggle('is-ok', valid && edit.state === 'applied');
 }
 function syncChatEditCards() {
   for (const [edit, ui] of chatEditCards) {
@@ -1521,38 +1625,13 @@ const railHomes = new Map();     // node → where it lives when there is no rai
 const RAIL_WIDTH = 300, RAIL_GUTTER = 24;
 let railOn = false;
 
-// The rail lives in the margin the centred text column leaves empty, so it is
-// available exactly when that margin can hold it. Measured, not guessed at a
-// breakpoint: the text column's padding is the margin.
+// The rail is retired (step 1): every card lives in the chat stream at every
+// width, so there is nothing to measure and nowhere to move. Kept as a
+// no-op for its callers until the layout pass is deleted outright.
 function syncRail() {
-  const margin = parseFloat(getComputedStyle(workView.contentDOM).paddingRight) || 0;
-  const fits = margin >= RAIL_WIDTH + RAIL_GUTTER;
-  if (fits) {
-    // Beside the text, not against the window: the note belongs to the line.
-    // Measured against the pane, which is the rail's containing block — the
-    // rail's own offsetParent is null while it is still hidden.
-    const box = workView.contentDOM.getBoundingClientRect();
-    const pane = document.getElementById('pane-work').getBoundingClientRect();
-    rail.style.left = `${box.right - margin - pane.left + RAIL_GUTTER}px`;
-  }
-  if (fits === railOn) return;
-  railOn = fits;
-  rail.hidden = !fits;
-  const focused = focusedFindingId;
-  for (const node of railAnchors.keys()) {
-    if (!node.isConnected) continue;
-    node.style.top = '';
-    node.style.visibility = '';
-    if (fits) { node.style.display = ''; rail.append(node); }
-    else {
-      placeHome(node);
-      // Single-card rule holds in the stream too: the focused remark shows,
-      // the rest wait on their marks.
-      const nodeId = Number(node.dataset?.findingId);
-      node.style.display = (focused === null || nodeId === focused) ? '' : 'none';
-    }
-  }
-  if (!fits) chatScroll(true);   // cards moved into the stream land below the fold
+  railOn = false;
+  if (!rail.hidden) rail.hidden = true;
+  return;
 }
 
 // Without a rail a card belongs in the stream, stacked in DOM order. Moving
@@ -1567,9 +1646,8 @@ function placeHome(node) {
 function railAdd(node, anchor, home = chatStream) {
   railAnchors.set(node, anchor);
   railHomes.set(node, home);
-  syncRail();
-  if (railOn) rail.append(node);
-  else placeHome(node);
+  // Single surface: home is always the stream now — no rail branch.
+  placeHome(node);
   layoutRail();
   return node;
 }
@@ -1603,12 +1681,11 @@ window.addEventListener('resize', layoutRail);
 // and in storage, and the same control opens them again. Something new
 // arriving is worth showing, so it opens by itself.
 function setChatOpen(open) {
-  // One press puts away everything the assistant is currently showing — the
-  // turns and the cards in the rail — because two × in two places for one
-  // idea is two presses to get a clean screen. Nothing is discarded: the
-  // findings and their marks are still there, and clicking a mark builds its
-  // card again. The composer stays: it is how the writer talks to the draft
-  // at all.
+  // One surface: closing hides the stream and nothing else. Turns, remark
+  // cards, undecided options and Undo all stay exactly where they were, so
+  // reopening shows the same panel — closing never discards or retires
+  // anything behind your back. The composer stays: it is how the writer
+  // talks to the draft at all.
   // The toggle is its own right-aligned row above the stream (see .chat-clear)
   // — in normal flow, never overlapping cards or the composer, so it takes
   // a layout row and never scrolls away with a long stream.
@@ -1616,21 +1693,9 @@ function setChatOpen(open) {
   chatClear.textContent = open ? '×' : 'Conversation';
   chatClear.setAttribute('aria-label', open ? 'Close the conversation' : 'Show the conversation');
   chatClear.title = open ? 'Close — nothing is discarded' : 'Show the conversation';
-  if (open) { chatClear.hidden = false; chatScroll(true); return; }
+  if (open) { chatClear.hidden = false; chatScroll(true, true); return; }
   chatStream.hidden = true;
-  detach();   // ends an open hover preview with it
-  // Applied options live inside rail cards now. Before the cards go away,
-  // move the kept ones into the stream so their Undo survives the close —
-  // the same guarantee the stream always had.
-  for (const card of findingCards.values()) {
-    const kept = card.querySelector('.chat-variants:has(.variant-card.is-applied)');
-    if (kept) streamAppend(kept);
-  }
-  discardFindingCards();
-  // Applied options stay in the chat with their Undo; everything undecided goes.
-  for (const stale of document.querySelectorAll('.chat-variants')) {
-    if (!stale.querySelector('.variant-card.is-applied')) stale.remove();
-  }
+  clearPlainPreview();   // a hover preview must not outlive the panel
   // The toggle only makes sense while the stream holds something to show —
   // otherwise ×/Conversation sits above an empty panel and reads as broken.
   chatClear.hidden = chatStream.children.length === 0;
@@ -1810,6 +1875,27 @@ function showSelectionBubble(x, y) {
   placeBubble(x, y);
 }
 
+// A dictionary miss offers direct replacements — no model call, no card, the
+// fix is already known. Suggestions are computed on click, not while typing:
+// nspell's suggest() does an edit-distance search, correct() alone does not.
+function showSpellBubble(marker, x, y) {
+  bubbleMode = 'spell';
+  const actions = chatEl('div', 'mark-bubble-actions');
+  const replace = suggestion => {
+    if (workView.state.sliceDoc(marker.from, marker.to) !== marker.quote) return;
+    workView.dispatch({ changes: { from: marker.from, to: marker.to, insert: suggestion }, userEvent: 'input.spellfix' });
+  };
+  for (const suggestion of (spellChecker?.suggest(marker.quote) ?? []).slice(0, 5)) {
+    actions.append(bubbleButton(suggestion, () => replace(suggestion)));
+  }
+  actions.append(bubbleButton('Ignore', () => {
+    spellChecker?.add(marker.quote);
+    workView.dispatch({ effects: refreshSpellFx.of(null) });
+  }));
+  markBubble.replaceChildren(actions);
+  placeBubble(x, y);
+}
+
 // ── Rewrite variants (cards, 0.2 style) ───────────────────────────────────────
 //
 //  Three options in the chat, not a try-on in the draft. Clicking a card
@@ -1898,13 +1984,15 @@ function clearPlainPreview() {
 
 function applyText(text, target, wrap = null, card = null) {
   if (!replacementTarget(workView.state.doc.toString(), target) || workView.state.readOnly) {
+    markVariantTarget(null);
     chatAdd(chatEl('div', 'chat-error', 'The draft changed since this answer. Select the passage and request new options.'));
     return;
   }
   const range = target;
   // One transaction: the preview decoration comes off in the same redraw that
   // lands the new text, so there is no intermediate frame flashing the old
-  // passage back. The flash marks what changed for the eye that follows.
+  // passage back. The flash marks what changed for the eye that follows,
+  // and the decided-target mark goes with the same redraw.
   plainPreview = null;
   saveSnapshot('Before AI replacement');
   workView.dispatch({
@@ -1912,6 +2000,7 @@ function applyText(text, target, wrap = null, card = null) {
     selection: { anchor: range.from + text.length },
     effects: [
       setPlainVariantFx.of(null),
+      setVariantTargetFx.of(null),
       setFlashFx.of({ from: range.from, to: range.from + text.length }),
     ],
   });
@@ -1923,87 +2012,48 @@ function applyText(text, target, wrap = null, card = null) {
   // First kept option: the writer now knows hover-to-preview and click-to-
   // apply, so later groups skip the usage hint.
   try { localStorage.setItem('wa-variant-hint', 'seen'); } catch {}
-  // Only the kept option stays; the rest point at a range that no longer
-  // exists, so they step aside entirely. Inside a finding card the kept
-  // option stays where it was chosen — beside the changed passage — with
-  // its Undo. In the stream the kept card is the confirmation, so the chat
-  // stays open on it instead of closing behind it.
+  // Decided options step aside at once; undecided ones point at a range that
+  // no longer exists. Inside a finding card the buttons go immediately while
+  // the remark itself stays standing with its Undo. In the stream the kept
+  // card is the confirmation, so the chat stays open on it instead of
+  // closing behind it.
   if (card) card.classList.add('is-applied');
   if (wrap) {
     wrap.classList.add('is-spent');
-    for (const sibling of wrap.querySelectorAll('.variant-card')) {
-      if (sibling !== card) sibling.hidden = true;
-    }
-    const foot = wrap.querySelector('.variant-foot');
-    if (foot) foot.hidden = true;
-    const soloHint = wrap.querySelector(':scope > .variant-hint');
-    if (soloHint) soloHint.hidden = true;
     attachUndo(card, text, target);
     const hostCard = wrap.closest('.chat-card');
     if (hostCard && findingCards.has(Number(hostCard.dataset.findingId))) {
-      // Re-anchor the remark to the new text so it keeps standing against
-      // the passage it just changed, then let the flash confirm. The remark
-      // is resolved: the card lingers just long enough to Undo, then steps
-      // aside by itself (see scheduleAppliedHide).
-      railAnchors.set(hostCard, () => target.from);
+      const findingId = Number(hostCard.dataset.findingId);
+      // Decided at once: the other buttons go immediately, while the applied
+      // option stays visible on the remark with its Undo. The remark chrome
+      // stays too — only further actions go, decided ones take none.
+      for (const sibling of wrap.querySelectorAll('.variant-card')) {
+        if (sibling !== card) sibling.hidden = true;
+      }
+      const foot = wrap.querySelector('.variant-foot');
+      if (foot) foot.hidden = true;
+      const soloHint = wrap.querySelector(':scope > .variant-hint');
+      if (soloHint) soloHint.hidden = true;
+      hostCard.querySelector('.finding-actions')?.remove();
+      railAnchors.delete(hostCard); railHomes.delete(hostCard);
+      // The finding is answered: drop it from the lists (its mark already
+      // went with the edit) and refresh the counts. The card itself stays.
+      if (findingId === -1) localFinding = null;
+      else {
+        reviewFindings = reviewFindings.filter(finding => finding.id !== findingId);
+        try { workView.dispatch({ effects: dropReviewFx.of(findingId) }); } catch {}
+        if (focusedFindingId === findingId) { focusedFindingId = null; syncActiveCard(); }
+      }
+      saveFindings();
+      syncReviewLabel();
+      syncStyleScore();
       layoutRail();
-      scheduleAppliedHide(hostCard, Number(hostCard.dataset.findingId));
     } else {
       // No host card: the kept option in the stream is the whole
       // confirmation — keep it on screen with its Undo.
       setChatOpen(true);
     }
   }
-}
-
-// A resolved remark steps aside by itself: after an option is applied the
-// card lingers just long enough to Undo, then goes away without a click.
-// The Undo on the kept card stays timer-free while it is on screen — hiding
-// only ever removes the card, never the way back before its time.
-const APPLIED_HIDE_MS = 6000;
-const appliedHideTimers = new Map();   // finding id → timeout
-function scheduleAppliedHide(hostCard, id) {
-  clearTimeout(appliedHideTimers.get(id));
-  appliedHideTimers.set(id, setTimeout(() => {
-    const card = findingCards.get(id);
-    if (!card || !card.isConnected) { appliedHideTimers.delete(id); return; }
-    // Never yank it from under the cursor or keyboard focus — wait it out.
-    if (card.matches(':hover') || card.contains(document.activeElement)) {
-      scheduleAppliedHide(card, id);
-      return;
-    }
-    appliedHideTimers.delete(id);
-    resolveFinding(id);
-  }, APPLIED_HIDE_MS));
-}
-
-// The applied option fixed the passage: drop the remark, its mark and its
-// card, quietly — the flash already confirmed the change, and no toast is
-// owed for doing what was asked.
-function resolveFinding(id) {
-  clearTimeout(appliedHideTimers.get(id));
-  appliedHideTimers.delete(id);
-  if (id === -1) {
-    removeLocalFinding();
-    saveFindings();
-    syncReviewLabel();
-    syncStyleScore();
-    updateFindingNav();
-    layoutRail();
-    return;
-  }
-  reviewFindings = reviewFindings.filter(finding => finding.id !== id);
-  const card = findingCards.get(id);
-  if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); }
-  findingCards.delete(id);
-  try { workView.dispatch({ effects: dropReviewFx.of(id) }); } catch {}
-  if (focusedFindingId === id) { focusedFindingId = null; syncActiveCard(); }
-  saveFindings();
-  syncReviewLabel();
-  syncStyleScore();
-  updateFindingNav();
-  layoutRail();
-  if (chatStream.children.length === 0) setChatOpen(false);
 }
 // The way back lives on the kept card itself, with no timer: it puts back
 // exactly what was replaced and only while it is still there to put back —
@@ -2019,12 +2069,6 @@ function attachUndo(card, text, target) {
     undo.type = 'button';
     undo.title = 'Put the passage back as it was';
     undo.addEventListener('click', () => {
-      // Undoing reopens the question — cancel the auto-hide the apply armed.
-      const host = undo.closest('.chat-card');
-      if (host?.dataset.findingId !== undefined && host.dataset.findingId !== '') {
-        clearTimeout(appliedHideTimers.get(Number(host.dataset.findingId)));
-        appliedHideTimers.delete(Number(host.dataset.findingId));
-      }
       const at = Number(undo.dataset.from);
       const { applied, previous } = undo.dataset;
       if (!undo.isConnected || undo.dataset.stale || workView.state.sliceDoc(at, at + applied.length) !== applied) {
@@ -2036,15 +2080,17 @@ function attachUndo(card, text, target) {
       save();
       const spentWrap = undo.closest('.chat-variants');
       const hostCard = undo.closest('.chat-card');
-      spentWrap?.remove();
+      fadeRemove(spentWrap);
+      syncVariantTarget();
       // An undone rail card remarked on text that is back to its original
       // wording but no longer marked — put it away rather than leave an
-      // empty remark standing beside the line.
-      if (hostCard && hostCard.dataset.findingId && !hostCard.querySelector('.chat-variants')) {
+      // empty remark standing beside the line. The fading wrap still counts
+      // as present until it detaches.
+      if (hostCard && hostCard.dataset.findingId && !hostCard.querySelector('.chat-variants:not(.is-leaving)')) {
         const hostId = Number(hostCard.dataset.findingId);
         railAnchors.delete(hostCard); railHomes.delete(hostCard);
         findingCards.delete(hostId);
-        hostCard.remove();
+        fadeRemove(hostCard);
         refocusAfterRemoval(hostId);
       }
       layoutRail();
@@ -2075,10 +2121,9 @@ function syncActiveCard() {
   for (const [id, card] of findingCards) {
     const isFocused = id === focused;
     card.classList.toggle('is-active', isFocused);
-    // Single-card rail: only the focused remark stands beside the draft.
-    // The rest keep their marks in the text — the marks are the navigation —
-    // and take no rail space until clicked. Without a rail the same rule
-    // applies to the stream: one card visible, not a stack.
+    // No rail, no single-card rule: remarks stack in the stream, all visible.
+    // The marks in the draft stay the navigation; the focused one only gets
+    // the firmer edge.
     const finding = reviewFindings.find(item => item.id === id);
     if (finding) {
       railAnchors.set(card, () => {
@@ -2087,13 +2132,8 @@ function syncActiveCard() {
         return findingRange(id)?.from ?? null;
       });
     }
-    if (!railOn && card.isConnected && card.parentElement === chatStream) {
-      card.style.display = (focused === null || isFocused) ? '' : 'none';
-    } else {
-      card.style.display = '';
-    }
+    card.style.display = '';
   }
-  updateFindingNav();
   layoutRail();
 }
 
@@ -2114,22 +2154,7 @@ function findingCard(finding, instruction) {
   card.dataset.findingId = String(finding.id);
   card.addEventListener('mouseenter', () => markFor(finding.id)?.classList.add('is-hot'));
   card.addEventListener('mouseleave', () => markFor(finding.id)?.classList.remove('is-hot'));
-  // Single-card rail: the marks in the draft are the overview, this card is
-  // the focused one. The header names where it stands so the writer never
-  // wonders how many remarks are waiting.
-  const nav = chatEl('div', 'finding-nav');
-  const prev = chatEl('button', 'finding-nav-btn', '‹');
-  prev.type = 'button';
-  prev.title = 'Previous finding (Shift+F8)';
-  prev.setAttribute('aria-label', 'Previous finding');
-  prev.addEventListener('click', () => jumpToNextFinding(-1));
-  const count = chatEl('span', 'finding-nav-count', '');
-  const next = chatEl('button', 'finding-nav-btn', '›');
-  next.type = 'button';
-  next.title = 'Next finding (F8)';
-  next.setAttribute('aria-label', 'Next finding');
-  next.addEventListener('click', () => jumpToNextFinding(1));
-  nav.append(prev, count, next);
+  // The card opens on the remark itself: pattern, why it matters, what to do.
   const dismiss = chatEl('button', 'chat-card-dismiss', 'Keep as is');
   dismiss.type = 'button';
   dismiss.title = 'Keep this wording and dismiss the finding';
@@ -2139,12 +2164,10 @@ function findingCard(finding, instruction) {
     dismissFinding(finding.id);
   });
   card.append(
-    nav,
     chatEl('strong', '', finding.pattern),
     chatEl('span', '', finding.reason),
     chatEl('small', '', finding.fix),
   );
-  if (finding.id === -1) nav.hidden = true;
 
   // Alternatives are offered, not spent on a click. Reading the remark and
   // fixing the sentence yourself is a complete outcome. There is one scope —
@@ -2186,21 +2209,7 @@ function findingCard(finding, instruction) {
   // in the bottom stream. The stream stays for conversation about the draft.
   const variantsBox = chatEl('div', 'finding-variants');
   card.append(actions, variantsBox);
-  updateFindingNav();
   return card;
-}
-
-// Names the focused card's place among the live findings: "2 of 5".
-// Lives on every card so a refocused card already reads correctly.
-function updateFindingNav() {
-  const live = reviewFindings.map(finding => ({ finding, range: findingRange(finding.id) })).filter(item => item.range)
-    .sort((a, b) => a.range.from - b.range.from || a.finding.id - b.finding.id);
-  for (const [id, card] of findingCards) {
-    const count = card.querySelector('.finding-nav-count');
-    if (!count) continue;
-    const index = live.findIndex(item => item.finding.id === id);
-    count.textContent = live.length ? `${index >= 0 ? index + 1 : '–'} of ${live.length}` : '';
-  }
 }
 
 // ── Variant cards ──
@@ -2231,9 +2240,8 @@ function variantCards(variants, instruction, target, card = null) {
     item.tabIndex = 0;
     item.setAttribute('role', 'button');
     item.setAttribute('aria-label', `Apply option ${index + 1}`);
-    const label = chatEl('div', 'variant-label', `Option ${index + 1}`);
     const body = chatEl('div', 'variant-text', text);
-    item.append(label, body);
+    item.append(body);
     const previewIt = () => {
       if (wrap.classList.contains('is-spent')) return;
       if (!replacementTarget(workView.state.doc.toString(), target)) return;
@@ -2326,8 +2334,8 @@ function restoreFindingCard(card) {
 // options plus the error beat an error alone. Groups now live both in the
 // stream (selections, /idea) and inside finding cards, so retire across both.
 function retireStaleVariants(except) {
-  for (const stale of document.querySelectorAll('.chat-variants:not(.is-spent):not(.is-loading)')) {
-    if (stale !== except) stale.remove();
+  for (const stale of document.querySelectorAll('.chat-variants:not(.is-spent):not(.is-loading):not(.is-leaving)')) {
+    if (stale !== except) fadeRemove(stale);
   }
   layoutRail();
 }
@@ -2336,8 +2344,9 @@ function showVariants(variants, instruction, target) {
   const wrap = variantCards(variants, instruction, target);
   retireStaleVariants(wrap);
   chatAdd(wrap);
-  // Keep the passage in view while the writer decides; the attached tint plus
-  // hover previews do the rest.
+  markVariantTarget(target);
+  // Keep the passage in view while the writer decides; the dashed target
+  // mark plus hover previews do the rest.
   try { workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: 'center' }) }); } catch {}
 }
 
@@ -2353,6 +2362,7 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
   if (!await ensureAgent()) return;
   if (!replacementTarget(workView.state.doc.toString(), target)) return;
   clearPlainPreview();
+  markVariantTarget(null);   // a new decision supersedes the marked one
   // Finding options open inside their own card. Selections and style markers
   // have no card and keep the stream path.
   const inCard = !!(card && card.isConnected && card.querySelector('.finding-variants'));
@@ -2393,6 +2403,10 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
       const done = card.querySelector('.chat-offer:disabled');
       if (done) { done.disabled = false; done.textContent = 'Options'; }
       layoutRail();
+      markVariantTarget(target);
+      // The options may land above the fold — glide them into view (nearest:
+      // no scrolling when they are already fully visible).
+      scrollToNode(wrap);
       try { workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: 'center' }) }); } catch {}
     } else {
       // The chat may have been closed while the answer was in flight. A detached
@@ -2400,15 +2414,17 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
       // of losing them silently.
       if (placeholder.isConnected) { placeholder.replaceWith(wrap); chatScroll(stick); }
       else { placeholder.remove(); chatAdd(wrap); }
+      markVariantTarget(target);
     }
   } catch (error) {
-    if (error.name === 'AbortError') { placeholder.remove(); if (card) restoreFindingCard(card); else layoutRail(); return; }
+    if (error.name === 'AbortError') { placeholder.remove(); if (card) restoreFindingCard(card); else layoutRail(); syncVariantTarget(); return; }
     console.error('[/rewrite]', error);
     // Nothing came back; the remark is what the card has to say.
     placeholder.remove();
+    syncVariantTarget();
     if (!inCard) restoreFindingCard(card);
     const err = errorCard(modelError(error), () => requestVariants(instruction, target, card));
-    if (inCard) { box.append(err); restoreFindingCard(card); }
+    if (inCard) { box.append(err); restoreFindingCard(card); scrollToNode(err); }
     else chatAdd(err);
   } finally { finishJob(job); if (chatAbort === job) chatAbort = null; }
 }
@@ -2722,29 +2738,26 @@ const editorTheme = EditorView.theme({
 
   // The attached passage. Survives losing focus, unlike a native selection —
   // that is the only job this mark has for a plain selection, which carries
-  // no marking of its own.
+  // no marking of its own. A background wash: underlines belong to errors
+  // (dictionary, typos) and are never used for working states.
   '.cm-attached': {
     background: 'var(--attached-tint)',
     borderRadius: '3px',
     boxShadow: '0 0 0 2px var(--attached-tint)',
   },
 
-  // A finding already carries its own warm band. The attachment still needs a
-  // visible mark of its own — transparent here meant an open finding showed
-  // nothing of the working state — so it draws a blue underline over the band
-  // instead of a second fill. Tracking the live position is unchanged: that is
-  // what lets an edit end the attachment.
+  // Over a finding two washes would merge into one unreadable stain, so the
+  // attachment keeps a thin accent edge here on top of its wash — the single
+  // outlined exception, and only over findings. Tracking the live position
+  // is unchanged: that is what lets an edit end the attachment.
   '.cm-attached.cm-attached-finding': {
-    background: 'transparent',
-    borderRadius: '2px',
-    boxShadow: 'inset 0 -2px 0 var(--accent)',
+    background: 'var(--attached-tint)',
+    borderRadius: '3px',
+    boxShadow: '0 0 0 2px var(--attached-tint), 0 0 0 3.5px var(--accent)',
   },
 
-  // A quiet amber band, not a spell-checker's wavy red and not a blue
-  // selection. Findings run over whole clauses here, and a wave under three
-  // lines of prose reads as an error the writer must clear rather than a
-  // remark they may weigh. Blue stays reserved for what the writer does:
-  // selection, attachment, suggestion.
+  // Model findings read as a background band. The wavy underline is reserved
+  // for errors (local dictionary, typos) — findings never underline.
   '.cm-slop': {
     background: 'var(--remark-tint)',
     borderRadius: '2px',
@@ -2755,14 +2768,24 @@ const editorTheme = EditorView.theme({
 
   '.cm-slop:hover': { background: 'var(--remark-tint-hover)' },
 
-  // Hover preview of a variant: a plain white sheet over the passage, no
-  // colours. The attached tint stays underneath for the passage itself; this
-  // replace decoration only shows while a card is hovered or focused.
+  // The passage whose variants are currently open: a dashed accent outline
+  // with a faint wash — the only dashed mark in the draft, reading as
+  // "deciding here". Paints over the attachment wash when they coincide;
+  // hover previews paint over everything while they last.
+  '.cm-variant-target': {
+    background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+    borderRadius: '3px',
+    outline: '1.5px dashed var(--accent)',
+    outlineOffset: '3px',
+  },
+
+  // Hover preview of a variant: the same white sheet, but dashed — a sketch
+  // of the text, not the text. Only shows while a card is hovered or focused.
   '.cm-variant-plain': {
     background: 'var(--overlay)',
     borderRadius: '2px',
     boxShadow: '0 0 0 2px var(--overlay)',
-    borderBottom: '1px solid var(--border-strong)',
+    border: '1px dashed var(--accent)',
   },
 
   // Slightly dim the content while /idea is streaming
@@ -2834,13 +2857,21 @@ const workView = new EditorView({
 
       // Standard text-editing and history keymaps
       keymap.of([...searchKeymap, ...historyKeymap, ...defaultKeymap]),
-      EditorView.contentAttributes.of({ 'aria-label': 'Draft editor', 'aria-describedby': 'suggest-shortcut' }),
+      // Native spellcheck: free red squiggly + right-click suggestions from
+      // the OS/browser dictionary. Autocorrect/autocapitalize stay off — a
+      // silent rewrite is not what "quick fix" means here.
+      EditorView.contentAttributes.of({
+        'aria-label': 'Draft editor', 'aria-describedby': 'suggest-shortcut',
+        spellcheck: 'true', autocorrect: 'off', autocapitalize: 'off',
+      }),
 
       // Ghost text state + decoration provider
       ghostField,
       reviewField,
       styleMarkerField,
+      spellMarkerField,
       attachField,
+      variantTargetField,
       variantPlainField,
       flashField,
 
@@ -2872,6 +2903,9 @@ const workView = new EditorView({
           const at = { x: event.clientX, y: event.clientY };
           const mark = event.target.closest?.('.cm-slop');
           if (!mark) {
+            const spellLocal = event.target.closest?.('.cm-spell-marker');
+            const spellMarker = spellLocal && view.state.field(spellMarkerField).find(item => item.from === Number(spellLocal.dataset.spellFrom));
+            if (spellMarker) { showSpellBubble(spellMarker, at.x, at.y); return false; }
             const local = event.target.closest?.('.cm-style-marker');
             const marker = local && view.state.field(styleMarkerField).find(item => item.from === Number(local.dataset.styleFrom));
             // Reading the reason arms nothing — the bubble holds Add to
@@ -2961,6 +2995,13 @@ const workView = new EditorView({
 
   parent: editorWrap,
 });
+
+// The dictionary is a couple hundred KB; fetch it once in the background and
+// mark whatever is already on the page as soon as it lands.
+loadSpellDictionary().then(spell => {
+  spellChecker = spell;
+  workView.dispatch({ effects: refreshSpellFx.of(null) });
+}).catch(() => {});
 
 // ─── Persist ───────────────────────────────────────────────────────────────────
 

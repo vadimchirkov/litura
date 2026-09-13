@@ -183,15 +183,18 @@ const MIME = {
   '.svg':   'image/svg+xml',
   '.woff2': 'font/woff2',
   '.woff':  'font/woff',
+  '.aff':   'text/plain; charset=utf-8',
+  '.dic':   'text/plain; charset=utf-8',
 };
 
 function serveStatic(res, filePath) {
   const ext  = path.extname(filePath);
   const mime = MIME[ext] || 'text/plain';
-  // Fonts never change under a given name; the bundle changes with every
-  // update, and a tab holding a stale app.js against a new server is the
-  // classic post-upgrade bug. Revalidate it on each load.
-  const cache = ext === '.woff2' ? 'public, max-age=31536000, immutable' : 'no-cache';
+  // Fonts and the spelling dictionary never change under a given name; the
+  // bundle changes with every update, and a tab holding a stale app.js
+  // against a new server is the classic post-upgrade bug. Revalidate it on
+  // each load.
+  const cache = ['.woff2', '.aff', '.dic'].includes(ext) ? 'public, max-age=31536000, immutable' : 'no-cache';
   try {
     const data = fs.readFileSync(filePath);
     res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': cache });
@@ -326,6 +329,10 @@ async function handleRequest(req, res) {
     else if (url.pathname.startsWith('/fonts/')) {
       const fontFile = path.basename(url.pathname);
       serveStatic(res, path.join(PUBLIC, 'fonts', fontFile));
+    }
+    else if (url.pathname.startsWith('/dictionary/')) {
+      const dictFile = path.basename(url.pathname);
+      serveStatic(res, path.join(PUBLIC, 'dictionary', dictFile));
     }
     else { res.writeHead(404); res.end('Not found'); }
     return;

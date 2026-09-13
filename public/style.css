@@ -416,6 +416,10 @@ html, body {
    draft are the overview — so one card gets the full width and the options
    open inside it, beside the passage they would replace. Only the card
    takes clicks — the margin below it still belongs to the editor. */
+/* The rail is retired: remarks stack in the chat stream at every width.
+   Belt and suspenders — the element stays hidden even if something unhides
+   it — until the panel and its styles are deleted outright. */
+#rail { display: none !important; }
 .rail {
   position: absolute;
   top: 48px;
@@ -486,18 +490,6 @@ html, body {
 .mark-bubble-seg:only-child { border-radius: var(--r-pill); }
 
 #rail .chat-offer { margin-top: 7px; padding: 3px 10px; font-size: 12px; }
-
-/* Single-card navigation: the marks are the list, this names the place. */
-.finding-nav { display: flex; align-items: center; gap: 4px; margin: -2px 0 4px; color: var(--muted); font-size: 12px; }
-.finding-nav-count { flex: 1 1 auto; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.finding-nav-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 28px; min-height: 28px; padding: 0 6px;
-  border: 1px solid transparent; border-radius: var(--r-sm);
-  background: none; color: var(--text-2); font: inherit; font-size: 14px; line-height: 1;
-  cursor: pointer;
-}
-.finding-nav-btn:hover { background: var(--surface-3); color: var(--text); }
 
 /* Options live inside the remark they belong to. */
 .finding-variants { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
@@ -605,14 +597,23 @@ html, body {
 .style-score:hover .style-score-count { background: var(--fill-hover); color: var(--text); }
 .style-score-count[hidden] { display: none; }
 
-/* Local dictionary marks stay distinct from contextual review findings. */
+/* Local dictionary marks: the only wavy underline besides real typos (which
+   read danger). Nothing else in the draft underlines — findings and working
+   states are backgrounds. */
 .cm-style-marker {
-  text-decoration: underline dotted var(--muted);
+  text-decoration: underline wavy var(--muted);
   text-underline-offset: 4px;
   text-decoration-thickness: 1px;
   cursor: pointer;
 }
 .cm-style-marker:hover { background: var(--surface-3); }
+.cm-spell-marker {
+  text-decoration: underline wavy var(--danger);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+}
+.cm-spell-marker:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .style-details {
   position: fixed;
   inset: 56px 16px auto auto;
@@ -716,7 +717,6 @@ html, body {
 .chat-edit-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 /* Leads the action row: message left, buttons right. */
 .chat-edit-status { flex: 1 1 auto; min-width: 120px; margin: 0; font-size: 12px; color: var(--text-2); }
-.chat-edit-status.is-ok { color: var(--ok); font-weight: 600; }
 @media (pointer: coarse) { .review-action, .style-marker-jump { min-height: 44px; } }
 .style-details-note { margin: 0; padding: 10px 12px; color: var(--text-2); }
 /* One row per mark: the passage, then where it came from. The reason belongs
@@ -959,9 +959,23 @@ html, body {
   to   { opacity: 1; }
 }
 
+/* Plain turns have nothing to press, so they may rise a little as they land. */
+@keyframes chat-rise {
+  from { opacity: 0; translate: 0 6px; }
+  to   { opacity: 1; translate: 0 0; }
+}
+
+/* Soft way out, paired with fadeRemove(): fade first, detach after. */
+.is-leaving {
+  opacity: 0 !important;
+  transition: opacity .16s ease !important;
+  pointer-events: none !important;
+}
+
 .chat-message {
   padding: 10px 14px;
   border: 1px solid var(--border-subtle);
+  animation: chat-rise .22s var(--ease);
 }
 
 /* Your own words are already known — placement and fill say so, no quieter
@@ -1117,7 +1131,7 @@ html, body {
 .chat-offer:hover { background: var(--surface-2); }
 
 .chat-card strong { color: var(--text); font-size: 15px; font-weight: 600; }
-.chat-card small { color: var(--muted); font: inherit; }
+.chat-card small { font: inherit; }
 
 /* ── Composer ─────────────────────────────────────────── */
 
@@ -1357,20 +1371,6 @@ html, body {
   outline-offset: 2px;
 }
 
-.variant-label {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 5px;
-  color: var(--muted);
-  font-family: var(--ui-font);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-}
-
 .variant-text { color: var(--text); }
 
 /* Loading cards look like cards but take no clicks yet: a press on one would
@@ -1393,17 +1393,34 @@ html, body {
 
 .chat-variants.is-spent .variant-card.is-applied {
   opacity: 1;
-  border-left-color: var(--accent);
+  border-left-color: var(--ok);
 }
 
-.variant-card.is-applied .variant-label::after {
+/* One applied tag everywhere: micro caps, green. On option cards it heads
+   the receipt; on chat cards it closes the title line. */
+.variant-card.is-applied::before {
   content: 'applied';
-  margin-left: auto;
-  color: var(--accent);
-  font-weight: 500;
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: .06em;
   text-transform: uppercase;
 }
+.chat-edit-card.is-applied .chat-edit-title::after {
+  content: 'applied';
+  margin-left: auto;
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+/* The receipt's edge matches its tag. The chat card is unboxed, so it draws
+   a bar instead of a full border. */
+.chat-edit-card.is-applied { border-left: 2px solid var(--ok); padding-left: 12px; }
+.chat-edit-card.is-applied .chat-edit-title { display: flex; align-items: baseline; gap: 8px; }
 
 /* Footer: hint left (what hover/click do), Try again right. Quiet by design —
    three disliked options are a dead end without the button, but the button

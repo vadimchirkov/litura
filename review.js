@@ -84,7 +84,7 @@ const TELL_PHRASES = [
   [/(?:["“][^"”\n]{1,24}["”][\s,]*){3,}|\b[A-Z]{3,}(?:\s+[A-Z]{3,}){2,}\b/, 'Clustered emphasis can compete with the words themselves.', 'Reduce decorative emphasis while preserving names, actual quotations, and meaning.'],
 ];
 
-const WORD_RE = /\p{L}[\p{L}\p{N}'’-]*/gu;
+export const WORD_RE = /\p{L}[\p{L}\p{N}'’-]*/gu;
 
 // The word lists are English. On a Cyrillic or other non-Latin draft they would
 // report zero tells, so callers must not gate on a score that cannot see them.

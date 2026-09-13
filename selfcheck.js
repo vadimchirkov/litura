@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import nspell from 'nspell';
 import { clampThinkingLevel } from '@earendil-works/pi-ai';
 import { getAgentStatus } from './pi.js';
 import { renderMarkdown } from './markdown.js';
+import { spellingMarkers } from './spellcheck.js';
 import {
   completedSentences, findingContext, isLatinScript, locateFindings, markSelection, mergeReviewFindings,
   parseReviewResponse, parseVariants, selectionSlot, styleMarkers, styleMetrics, styleScore, trimOverlap,
@@ -174,6 +176,21 @@ assert.deepEqual(styleMetrics('Rent had doubled since 2019.').hits, []);
 // The word lists are English; a Cyrillic draft must not be mistaken for clean.
 assert.equal(isLatinScript('The bakery closed'), true);
 assert.equal(isLatinScript('Пекарня закрылась в марте'), false);
+
+// Spelling marks: real typos are flagged with exact offsets, clean prose and
+// all-caps acronyms are left alone, and a non-Latin draft is skipped entirely.
+{
+  const spell = nspell(
+    fs.readFileSync(new URL('./public/dictionary/en.aff', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('./public/dictionary/en.dic', import.meta.url), 'utf8'),
+  );
+  const marks = spellingMarkers('This sentnce has a typo, but NASA does not.', spell);
+  assert.deepEqual(marks.map(m => m.quote), ['sentnce']);
+  assert.equal(marks[0].from, 5);
+  assert.deepEqual(spellingMarkers('Clean prose with no errors here.', spell), []);
+  assert.deepEqual(spellingMarkers('Пекарня закрылась в марте', spell), []);
+  assert.deepEqual(spellingMarkers('any text', null), []);
+}
 
 // A restated tail is cut; an ordinary continuation is left alone.
 assert.equal(trimOverlap('Two hours later the queue', 'queue began draining'), ' began draining');
