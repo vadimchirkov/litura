@@ -1,14 +1,26 @@
 import { trimOverlap } from './review.js';
 
 // Shared by the HTTP route and the evaluation runner so they test the same task.
-export function suggestionPrompts({ document = '', cursor = document.length, context, style }) {
+//
+// `manual` is the writer pressing Continue rather than the debounce firing.
+// Silence is the right answer for something nobody asked for; for an explicit
+// press it reads as a broken button, so a finished sentence stops being a
+// reason to abstain. The grounding rules do not move — an asked-for
+// continuation may invent no more than an offered one.
+export function suggestionPrompts({ document = '', cursor = document.length, context, style, manual = false }) {
+  const thought = manual
+    ? 'Stay on the current thought; when it is already finished, open the next sentence its own line of thought calls for.'
+    : 'Stay on the last thought.';
+  const silence = manual
+    ? 'Return an empty text when the author\'s intent is unclear or continuing would require inventing a fact, source, number, experience or intention. A finished sentence is not itself a reason for silence — the writer asked for the next move.'
+    : 'Return an empty text when the thought is complete, the author\'s intent is unclear, or continuing would require inventing a fact, source, number, experience or intention. Silence is better than filler.';
   return {
     systemPrompt: [
       style ? `Follow this writing style guide:\n\n${style}` : '',
       `You are an inline writing assistant. Fill the cursor position without changing existing text.
-Match the draft's language, voice, vocabulary, rhythm and factual uncertainty. Stay on the last thought.
-Offer only the smallest useful continuation, at most 15 words. One to three words or just punctuation may be enough.
-Return an empty text when the thought is complete, the author's intent is unclear, or continuing would require inventing a fact, source, number, experience or intention. Silence is better than filler.
+Match the draft's language, voice, vocabulary, rhythm and factual uncertainty. ${thought}
+Let the continuation's length follow how well the material supports it, up to 15 words: a word or punctuation when that finishes the thought, a full clause or sentence when the draft or context clearly carries it further.
+${silence}
 Complete grammar, punctuation, an unfinished word, or a consequence directly supported by the supplied facts. Never choose a decision or next event for the author. If materially different completions are equally possible, abstain.
 Specific wording must come from the supplied material. Reuse the objects actually named by the author; do not introduce a more specific type of an object or an unstated way it works. When the existing words in a quotation form a complete phrase, close the quotation instead of inventing more quoted words.
 Do not invent evidence or claims, restate the draft, add generic conclusions, or repeat or contradict the text after the cursor.

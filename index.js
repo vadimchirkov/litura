@@ -542,20 +542,21 @@ async function handleRequest(req, res) {
 
     // POST /suggest — inline ghost-text suggestion (VS Code style)
     //
-    //  Request: { context, document, cursor }
+    //  Request: { context, document, cursor, manual }
     //  cursor is the character offset where the ghost text will appear.
+    //  manual marks a continuation the writer asked for, not one offered.
     //
     //  Returns: { suggestion: string }  — a short natural continuation
     //
     if (url.pathname === '/suggest') {
-      const { context, document: doc, cursor } = body;
+      const { context, document: doc, cursor, manual } = body;
 
       const at     = cursor ?? (doc ?? '').length;
       const prefix = (doc ?? '').slice(0, at);
 
       try {
         const suggestion = await completeText({
-          ...suggestionPrompts({ document: doc, cursor: at, context, style: readStyle() }),
+          ...suggestionPrompts({ document: doc, cursor: at, context, style: readStyle(), manual: !!manual }),
           selection: body.agent,
           continuation: true,
           signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),

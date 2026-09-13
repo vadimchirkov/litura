@@ -19175,8 +19175,8 @@
       empty2.hidden = matched.length > 0;
       if (count) count.textContent = !state.options.length ? "" : matched.length > shown.length ? `Showing ${shown.length} of ${matched.length}` : "";
     }
-    function reposition() {
-      if (!popover.matches(":popover-open")) return;
+    function reposition(force) {
+      if (!force && !popover.matches(":popover-open")) return;
       const box = trigger.getBoundingClientRect();
       const width = Math.max(box.width, 260);
       popover.style.left = `${Math.min(box.left, window.innerWidth - width - 8)}px`;
@@ -19184,7 +19184,9 @@
       popover.style.width = `${width}px`;
     }
     state.reposition = reposition;
-    trigger.addEventListener("click", reposition);
+    popover.addEventListener("beforetoggle", (event) => {
+      if (event.newState === "open") reposition(true);
+    });
     popover.addEventListener("toggle", (event) => {
       if (event.newState !== "open") return;
       search.value = "";
@@ -20042,7 +20044,7 @@
     suggestTimer = null;
     const view = workView;
     const state = view.state;
-    if (state.readOnly || loadingDocument || savePaused || !view.hasFocus || document.hidden || view.composing) return;
+    if (state.readOnly || loadingDocument || savePaused || !manual && !view.hasFocus || document.hidden || view.composing) return;
     if (!manual && !autoSuggestOn) return;
     if (!atParagraphEnd(state)) {
       if (manual) setReviewStatus("Place the caret at the end of a paragraph to request a continuation.", void 0, "suggest");
@@ -20058,11 +20060,11 @@
     if (/^\s*\/idea(?:\s|$)/i.test(line.text)) return;
     const version = suggestVersion;
     if (manual && !await ensureAgent()) return;
-    if (version !== suggestVersion || !view.hasFocus || !currentAgent()) return;
+    if (version !== suggestVersion || !manual && !view.hasFocus || !currentAgent()) return;
     const agent = currentAgent();
     const job = startJob({ background: !manual });
     suggestAbort = job;
-    const isCurrent = () => suggestAbort === job && !job.signal.aborted && version === suggestVersion && !loadingDocument && !savePaused && !document.hidden && view.hasFocus && !view.composing && !view.state.readOnly && (manual || autoSuggestOn) && view.state.doc === state.doc && view.state.selection.eq(state.selection) && JSON.stringify(currentAgent()) === JSON.stringify(agent);
+    const isCurrent = () => suggestAbort === job && !job.signal.aborted && version === suggestVersion && !loadingDocument && !savePaused && !document.hidden && (manual || view.hasFocus) && !view.composing && !view.state.readOnly && (manual || autoSuggestOn) && view.state.doc === state.doc && view.state.selection.eq(state.selection) && JSON.stringify(currentAgent()) === JSON.stringify(agent);
     if (manual) setReviewStatus("Suggesting\u2026", void 0, "suggest");
     try {
       const res = await fetch("/suggest", {
@@ -20071,7 +20073,8 @@
         body: JSON.stringify({
           document: doc2,
           cursor: pos,
-          agent
+          agent,
+          manual
         }),
         signal: job.signal
       });
@@ -20514,6 +20517,18 @@ ${message.content}`;
       const live = workView.state.selection.main;
       if (live.empty) return;
       attach({ from: live.from, to: live.to, text: workView.state.sliceDoc(live.from, live.to) }, null, true);
+    }));
+    markBubble.replaceChildren(actions);
+    placeBubble(x, y);
+  }
+  function showContinueBubble(x, y) {
+    bubbleMode = "continue";
+    const actions = chatEl("div", "mark-bubble-actions");
+    actions.append(bubbleButton("Continue", () => {
+      workView.focus();
+      cancelSuggestion();
+      ghostClear(workView);
+      void suggestFetch(true);
     }));
     markBubble.replaceChildren(actions);
     placeBubble(x, y);
@@ -21152,10 +21167,6 @@ Editing direction: ${activeFinding.fix}`,
     chatInput.closest(".chat-composer")?.classList.toggle("is-busy", busy);
     chatInput.placeholder = busy ? "Working\u2026" : basePlaceholder();
   }
-  document.getElementById("chat-rewrite").addEventListener("click", () => {
-    const range = attachedRange();
-    if (range) requestVariants(chatInput.value.trim() || "Make this passage clearer. Preserve meaning, facts and voice.");
-  });
   chatSendButton.addEventListener("click", () => {
     if ([...jobs].some((job) => !job.background)) {
       stopJobs();
@@ -21431,6 +21442,7 @@ Editing direction: ${activeFinding.fix}`,
               const local = event.target.closest?.(".cm-style-marker");
               const marker = local && view.state.field(styleMarkerField).find((item) => item.from === Number(local.dataset.styleFrom));
               if (marker) selectStyleMarker(marker);
+              else if (atParagraphEnd(view.state)) showContinueBubble(at.x, at.y);
               return false;
             }
             const finding = reviewFindings.find((item) => item.id === Number(mark.dataset.slopId));

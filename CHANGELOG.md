@@ -5,6 +5,12 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.4.2 — 2026-09-13
+
+- Clicking at the end of a paragraph now offers a Continue bubble, asking for the same continuation Cmd/Ctrl+Enter would. An explicit ask is allowed to open the next sentence and run longer than a background suggestion, instead of stopping at a finished thought.
+- Fixed the field popovers flashing at their previous position before snapping to the trigger.
+- Removed the unused standalone Rewrite button from the chat chip.
+
 ## 0.4.0 — 2026-09-13
 
 - Added spell checking. Misspelled words are marked in the editor using a vendored en_US Hunspell dictionary, checked client-side alongside the existing style-tell markers.

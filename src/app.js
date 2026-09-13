@@ -317,8 +317,8 @@ function combobox(trigger) {
   // The popover is positioned, not anchored: a scroll, resize or dialog move
   // after opening leaves it floating where the trigger was. Re-measure while
   // it is open so it follows the field instead.
-  function reposition() {
-    if (!popover.matches(':popover-open')) return;
+  function reposition(force) {
+    if (!force && !popover.matches(':popover-open')) return;
     const box = trigger.getBoundingClientRect();
     const width = Math.max(box.width, 260);
     popover.style.left = `${Math.min(box.left, window.innerWidth - width - 8)}px`;
@@ -327,7 +327,11 @@ function combobox(trigger) {
   }
   state.reposition = reposition;
 
-  trigger.addEventListener('click', reposition);
+  // beforetoggle is synchronous, before the first paint; toggle fires a task
+  // later, which is long enough to flash the popover at its default position.
+  popover.addEventListener('beforetoggle', event => {
+    if (event.newState === 'open') reposition(true);
+  });
   popover.addEventListener('toggle', event => {
     if (event.newState !== 'open') return;
     search.value = '';   // the search starts empty, never at the current answer
@@ -1285,7 +1289,10 @@ async function suggestFetch(manual = false) {
   suggestTimer = null;
   const view  = workView;
   const state = view.state;
-  if (state.readOnly || loadingDocument || savePaused || !view.hasFocus || document.hidden || view.composing) return;
+  // The focus guard keeps background suggestions from firing while the writer
+  // is elsewhere. An explicit ask is not background: the press itself may be
+  // what took focus out of the editor (a bubble button, the settings dialog).
+  if (state.readOnly || loadingDocument || savePaused || (!manual && !view.hasFocus) || document.hidden || view.composing) return;
   if (!manual && !autoSuggestOn) return;
   if (!atParagraphEnd(state)) {
     if (manual) setReviewStatus('Place the caret at the end of a paragraph to request a continuation.', undefined, 'suggest');
@@ -1305,13 +1312,13 @@ async function suggestFetch(manual = false) {
 
   const version = suggestVersion;
   if (manual && !await ensureAgent()) return;
-  if (version !== suggestVersion || !view.hasFocus || !currentAgent()) return;
+  if (version !== suggestVersion || (!manual && !view.hasFocus) || !currentAgent()) return;
   const agent = currentAgent();
 
   const job = startJob({ background: !manual });
   suggestAbort = job;
   const isCurrent = () => suggestAbort === job && !job.signal.aborted && version === suggestVersion
-    && !loadingDocument && !savePaused && !document.hidden && view.hasFocus && !view.composing
+    && !loadingDocument && !savePaused && !document.hidden && (manual || view.hasFocus) && !view.composing
     && !view.state.readOnly && (manual || autoSuggestOn)
     && view.state.doc === state.doc && view.state.selection.eq(state.selection)
     && JSON.stringify(currentAgent()) === JSON.stringify(agent);
@@ -1325,6 +1332,7 @@ async function suggestFetch(manual = false) {
         document: doc,
         cursor:   pos,
         agent,
+        manual,
       }),
       signal: job.signal,
     });
@@ -1870,6 +1878,21 @@ function showSelectionBubble(x, y) {
     const live = workView.state.selection.main;
     if (live.empty) return;
     attach({ from: live.from, to: live.to, text: workView.state.sliceDoc(live.from, live.to) }, null, true);
+  }));
+  markBubble.replaceChildren(actions);
+  placeBubble(x, y);
+}
+
+function showContinueBubble(x, y) {
+  bubbleMode = 'continue';
+  const actions = chatEl('div', 'mark-bubble-actions');
+  actions.append(bubbleButton('Continue', () => {
+    // The request reads the caret and refuses to run unless the editor holds
+    // focus; the click left it on the button, so take it back first.
+    workView.focus();
+    cancelSuggestion();
+    ghostClear(workView);
+    void suggestFetch(true);
   }));
   markBubble.replaceChildren(actions);
   placeBubble(x, y);
@@ -2600,11 +2623,6 @@ function syncSend() {
   chatInput.placeholder = busy ? 'Working…' : basePlaceholder();
 }
 
-document.getElementById('chat-rewrite').addEventListener('click', () => {
-  const range = attachedRange();
-  if (range) requestVariants(chatInput.value.trim() || 'Make this passage clearer. Preserve meaning, facts and voice.');
-});
-
 chatSendButton.addEventListener('click', () => {
   // The button stops only what it was showing: work the writer started.
   if ([...jobs].some(job => !job.background)) { stopJobs(); return; }
@@ -2911,6 +2929,10 @@ const workView = new EditorView({
             // Reading the reason arms nothing — the bubble holds Add to
             // context and Rewrite for when the writer decides.
             if (marker) selectStyleMarker(marker);
+            // Only where a continuation is even possible — the same spot
+            // Cmd/Ctrl+Enter already requires — so an ordinary click to fix a
+            // word mid-paragraph never raises the bubble.
+            else if (atParagraphEnd(view.state)) showContinueBubble(at.x, at.y);
             return false;
           }
           const finding = reviewFindings.find(item => item.id === Number(mark.dataset.slopId));
