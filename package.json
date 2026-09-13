@@ -1,6 +1,6 @@
 {
   "name": "litura-app",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "A local AI-assisted editor for sharper, more human writing",
   "keywords": [
     "writing",
@@ -35,6 +35,7 @@
     "review-prompt.js",
     "document-store.js",
     "editing.js",
+    "suggestions.js",
     "public",
     "style.md",
     "SPEC.md",
@@ -43,8 +44,15 @@
   "scripts": {
     "start": "node index.js",
     "build": "esbuild src/app.js --bundle --outfile=public/app.js --format=iife",
-    "check": "node --check index.js && node --check pi.js && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js && node safetycheck.js",
+    "build:server": "node scripts/build-server.mjs",
+    "desktop:prepare": "npm run build && npm run build:server && node scripts/fetch-node.mjs",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build",
+    "smoke:desktop": "node scripts/smoke-desktop.mjs",
+    "check": "node --check index.js && node --check pi.js && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js && node tests/suggestions.mjs && node safetycheck.js",
     "test:browser": "node tests/browser-fixture.mjs",
+    "check:suggestions": "node tests/suggestions.mjs",
+    "eval:suggestions": "node scripts/evaluate-suggestions.mjs",
     "check:deep": "node deepcheck.js",
     "prepublishOnly": "npm run build"
   },
@@ -53,6 +61,7 @@
     "@earendil-works/pi-coding-agent": "0.84.2"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.9.1",
     "codemirror": "^6.0.1",
     "esbuild": "^0.25.0"
   }

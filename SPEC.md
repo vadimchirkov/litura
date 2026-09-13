@@ -19,7 +19,7 @@ The product does not claim to determine whether text was written by AI. Its revi
 
 ```text
 +---------------------------------------------------------------+
-| Litura  draft.md v  saved        Slop Score 65  settings |
+| [logo]                        Style 3  settings |
 +---------------------------------------------------------------+
 |                                                               |
 |          WORKING DOCUMENT             | finding card        |
@@ -41,12 +41,11 @@ The current product has one working-document pane. There is no separate context 
 
 ### Header
 
-One row, and nothing in it spends a model call. Everything about the file is behind its name, the save status rides beside it, and the local score sits at the far end. The header is the frame the draft is read in.
+One row, and nothing in it spends a model call. Everything about the file is behind the logo, and the local score sits at the far end. The header is the frame the draft is read in — it carries no file name and no status line of its own.
 
-- `Litura` wordmark.
-- Document menu, labelled with the draft's file name: `Open a file…`, `Export a copy`, `History`.
-- Save status: `Saved`, `Saving…`, `Unsaved changes`, a save error, or a paused autosave after a conflict.
-- Local slop score, labelled `Slop Score`, when the draft is predominantly Latin script.
+- Logo button opening the document menu: `Open a file…`, `Export a copy`, `History`.
+- Save trouble — a save error, or a paused autosave after a conflict — is reported in the chat stream, where the writer is already reading. Routine saves are silent.
+- Local style signals, labelled `Style` with a count of marked passages, when the draft is predominantly Latin script. Hidden otherwise.
 - Settings button.
 
 The selected model is named in settings, not in the header: it is chosen rarely and read never.
@@ -55,13 +54,14 @@ Actions that spend a model call are not here: they live with the assistant, abov
 
 ### Rail
 
-The rail floats in the margin the centred text column already leaves empty, so the draft sits exactly where it sat before any card existed. It appears when that margin can hold a 240-pixel card and a gutter — measured from the text column's own padding, not assumed at a breakpoint — which is a window of about 1160 pixels or wider.
+The rail floats in the margin the centred text column already leaves empty, so the draft sits exactly where it sat before any card existed. It appears when that margin can hold a 300-pixel card and a gutter — measured from the text column's own padding, not assumed at a breakpoint.
 
-- A remark about a place in the draft lives there: finding cards, and the rewrite strip while options are being tried on. Without a rail the cards stack in the panel and the strip returns to the action row.
-- A card names the problem, why it is one, and the editing direction after an arrow. Hovering it lights the passage it belongs to; the open card gets a firmer border, no color, to stand out among its neighbours — what is attached is already named in the composer chip. The dismiss control appears on hover and on keyboard focus.
-- Each card is positioned against the passage it anchors to. Cards that would overlap are pushed down in document order; a card whose passage has scrolled out of view is hidden with its mark.
-- In a narrower window there is no rail and the same nodes stack in the panel instead. Crossing that width moves them; nothing is rebuilt or lost.
-- Only the cards take clicks. The empty margin around them still belongs to the editor.
+- A remark about a place in the draft lives there: the focused finding card, with its rewrite options opening inside it while they are being tried on. Without a rail the focused card lives in the panel instead.
+- Only one card stands in the rail at a time. The marks in the draft are the overview and the navigation: clicking one focuses its card, and `F8` and `Shift+F8` step through them in document order. The focused card names its place (`2 of 5`) with `‹` `›` controls.
+- A card names the problem, why it is one, and the editing direction after an arrow. Hovering it lights the passage it belongs to; the open card gets a firmer border, no color. The dismiss control appears on hover and on keyboard focus.
+- The card is positioned against the passage it anchors to; a card whose passage has scrolled out of view is hidden with its mark. A kept option re-anchors the card to the new text so the `Undo` stays beside what it would put back.
+- In a narrower window there is no rail and the focused card shows in the panel instead. Crossing that width moves it; nothing is rebuilt or lost.
+- Only the card takes clicks. The empty margin around it still belongs to the editor.
 
 The panel keeps what is about the draft as a whole: typed messages, replies, `Review draft`, review status, and the composer.
 
@@ -89,24 +89,24 @@ The panel keeps what is about the draft as a whole: typed messages, replies, `Re
 - One field, no mode control. What the message does is decided by what is attached: a passage the writer selected is a rewrite target, a finding is something to ask about, and nothing attached is a conversation about the draft. The placeholder says which of the three is active.
 - `Enter` sends; `Shift+Enter` inserts a newline.
 - `Escape` cancels an active request or detaches the current selection.
-- A single control above the stream closes what the assistant is showing and opens it again: `×` over an open conversation, `Conversation` over a closed one — and no control at all while the stream is empty, so the toggle never flips over an empty panel. One press puts away both the turns and the finding cards standing in the rail — two `×` in two places for one idea is two presses to get a clean screen. The composer is not part of it: it is how the writer talks to the draft at all, so it is always there.
+- A single control closes what the assistant is showing and opens it again: a `×` badge straddling the panel's top corner while open, `Conversation` over a closed one — and no control at all while the stream is empty, so the toggle never flips over an empty panel. One press puts away both the turns and the finding cards standing in the rail — two `×` in two places for one idea is two presses to get a clean screen. The composer is not part of it: it is how the writer talks to the draft at all, so it is always there.
 - Closing is a view, not an edit. The turns stay in memory and in storage, applied options stay with their `Undo`, and the findings and their marks stay in the draft — clicking a mark builds its card again. Remark cards and undecided option groups are put away. Anything new arriving opens the stream by itself, so a reply never lands somewhere the writer cannot see; merely moving cards between the rail and the stream on resize never opens it. There is no control that discards the conversation; replacing the document does that, and the server only ever reads the last 20 turns.
 - A failed model call is one short sentence naming the cause — a rejected key, a rate limit, an overloaded provider — and one button doing something about it. The sentence never carries the remedy as a second clause: `Try again` is the remedy. Where retrying cannot help there is no retry, and a key problem offers `Open settings` instead. The provider's payload goes to the tooltip and the console, where it is there for a bug report and nowhere else.
 
 ## 3. Writing workflows
 
-### 3.1 Local slop score
+### 3.1 Local style signals
 
-The browser computes a score from 0 to 100 using:
+The browser marks passages using:
 
 - known English AI-tell words and phrases;
 - sentence-length variation;
 - moving lexical diversity;
 - repeated three-word sequences.
 
-For passages shorter than 40 words or three sentences, only the lexical component is used. The score is hidden for predominantly non-Latin text because the word lists are English-specific. It is a heuristic, never sent to the model, and not an authorship probability.
+The header shows a count of marked passages — a number the writer can trace back to their own text — never a blended formula. The control is hidden for predominantly non-Latin text because the word lists are English-specific. The underlying heuristic is never sent to the model and is not an authorship probability; it quietly also ranks rewrite options best-first.
 
-Clicking it adds a card naming the matched tells as they appear in the draft, a line for each structural axis that reads badly, and what the number does not measure. A number the writer cannot trace back to their own text is only something to argue with.
+Clicking it opens a card naming each marked tell as it appears in the draft with its reason inline, plus rhythm notes only for structural axes that read badly. To rewrite a phrase, click its mark in the draft for the context and rewrite actions. A number the writer cannot trace back to their own text is only something to argue with.
 
 ### 3.2 Automatic review
 
@@ -137,7 +137,7 @@ The `Review draft` action clears current findings and audits the entire non-empt
 
 The prompt caps these at four words for `pattern` and twelve each for `reason` and `fix`: the card is read at a glance beside the draft, and a paragraph of explanation there is not read at all.
 
-Each returned quote is anchored to a non-overlapping occurrence in the current document. Findings appear as a quiet tinted band with a hairline under it — a remark to weigh, not a spell-checker's error to clear — and move with edits outside their ranges. Editing inside a range removes its mark. The attached passage uses the same tint one step stronger, so the two states never read alike.
+Each returned quote is anchored to a non-overlapping occurrence in the current document. Findings appear as a quiet amber band with a hairline under it — a remark to weigh, neither a spell-checker's error to clear nor a blue selection to act on — and move with edits outside their ranges. Editing inside a range removes its mark. The attached passage keeps a blue mark of its own: a tint for a plain selection, an underline over a finding's band, so the remark and the working attachment never read alike.
 
 A finding card carries a dismiss control. Dismissing removes the mark, the card, any alternatives requested for it, and cancels an in-flight request, so the counter only reports findings the author has not rejected.
 
@@ -149,33 +149,33 @@ single mandatory paragraph template.
 
 ### 3.4 Finding and selection rewrites
 
-A passage can be attached to the composer in three ways:
+A passage can be attached to the composer in three ways, all explicit:
 
-- click a review mark;
-- select text and open the context menu;
-- press `Cmd/Ctrl+K` with a selection.
+- the bubble's `Add to context` on a review mark, a style mark, or a text selection;
+- press `Cmd/Ctrl+K` with a selection;
+- the `Options` / rewrite action on a finding card or in the bubble.
 
-An attached passage is marked in the draft with a tinted highlight that survives the editor losing focus, and moves with edits like a review mark. A finding already carries its own mark, so clicking one keeps that mark's look rather than laying the selection tint over it — the tracking is the same either way, only a plain selection needs the tint to show anything at all. For the same reason the composer chip is for selections only, reading `Selected text`: a finding is named on its own card beside the line, and the placeholder says what the next message will do with it. A chip on top of that read as the sentence having been pulled into the composer, which is not what happened.
+Clicking a mark never attaches: reading a remark arms nothing. A click opens the finding's card (or the style mark's reason bubble) and places the caret where it was clicked, leaving the keyboard in the editor, so a marked sentence stays as editable as any other text. A real selection wins over the mark underneath it.
 
-Clicking a mark places the caret where it was clicked and leaves the keyboard in the editor, so a marked sentence stays as editable as any other text. `Cmd/Ctrl+K` and the context menu move focus to the composer instead, because both are explicit requests to instruct.
+An attached passage is marked in the draft with a tinted highlight that survives the editor losing focus, and moves with edits like a review mark. A finding already carries its own mark, so attaching one keeps that mark's look rather than laying the selection tint over it — the tracking is the same either way, only a plain selection needs the tint to show anything at all. The composer chip names what is attached: `Finding: <pattern>` or the selected text. The placeholder says what the next message will do with it.
 
 Editing inside the attached passage ends the attachment and cancels an in-flight rewrite: the author has taken the sentence over, and alternatives generated for the old wording no longer apply.
 
-Clicking any finding attaches exactly the passage its mark covers and shows its card. It makes no model request: the card carries a single `Options` control, and reading the remark and fixing the sentence by hand is a complete outcome. Clicking the same mark again returns to the card already in the stream rather than repeating the remark.
+Clicking any finding shows its card and offers a bubble with `Add to context` and `Suggest rewrites`. It makes no model request: the card carries a single `Options` control, and reading the remark and fixing the sentence by hand is a complete outcome. Clicking the same mark again returns to its card rather than repeating the remark.
 
 There is one replacement scope, and it is the quoted passage. The tint in the draft and the range a rewrite would replace are the same span, so a finding never silently rewrites more than it marked, and the card asks for nothing before it can be used. A structural finding names a problem with the paragraph around its quote; its rewrite still replaces the quote, and the whole document goes to the model as context. A change that has to move material between paragraphs is a conversation: typing in the composer with a finding attached opens one.
 
 For an ordinary selection, the next composer message becomes the rewrite instruction.
 
-The server returns exactly three strings, shown as a stack of option cards in the chat stream. Clicking a card replaces only the attached range; the remaining cards then retire. Requesting the options hides the finding card — it has said its piece — and a failed request brings it back. The group carries a refresh-icon `Try again` control that discards the three and re-requests them with the same instruction and the same attached passage.
+The server returns exactly three strings. For a finding they open as a stack of option cards inside its own card, beside the passage they would replace; for an ordinary selection they open as a stack in the chat stream. Clicking a card replaces only the attached range in a single redraw; the new passage flashes briefly so the eye lands on the change, and the remaining cards then retire. Only one undecided group stays up: fresh options retire earlier undecided ones, while applied ones keep their Undo. The group carries a refresh-icon `Try again` control that discards the three and re-requests them with the same instruction and the same attached passage.
 
-The client ranks what the model already produced by the resulting whole-document local score and shows that score delta on each card for Latin-script drafts. Colour marks only a material move; a point or two on an already-clean draft stays uncoloured so the options do not all read as bad. The score is never fed to the model.
+The client ranks what the model already produced best-first by the resulting whole-document local score, shown nowhere. The score is never fed to the model. The hover-to-preview hint shows once, until the first applied option; the Try again control always stays.
 
-While the options are up the attached passage stays highlighted in the draft, and hovering or focusing a card previews that option where it will live — substituted into the paragraph with the sentences around it, on a plain white sheet with no red/green diff. The document itself is untouched while the writer is choosing, so nothing is autosaved, no finding is re-anchored, and undo stays clean until the writer keeps one. `Enter` or `Space` on a focused card applies it; `Escape` dismisses the hover preview. Clicking into the draft only drops the hover preview — the cards stay, because choosing is a click on a card.
+While the options are up the attached passage stays highlighted in the draft, and hovering or focusing a card previews that option where it will live — substituted into the paragraph with the sentences around it, on a plain white sheet with no red/green diff. Moving between cards keeps the preview across a short delay, so the gaps between cards don't flicker it. The document itself is untouched while the writer is choosing, so nothing is autosaved, no finding is re-anchored, and undo stays clean until the writer keeps one. `Enter` or `Space` on a focused card applies it; `Escape` dismisses the hover preview. Clicking into the draft only drops the hover preview — the cards stay, because choosing is a click on a card.
 
 A coloured word-level diff (added/removed runs animated in reading order, via `wordDiff`) is deliberately not on this path. It is kept in the tree as a noted option for another place (e.g. history compare), where showing what changed word by word is the job.
 
-Keeping an option leaves only that option in the chat — the other cards step aside — with a single `Undo` on the kept card itself, with no timer: it stays good until the passage changes under it. `Undo` puts back exactly what was replaced and only while it is still there to put back; keeping also takes a History snapshot, which is the longer way back. Choosing an option closes the chat stream; the kept card and its `Undo` survive in the stream history. Closing discards remark cards and undecided option groups but keeps applied ones. Nothing commits on a timer.
+Keeping an option leaves only that option — the other cards step aside — with a single `Undo` on the kept card itself, with no timer: it stays good until the passage changes under it. `Undo` puts back exactly what was replaced and only while it is still there to put back; keeping also takes a History snapshot, which is the longer way back. A kept finding option stays in its card beside the changed passage; a kept selection option stays in the stream history, and choosing it closes the chat stream. Closing discards remark cards and undecided option groups but keeps applied ones: kept finding options move into the stream so their `Undo` survives the close. Nothing commits on a timer.
 
 ### 3.5 Draft chat
 
@@ -195,12 +195,16 @@ After 900 milliseconds without typing, a suggestion may be requested when:
 - the selection is collapsed;
 - the caret is at the end of a paragraph or before a blank line;
 - the current line is not an `/idea` command.
+- the editor has focus, the page is visible, and composition is finished.
 
-A failed continuation says so in the status line rather than going quiet: a feature that fails in silence is indistinguishable from a broken one. The model returns a 5-15 word continuation. Known local tell words veto the result. A valid continuation appears in a block below the current line without entering the document.
+Only typing (including composition) starts this timer. Paste, deletion, Undo, Redo, loading a document and accepting an AI edit cancel pending suggestions without requesting another one.
+
+A failed continuation says so in the status line; the next successful request clears its error. The model may return an empty continuation when the thought is finished or continuing would invent facts or the author's intent. Non-empty output is a single line of at most 15 words; one word or punctuation alone is allowed. The provider returns `NONE`, `TEXT: …` for new words or punctuation, or `WORD: …` for missing letters, so prose quotation marks do not need JSON escaping. The HTTP response still uses `{ suggestion: string }`. Invalid output is reported as an error and never inserted. Spacing is applied at the insertion boundary; repeated tails are removed only at word boundaries. A valid continuation appears in a block below the current line, is announced to assistive technology, and does not enter the document until accepted.
 
 - `Tab`: insert the suggestion at its original cursor position.
-- `Escape`: dismiss it.
-- Typing or moving the cursor: dismiss it and cancel pending work.
+- `Escape`: dismiss it and cancel pending work, even before an answer arrives.
+- `Cmd/Ctrl+Enter`: request a continuation explicitly, including when automatic suggestions are off. This permits short non-empty drafts and reports when there is nothing useful to suggest.
+- Typing, changing the selection, leaving the editor, hiding the page, changing the model or pausing saves: dismiss or invalidate the suggestion and cancel pending work. An answer is displayed only for the same document, full selection, model and active request with the editor still focused.
 
 ### 3.7 `/idea` expansion
 
@@ -223,9 +227,9 @@ The settings dialog:
 - switches automatic review and continuation suggestions on or off, both on by default;
 - switches the npm update check on or off, on by default.
 
-The switches take effect immediately; the provider, model, and reasoning selection is applied by `Save`.
+All settings take effect immediately; there is no Save button.
 
-When no model is selected, the review, rewrite, and chat actions re-check Pi status once, then report the missing setup in the composer and open this dialog instead of failing silently. Automatic review and continuation suggestions stay silent and make no request.
+When no model is selected, the review, rewrite, chat, and manual-continuation actions re-check Pi status once, then report the missing setup in the composer and open this dialog instead of failing silently. Automatic review and continuation suggestions stay silent and make no request.
 
 ## 4. State and privacy
 
@@ -271,6 +275,25 @@ Every model-backed action sends the current full document to the selected provid
 - **Model runtime:** `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`.
 - **Streaming:** Server-Sent Events for `/idea` and `/chat`.
 - **Non-streaming:** JSON for status, credentials, review, rewrite, and suggestions.
+- **Desktop shell:** Tauri 2, a window and a menu around the same server.
+
+### Desktop shell
+
+The desktop app is a packaging of this server, not a second implementation. The Rust shell picks the writing folder, starts the server, points a window at it, and owns updates; documents, review, and model access stay where they already are. No Tauri JavaScript API reaches the page — the webview loads `http://127.0.0.1:<port>` like any browser would, which is why `src/app.js` is identical in both builds.
+
+The server is a Tauri sidecar: an official Node binary, fetched and checksummed at build time by `scripts/fetch-node.mjs`, running `dist/server.mjs` — `index.js` and its dependencies bundled into one file by `scripts/build-server.mjs`. The writer installs no runtime of their own.
+
+Three pieces of the contract between them are invisible from the browser, so `safetycheck.js` asserts them:
+
+- `PORT=0` lets the operating system pick, so a second copy of Litura is not a startup failure.
+- With `LITURA_SIDECAR` set the server prints `LITURA_READY <url>` on stdout. The shell waits for that line before it navigates the window, and opens no browser of its own.
+- The same flag makes the server exit when its stdin closes. A shell that dies takes its server with it instead of leaving one holding the draft's lock file.
+
+`LITURA_ROOT` tells the bundled server where `public/`, `package.json`, and `style.md` are, since the single-file bundle no longer sits beside them. Nothing else about the server changes.
+
+On macOS the window has no title bar of its own: the draft's header is the title bar, and the system's window buttons are drawn over it. The shell asks for the page with `?shell=desktop`, and an inline script in `index.html` turns that into a class the header uses to leave the buttons room — a query string rather than a header, so a reload keeps it. Windows and Linux keep their frame: dropping it there means reimplementing minimise, maximise, close, and window dragging, which would need Tauri's JavaScript API inside a page that is deliberately kept free of it.
+
+The folder choice is one line of text in the app's config directory (`folder.txt`), written when the writer picks a folder and read at every launch. `File → Open Folder…` writes it and restarts the app rather than teaching the server to switch files mid-session: a different draft is a different server.
 
 `npm start` bundles the frontend before starting the server in a source checkout. If the build fails, startup stops with an error. The published package has no `src/` directory and serves its bundled frontend without rebuilding. `public/app.js` is generated and should not be edited directly.
 
@@ -289,7 +312,17 @@ litura/
 |- selfcheck.js         assertion-based checks
 |- deepcheck.js         model-backed essay and paragraph checks
 |- style.md             writing constraints injected into model prompts
-|- plugin.json          webview plugin manifest (/write, port 3456)
+|- plugin.json          webview plugin manifest (/write, port 3000)
+|- scripts/
+|  |- build-server.mjs  bundles index.js into dist/server.mjs for the desktop build
+|  |- fetch-node.mjs    downloads and checksums the Node runtime the desktop build ships
+|  `- smoke-desktop.mjs starts a built bundle and checks it serves and stops
+|- src-tauri/
+|  |- src/main.rs       desktop shell: folder, sidecar, window, menu, updater
+|  |- tauri.conf.json   bundle targets, resources, updater endpoint and public key
+|  |- shell/index.html  holding page shown until the server is listening
+|  |- icons/            generated app icon set
+|  `- binaries/         fetched Node runtime, gitignored
 |- src/
 |  `- app.js            frontend source
 `- public/
@@ -364,7 +397,7 @@ An SSE error is emitted as `{"error":"..."}` when headers have already been sent
 
 If `style.md` is missing, the server logs one warning and continues without it.
 
-Review detects problems but does not rewrite. Rewrite, suggestion, idea, and chat prompts have separate output contracts and token limits.
+Review detects problems but does not rewrite. Rewrite, suggestion, idea, and chat prompts have separate output contracts and token limits. Continuations use the shared builder in `suggestions.js`, with explicit abstention and word-joining rules. The production path keeps the full style guide and document; reduced prompts and local context are evaluation-only experiments.
 
 The rewrite prompt leads with the selection, then the instruction, then the containing sentence with the selection replaced by a `___` slot, and only then the full document with the selection marked. A variant longer than three times the selection is treated as a whole-document rewrite: the request is repeated once with the scope restated. Unparseable answers are retried up to three attempts in total.
 
@@ -377,17 +410,26 @@ Each review pass validates diagnostic codes against its assigned levels and chec
 | `PI_PROVIDER` | Preferred Pi provider ID | Selected from authenticated models |
 | `PI_MODEL` | Preferred Pi model ID | Selected from authenticated models |
 | `PI_THINKING_LEVEL` | Preferred reasoning level | `medium` |
-| `PORT` | Local HTTP port; the next free port up to +10 is used if taken | `3456` |
+| `PORT` | Local HTTP port; the next free port up to +10 is used if taken | `3000` |
 | `STYLE_FILE` | Writing style guide path | `<cwd>/style.md`, else the bundled `style.md` |
 | `DRAFT_FILE` | Draft mirror path | `<cwd>/draft.md` |
 | `LITURA_NO_OPEN` | Set to skip opening the browser at startup | unset |
 | `LITURA_OFFLINE_MODELS` | Set to stop Litura refreshing provider model lists | unset |
+| `LITURA_SIDECAR` | Set by the desktop shell: ready line, no browser, exit with stdin, updates handled by the shell | unset |
+| `LITURA_ROOT` | Directory holding `public/`, `package.json`, and `style.md` | the server's own directory |
+| `LITURA_NODE_VERSION` | Node runtime the desktop build ships | `v24.21.0` |
 
 ## 9. Distribution and updates
 
 Litura is published to npm as `litura-app`; the command it installs is `litura`. It runs as `npx litura-app` from the folder holding the draft. For a bare package name npm re-resolves the registry manifest on every run, so starting Litura is the update; a global install (`npm i -g`) shadows that check and has to be updated by hand.
 
 `litura --version` prints the running version. `litura --check-update` prints the published version next to it, and reports an unpublished package rather than comparing against nothing. Neither flag ranks the two versions: a local build legitimately runs ahead of the registry, and ordering semver correctly would be a dependency.
+
+The desktop app is distributed as signed bundles attached to the GitHub release for the tag: `.dmg` and `.app.tar.gz` per macOS architecture, an NSIS installer on Windows, `.deb` and `.AppImage` on Linux. `.github/workflows/desktop.yml` builds one matrix entry per target and uploads them, along with the `latest.json` the updater reads.
+
+Updates there are the shell's, not npm's. On launch and from `Litura → Check for Updates…` it asks the release endpoint; an answer is installed only after the writer accepts, is verified against a minisign public key compiled into the app, and is followed by a restart. A launch-time check that cannot reach GitHub says nothing; a check the writer asked for reports why it failed. Because a second update path would be a second wrong answer, `/api/version` returns `managed: "desktop"` under `LITURA_SIDECAR`, contacts npm for nothing, and the frontend hides the update section of settings.
+
+The signing key is not in the repository. CI reads it from `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public half lives in `tauri.conf.json`. Replacing it strands every installed copy, which will accept nothing the old key did not sign.
 
 In the browser, `Ask npm about new versions` in settings is on by default and stored in `wa-updatecheck`. Off, the browser calls `/api/version` without `?check=1` and the server contacts nothing. On, it asks at most once every 24 hours, caches the answer in `wa-update`, and shows a header badge linking to the changelog when the published version differs from the running one. Switching it off hides the badge rather than leaving a stale one.
 
@@ -417,6 +459,10 @@ npm run check:deep
 `npm run check` validates server syntax, rebuilds the browser bundle, exercises Markdown escaping and rendering, checks style metrics and review anchoring, and verifies that Pi status has a consistent shape.
 
 `npm run check:deep` sends synthetic failures and clean controls through the configured Pi model and the exact production review prompts. It covers the seven reader-structure levels, exact quote anchoring, targeted-review scope, all four valid paragraph progressions, and paired positive/control cases for selected generic prose diagnostics. Use `DEEP_CASE=name` to run matching cases and `DEEP_RUNS=3` to measure repeatability. The command makes model requests and is therefore kept out of the fast check.
+
+`npm run smoke:desktop` runs a built bundle — the `.app` on macOS, the binary beside its resources elsewhere — against a disposable folder and a moved `HOME`, so it never meets the writer's own config or draft. It asserts the three things only a packaged build can get wrong: the app starts and prints its port, the server inside it serves the seeded draft from the folder it was given, and killing the shell releases the port. It needs a display; a headless Linux runner puts `xvfb-run -a` in front. `.github/workflows/desktop.yml` runs it after every platform's build.
+
+The UI itself needs neither: the page in the desktop window is the same page the server gives a browser, so `npm run test:browser` — the real routes against a fake provider — covers it, and adding `?shell=desktop` to that URL shows the desktop layout. What has no automated coverage is the window: the native dialogs, the menu, and the updater's own code.
 
 The model checks are regression tests, not an independent accuracy benchmark. Set `DEEP_REPORT=results.json` to save individual findings and failures. See [review-evaluation.md](docs/review-evaluation.md) for source provenance, development results, limitations, and the manual browser smoke check. There is no automated browser end-to-end suite.
 

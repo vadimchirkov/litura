@@ -5,6 +5,12 @@ number carries breaking changes.
 
 ## Unreleased
 
+## 0.3.7 — 2026-09-13
+
+- Litura is now also a desktop app. A Tauri shell picks the writing folder, starts the same server on a free port, and shows it in its own window; it carries its own Node runtime, so nothing has to be installed first.
+- The review panel is one list again. Wording marks and review findings sat in separate sections repeating the same reason on every row; now they share a single list in document order, each row naming the passage and where the remark came from, with the reason on the card a click away. The header button says how many remarks are waiting instead of a bare number.
+- The desktop app updates itself: it asks GitHub on launch and from `Check for Updates…`, installs only what you accept and what its signing key verifies, and restarts. In that build the npm update switch is gone, since it would name a second, wrong way to update.
+
 ## 0.3.6 — 2026-09-07
 
 - Published the latest editor interface and behavior updates together with the product audit and local draft history.

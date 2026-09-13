@@ -3,3 +3,9 @@ node_modules/
 npm-debug.log*
 /tmp
 /draft.md
+/draft.md.litura-history
+/dist
+/src-tauri/target
+# The Node runtime the desktop build ships: 120 MB, fetched by
+# scripts/fetch-node.mjs and checksummed against the release.
+/src-tauri/binaries

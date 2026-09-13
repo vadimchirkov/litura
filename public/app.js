@@ -16731,31 +16731,59 @@
     "stunning"
   ];
   var TELL_PHRASES = [
-    /\bin today'?s [a-z-]+ world\b/i,
-    /\bat the end of the day\b/i,
-    /\bexperts? (?:agree|say|believe)\b/i,
-    /\bstudies show\b/i,
-    /\bit is important to note\b/i,
-    /\bnot (?:just|only)\b[^.!?]{0,60}\bbut\b/i,
-    /\b(?:serves|stands) as a\b/i,
-    /\bplays? a (?:vital|crucial|pivotal|key|significant) role\b/i,
-    /\bat its core\b/i,
-    /\bthe real question is\b/i,
-    /\blet'?s (?:dive|explore|break this down)\b/i,
-    /\bhere'?s what you need to know\b/i,
-    /\ba testament to\b/i,
-    /\bevolving landscape\b/i,
-    /\bin order to\b/i,
-    /\bdue to the fact that\b/i,
-    /\b(?:dashboard|data|design|roadmap|platform|system|tool|app|algorithm) (?:understands?|knows?|decides?|wants?|believes?|cares?)\b/i,
-    /\b(?:could|may|might|arguably|potentially|possibly)(?:\s+\w+){0,2}\s+(?:potentially|possibly|arguably|perhaps|may|might)\b/i,
-    /(?:["“][^"”\n]{1,24}["”][\s,]*){3,}|\b[A-Z]{3,}(?:\s+[A-Z]{3,}){2,}\b/
+    [/\bin today'?s [a-z-]+ world\b/i, "A broad opening can delay the point.", "Start with the concrete subject instead of a broad setup."],
+    [/\bat the end of the day\b/i, "This stock summary can add padding.", "State the conclusion directly."],
+    [/\bexperts? (?:agree|say|believe)\b/i, "The experts are not named in this phrase.", "Use a source already identified in the draft, or qualify the claim. Never invent a source."],
+    [/\bstudies show\b/i, "The studies are not identified in this phrase.", "Use research already identified in the draft, or qualify the claim. Never invent evidence."],
+    [/\bit is important to note\b/i, "This announces importance before giving the information.", "Let the information carry its own importance."],
+    [/\bnot (?:just|only)\b[^.!?]{0,60}\bbut\b/i, "Check whether both sides of this contrast add meaning.", "Simplify the contrast only if it adds no useful distinction."],
+    [/\b(?:serves|stands) as a\b/i, "An indirect phrase may hide a simpler verb.", "Use a direct verb that fits the sentence."],
+    [/\bplays? a (?:vital|crucial|pivotal|key|significant) role\b/i, "Importance is asserted without naming the contribution here.", "Name the contribution using only details already in the draft."],
+    [/\bat its core\b/i, "This framing phrase may delay the point.", "State the point directly."],
+    [/\bthe real question is\b/i, "This can frame a question instead of getting to it.", "Ask the question directly, preserving any meaningful contrast."],
+    [/\blet'?s (?:dive|explore|break this down)\b/i, "This narrates the explanation before it starts.", "Begin the explanation directly."],
+    [/\bhere'?s what you need to know\b/i, "This introduction may repeat what the reader expects.", "Lead with the information itself."],
+    [/\ba testament to\b/i, "This praise may be less useful than concrete evidence.", "Describe what the example demonstrates without adding facts."],
+    [/\bevolving landscape\b/i, "This metaphor does not say what is changing.", "Name the change if the draft supplies it; otherwise use plainer wording."],
+    [/\bin order to\b/i, "The purpose usually stays clear with fewer words.", "Use a shorter expression such as \u201Cto\u201D if the grammar allows it."],
+    [/\bdue to the fact that\b/i, "A long phrase introduces a simple cause.", "Use a direct causal link such as \u201Cbecause\u201D if the grammar allows it."],
+    [/\b(?:dashboard|data|design|roadmap|platform|system|tool|app|algorithm) (?:understands?|knows?|decides?|wants?|believes?|cares?)\b/i, "Check whether this describes real behavior or gives an object human intentions.", "Describe the observable behavior supported by the draft."],
+    [/\b(?:could|may|might|arguably|potentially|possibly)(?:\s+\w+){0,2}\s+(?:potentially|possibly|arguably|perhaps|may|might)\b/i, "Several qualifiers may express the same uncertainty.", "Keep the necessary uncertainty with fewer qualifiers."],
+    [/(?:["“][^"”\n]{1,24}["”][\s,]*){3,}|\b[A-Z]{3,}(?:\s+[A-Z]{3,}){2,}\b/, "Clustered emphasis can compete with the words themselves.", "Reduce decorative emphasis while preserving names, actual quotations, and meaning."]
   ];
   var WORD_RE = /\p{L}[\p{L}\p{N}'’-]*/gu;
   function isLatinScript(text) {
     const letters = text.match(/\p{L}/gu) ?? [];
     if (!letters.length) return true;
     return letters.filter((ch) => /[\p{Script=Latin}]/u.test(ch)).length / letters.length > 0.5;
+  }
+  function styleMarkers(text) {
+    if (!isLatinScript(text)) return [];
+    const phrases = TELL_PHRASES.flatMap(([pattern, reason, fix]) => [...text.matchAll(new RegExp(pattern.source, pattern.flags + "g"))].map((match) => ({ from: match.index, to: match.index + match[0].length, quote: match[0], reason, fix })));
+    const words = [...text.matchAll(WORD_RE)].filter((match) => TELL_WORDS_STRONG.includes(match[0].toLowerCase()) || TELL_WORDS_WEAK.includes(match[0].toLowerCase())).map((match) => ({
+      from: match.index,
+      to: match.index + match[0].length,
+      quote: match[0],
+      reason: "This word can sound generic. Keep it if its precise meaning matters here.",
+      fix: "Make this wording more direct and specific in its sentence without changing its meaning."
+    })).filter((word) => !phrases.some((phrase2) => word.from < phrase2.to && word.to > phrase2.from));
+    const markers = [];
+    for (const marker of [...phrases, ...words].sort((a, b) => a.from - b.from || b.to - a.to)) {
+      if (!markers.length || marker.from >= markers.at(-1).to) markers.push(marker);
+    }
+    return markers;
+  }
+  function findingContext(document2, finding) {
+    const from = Number.isInteger(finding.from) ? finding.from : document2.indexOf(finding.quote);
+    if (from < 0 || document2.slice(from, from + finding.quote.length) !== finding.quote) return null;
+    const before = document2.slice(0, from);
+    const after = document2.slice(from + finding.quote.length);
+    const start = [...before.matchAll(/\n\s*\n/g)].at(-1);
+    const end = after.search(/\n\s*\n/);
+    return document2.slice(
+      start ? start.index + start[0].length : 0,
+      end < 0 ? document2.length : from + finding.quote.length + end
+    ).trim();
   }
   function splitAllSentences(text) {
     return text.split(/(?<=[.!?…])\s+|\n+/).map((part) => part.trim()).filter(Boolean);
@@ -16786,7 +16814,7 @@
     }
     const strongHits = words.filter((word) => TELL_WORDS_STRONG.includes(word));
     const weakHits = words.filter((word) => TELL_WORDS_WEAK.includes(word));
-    const phraseHits = TELL_PHRASES.map((pattern) => text.match(pattern)?.[0]).filter(Boolean);
+    const phraseHits = TELL_PHRASES.map(([pattern]) => text.match(pattern)?.[0]).filter(Boolean);
     const strong = strongHits.length;
     const weak = weakHits.length;
     const phrases = phraseHits.length;
@@ -16865,6 +16893,46 @@
     if (!a || !b) return false;
     for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
     return false;
+  }
+
+  // chat-edits.js
+  function locateChatEdits(items, document2, selection = null) {
+    if (!Array.isArray(items) || items.length > 8) throw new Error("Invalid edit list");
+    return items.map((item) => {
+      if (!item || typeof item.quote !== "string" || !item.quote.trim() || item.quote.length > 1e4 || typeof item.replacement !== "string" || item.replacement.length > 2e4 || typeof item.label !== "string" || !item.label.trim() || item.label.length > 120 || item.quote === item.replacement) throw new Error("Invalid proposed edit");
+      let from = -1;
+      if (selection && Number.isInteger(selection.from) && Number.isInteger(selection.to) && selection.from >= 0 && selection.to <= document2.length && selection.to > selection.from) {
+        const selected = document2.slice(selection.from, selection.to);
+        const offset = selected.indexOf(item.quote);
+        if (offset >= 0 && selected.indexOf(item.quote, offset + 1) < 0) from = selection.from + offset;
+      }
+      if (from < 0) {
+        from = document2.indexOf(item.quote);
+        if (from < 0 || document2.indexOf(item.quote, from + 1) >= 0) {
+          return { label: item.label, quote: item.quote, replacement: item.replacement, state: "unlocated" };
+        }
+      }
+      return { label: item.label, quote: item.quote, replacement: item.replacement, from, to: from + item.quote.length, state: "pending" };
+    });
+  }
+  function mapChatEdit(edit, changes) {
+    if (!["pending", "applied", "kept"].includes(edit.state)) return;
+    let touched = false;
+    changes.iterChangedRanges((from, to) => {
+      if (from === to ? from > edit.from && from < edit.to : from < edit.to && to > edit.from) touched = true;
+      if (edit.from === edit.to && from <= edit.from && to >= edit.to) touched = true;
+    });
+    if (touched) {
+      edit.state = "stale";
+      return;
+    }
+    const empty2 = edit.from === edit.to;
+    edit.from = changes.mapPos(edit.from, 1);
+    edit.to = changes.mapPos(edit.to, empty2 ? 1 : -1);
+  }
+  function chatEditMatches(edit, document2) {
+    const expected = edit.state === "applied" ? edit.replacement : edit.quote;
+    return ["pending", "applied", "kept"].includes(edit.state) && Number.isInteger(edit.from) && Number.isInteger(edit.to) && edit.from >= 0 && edit.to >= edit.from && edit.to <= document2.length && document2.slice(edit.from, edit.to) === expected;
   }
 
   // node_modules/@codemirror/search/dist/index.js
@@ -17877,12 +17945,20 @@
   var chatClear = document.getElementById("chat-clear");
   var scoreEl = document.getElementById("style-score");
   var scoreValueEl = document.getElementById("style-score-value");
+  var scoreCountEl = document.getElementById("style-score-count");
+  var scoreDetails = document.getElementById("style-details");
+  var detailsCountEl = document.getElementById("style-details-count");
+  var scoreReviewRun = document.getElementById("style-review-run");
+  var scoreReviewStatus = document.getElementById("style-review-status");
+  var scoreRemarkList = document.getElementById("style-remark-list");
+  var editFeedback = document.getElementById("edit-feedback");
   var chatPanel = document.getElementById("chat");
   var autoReviewEl = document.getElementById("auto-review");
   var updateCheckEl = document.getElementById("update-check");
   var themeToggleEl = document.getElementById("theme-toggle");
   var updateBadge = document.getElementById("update-badge");
   var updateStatus = document.getElementById("update-status");
+  var updateSection = document.getElementById("settings-updates");
   var systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
   var savedTheme = localStorage.getItem("wa-theme");
   var currentTheme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : systemTheme.matches ? "dark" : "light";
@@ -17897,6 +17973,7 @@
   themeToggleEl.addEventListener("change", () => setTheme(themeToggleEl.checked ? "dark" : "light"));
   var chatHeight = 140;
   var documentKey = null;
+  var documentName = "";
   var diskRevision = null;
   var diskText = null;
   var diskTimer = null;
@@ -17904,9 +17981,24 @@
   var savePaused = true;
   var loadingDocument = true;
   var editVersion = 0;
-  var saveStatus = document.getElementById("save-status");
+  var lastSaveStatus = "";
+  var saveStatus = {
+    set textContent(text) {
+      if (text === lastSaveStatus) return;
+      lastSaveStatus = text;
+      if (text) chatAdd(chatEl("div", "chat-error", text));
+    },
+    set title(_message) {
+    }
+  };
   var reviewStatus = document.getElementById("review-status");
+  var reviewState = "idle";
+  var reviewNotice = "";
   function setReviewStatus(text, detail, from = "review") {
+    if (from === "review") {
+      reviewNotice = text;
+      syncReviewPanel();
+    }
     reviewStatus.textContent = text;
     reviewStatus.title = detail ?? text;
     reviewStatus.dataset.from = text ? from : "";
@@ -17939,7 +18031,7 @@
       detail
     };
   }
-  function errorCard(problem, retry) {
+  function errorCard(problem, retry, label = "Try again") {
     const card = chatEl("div", "chat-error", problem.say);
     card.title = problem.detail ?? "";
     if (problem.act === "settings") {
@@ -17947,14 +18039,21 @@
       open.addEventListener("click", openSettings);
       card.append(open);
     } else if (problem.act === "retry" && retry) {
-      const again = chatEl("button", "chat-again", "Try again");
-      again.addEventListener("click", () => {
+      const again = chatEl("button", "chat-again", label);
+      again.addEventListener("click", async () => {
         card.remove();
-        retry();
+        try {
+          await retry();
+        } catch {
+          chatAdd(card);
+        }
       });
       card.append(again);
     }
     return card;
+  }
+  function saidInStream(say) {
+    return !chatStream.hidden && [...chatStream.querySelectorAll(".chat-error")].some((card) => card.firstChild?.nodeValue === say);
   }
   var tabId;
   try {
@@ -18002,14 +18101,14 @@
   }
   function stopJobs() {
     for (const job of jobs) job.abort();
-    suggestAbort?.abort();
+    cancelSuggestion();
     clearTimeout(autoReviewTimer);
-    clearTimeout(suggestTimer);
   }
   var STORAGE_SCHEMA = "1";
   if (localStorage.getItem("wa-schema") !== STORAGE_SCHEMA) {
     docStorage.removeItem("wa-findings");
     docStorage.removeItem("wa-chat");
+    docStorage.removeItem("wa-kept-wording");
     localStorage.setItem("wa-schema", STORAGE_SCHEMA);
   }
   var thinkingNames = { off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
@@ -18036,19 +18135,24 @@
     if (!normalized) return;
     draftSelection = normalized;
     agentSelection = normalized;
+    cancelSuggestion();
+    ghostClear(workView);
     localStorage.setItem("wa-agent", JSON.stringify(agentSelection));
   }
   var combos = /* @__PURE__ */ new WeakMap();
+  var COMBO_LIMIT = 50;
   function combobox(trigger) {
     const popover = document.getElementById(trigger.getAttribute("popovertarget"));
     const search = popover.querySelector(".combo-search");
     const list = popover.querySelector(".combo-list");
     const empty2 = popover.querySelector(".combo-empty");
-    const state = { options: [], value: "", render };
+    const count = popover.querySelector(".combo-count");
+    const state = { options: [], value: "", render, trigger };
     combos.set(trigger, state);
     function render() {
       const query = search.value.trim().toLowerCase();
-      const shown = state.options.filter((option) => !query || option.label.toLowerCase().includes(query) || option.value.toLowerCase().includes(query));
+      const matched = state.options.filter((option) => !query || option.label.toLowerCase().includes(query) || option.value.toLowerCase().includes(query));
+      const shown = matched.slice(0, COMBO_LIMIT);
       list.replaceChildren(...shown.map((option) => {
         const item = chatEl("button", "combo-item", "");
         item.type = "button";
@@ -18058,14 +18162,19 @@
         item.append(chatEl("span", "", option.label));
         return item;
       }));
-      empty2.hidden = shown.length > 0;
+      empty2.hidden = matched.length > 0;
+      if (count) count.textContent = !state.options.length ? "" : matched.length > shown.length ? `Showing ${shown.length} of ${matched.length}` : "";
     }
-    trigger.addEventListener("click", () => {
+    function reposition() {
+      if (!popover.matches(":popover-open")) return;
       const box = trigger.getBoundingClientRect();
-      popover.style.left = `${box.left}px`;
+      const width = Math.max(box.width, 260);
+      popover.style.left = `${Math.min(box.left, window.innerWidth - width - 8)}px`;
       popover.style.top = `${box.bottom + 4}px`;
-      popover.style.width = `${Math.max(box.width, 260)}px`;
-    });
+      popover.style.width = `${width}px`;
+    }
+    state.reposition = reposition;
+    trigger.addEventListener("click", reposition);
     popover.addEventListener("toggle", (event) => {
       if (event.newState !== "open") return;
       search.value = "";
@@ -18101,6 +18210,14 @@
   }
   combobox(providerEl);
   combobox(modelEl);
+  for (const event of ["resize", "scroll"]) {
+    window.addEventListener(event, () => {
+      for (const popover of document.querySelectorAll(".combo:popover-open")) {
+        const trigger = document.querySelector(`[popovertarget="${popover.id}"]`);
+        combos.get(trigger)?.reposition?.();
+      }
+    }, { passive: true, capture: true });
+  }
   function setOptions(field, options, value) {
     const combo = combos.get(field);
     const chosen = options.find((option) => option.value === value) ?? options[0];
@@ -18185,6 +18302,7 @@
     draftSelection = currentAgent();
     renderModelSettings();
     renderCredentials();
+    syncKeyAdd();
     if (!settingsDialog.open) settingsDialog.showModal();
   }
   settingsOpen.addEventListener("click", openSettings);
@@ -18225,7 +18343,27 @@
     saveAgentSelection();
   });
   keyProviderEl.addEventListener("change", renderCredentials);
-  keyAddEl.addEventListener("click", async () => {
+  document.getElementById("settings-form").addEventListener("submit", (event) => event.preventDefault());
+  var keyToggleEl = document.getElementById("key-toggle");
+  function syncKeyAdd() {
+    keyAddEl.disabled = !apiKeyEl.value.trim();
+  }
+  apiKeyEl.addEventListener("input", syncKeyAdd);
+  apiKeyEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !keyAddEl.disabled) {
+      event.preventDefault();
+      keyAddEl.click();
+    }
+  });
+  keyToggleEl.addEventListener("click", () => {
+    const show = apiKeyEl.type === "password";
+    apiKeyEl.type = show ? "text" : "password";
+    keyToggleEl.textContent = show ? "Hide" : "Show";
+    keyToggleEl.setAttribute("aria-label", show ? "Hide API key" : "Show API key");
+    apiKeyEl.focus();
+  });
+  async function addProviderKey() {
+    if (!apiKeyEl.value.trim()) return;
     settingsError.textContent = "";
     keyAddEl.disabled = true;
     try {
@@ -18234,14 +18372,16 @@
         body: JSON.stringify({ provider: keyProviderEl.value, apiKey: apiKeyEl.value })
       });
       apiKeyEl.value = "";
+      syncKeyAdd();
       renderModelSettings();
       renderCredentials();
     } catch (error) {
       settingsError.textContent = error.message;
     } finally {
-      keyAddEl.disabled = false;
+      syncKeyAdd();
     }
-  });
+  }
+  keyAddEl.addEventListener("click", addProviderKey);
   async function removeProviderKey(provider) {
     settingsError.textContent = "";
     try {
@@ -18303,7 +18443,7 @@
     view.dispatch({
       // The panel is a block below the line, so reserve its own height on top of
       // the strip the chat already covers — otherwise it opens out of sight.
-      effects: [setGhostFx.of({ text, pos, line }), EditorView.scrollIntoView(line, { y: "nearest", yMargin: 72 })]
+      effects: [setGhostFx.of({ text, pos, line }), EditorView.announce.of(`Suggestion: ${text.trim()}. Tab to accept; Escape to dismiss.`), EditorView.scrollIntoView(line, { y: "nearest", yMargin: 72 })]
     });
   }
   function ghostClear(view) {
@@ -18311,16 +18451,41 @@
   }
   function ghostAccept(view) {
     const ghost = view.state.field(ghostField);
-    if (!ghost) return false;
+    if (!ghost || view.state.readOnly || !view.hasFocus || !view.state.selection.main.empty) return false;
     view.dispatch({
       changes: { from: ghost.pos, insert: ghost.text },
       selection: { anchor: ghost.pos + ghost.text.length },
       effects: clearGhostFx.of(null),
       userEvent: "input.acceptGhost"
     });
-    save();
     return true;
   }
+  var keptStyle = [];
+  var localFinding = null;
+  function saveKeptStyle() {
+    docStorage.setItem("wa-kept-wording", JSON.stringify({ document: workView.state.doc.toString(), marks: keptStyle }));
+  }
+  function visibleStyleMarkers(text) {
+    return styleMarkers(text).filter((marker) => !keptStyle.some((kept) => kept.state === "kept" && kept.from === marker.from && kept.to === marker.to && kept.quote === marker.quote));
+  }
+  var refreshStyleFx = StateEffect.define();
+  var styleMarkerField = StateField.define({
+    create: (state) => visibleStyleMarkers(state.doc.toString()),
+    update: (markers, tr) => {
+      if (tr.docChanged) {
+        for (const kept of keptStyle) mapChatEdit(kept, tr.changes);
+        keptStyle = keptStyle.filter((kept) => kept.state !== "stale");
+      }
+      for (const effect of tr.effects) {
+        if (effect.is(refreshStyleFx)) return visibleStyleMarkers(tr.newDoc.toString());
+      }
+      return tr.docChanged ? visibleStyleMarkers(tr.newDoc.toString()) : markers;
+    },
+    provide: (field) => EditorView.decorations.from(field, (markers) => Decoration.set(markers.map((marker) => Decoration.mark({
+      class: "cm-style-marker",
+      attributes: { "data-style-from": String(marker.from), title: "Possible stock wording \u2014 click to explore" }
+    }).range(marker.from, marker.to)), true))
+  });
   var setReviewFx = StateEffect.define();
   var addReviewFx = StateEffect.define();
   var dropReviewFx = StateEffect.define();
@@ -18372,6 +18537,7 @@
     provide: (field) => EditorView.decorations.from(field)
   });
   function findingRange(id) {
+    if (id === -1) return localFinding && chatEditMatches(localFinding, workView.state.doc.toString()) ? { from: localFinding.from, to: localFinding.to } : null;
     let found = null;
     workView.state.field(reviewField).between(0, workView.state.doc.length, (from, to, deco) => {
       if (deco.spec.attributes["data-slop-id"] === String(id)) {
@@ -18384,7 +18550,8 @@
   function syncReviewLabel() {
     const count = workView.state.field(reviewField).size;
     reviewButton.classList.toggle("has-findings", count > 0);
-    reviewButton.textContent = reviewButton.disabled ? "Reviewing\u2026" : "Review";
+    reviewButton.textContent = reviewButton.disabled ? "Checking\u2026" : "Slop";
+    syncStyleScore();
   }
   var jumpFrom = -1;
   function jumpToNextFinding(direction = 1) {
@@ -18400,15 +18567,41 @@
       event.preventDefault();
       jumpToNextFinding(event.shiftKey ? -1 : 1);
     }
+    if (event.key === "Escape" && !markBubble.hidden) {
+      hideMarkBubble();
+      workView.focus();
+      return;
+    }
     if (event.key === "Escape" && plainPreview) {
       clearPlainPreview();
       workView.focus();
     }
   });
+  document.addEventListener("mousedown", (event) => {
+    if (!markBubble.hidden && !markBubble.contains(event.target)) hideMarkBubble();
+  }, true);
+  document.addEventListener("mouseup", (event) => {
+    if (!workView.dom.contains(event.target)) return;
+    if (event.button === 2) return;
+    if (workView.state.selection.main.empty) return;
+    showSelectionBubble(event.clientX, event.clientY);
+  });
+  document.addEventListener("copy", () => {
+    if (bubbleMode === "selection") hideMarkBubble();
+  });
   function dismissFinding(id) {
+    if (id === -1) {
+      if (localFinding) keepStyleMarker(localFinding);
+      return;
+    }
+    clearTimeout(appliedHideTimers.get(id));
+    appliedHideTimers.delete(id);
     const finding = reviewFindings.find((item) => item.id === id);
+    const document2 = workView.state.doc.toString();
+    const range = findingRange(id);
     const dismissed = JSON.parse(docStorage.getItem("dismissed") || "[]");
-    if (finding) dismissed.push({ code: finding.code, quote: finding.quote, document: workView.state.doc.toString() });
+    const decision = finding && { code: finding.code, quote: finding.quote, context: findingContext(document2, { ...finding, ...range }) };
+    if (decision) dismissed.push(decision);
     docStorage.setItem("dismissed", JSON.stringify(dismissed.slice(-100)));
     reviewFindings = reviewFindings.filter((finding2) => finding2.id !== id);
     const card = findingCards.get(id);
@@ -18419,14 +18612,25 @@
     }
     findingCards.delete(id);
     workView.dispatch({ effects: dropReviewFx.of(id) });
+    hideMarkBubble();
     if (activeFinding?.id === id) detach();
     else clearPlainPreview();
+    refocusAfterRemoval(id);
     saveFindings();
     syncReviewLabel();
+    workView.focus();
+    if (decision) showEditFeedback("Kept as is", () => {
+      const saved = JSON.parse(docStorage.getItem("dismissed") || "[]");
+      docStorage.setItem("dismissed", JSON.stringify(saved.filter((item) => JSON.stringify(item) !== JSON.stringify(decision))));
+      if (workView.state.doc.toString() === document2) {
+        mergeFindings([finding]);
+        syncReviewLabel();
+      } else setReviewStatus("Dismissal undone. Check again to cover the changed text.");
+    });
   }
   function saveFindings() {
     const live = reviewFindings.filter((finding) => findingRange(finding.id)).map(({ code, quote, pattern, reason, fix }) => ({ code, quote, pattern, reason, fix }));
-    docStorage.setItem("wa-findings", JSON.stringify({ document: workView.state.doc.toString(), findings: live }));
+    docStorage.setItem("wa-findings", JSON.stringify({ document: workView.state.doc.toString(), findings: live, state: reviewState }));
   }
   function restoreFindings() {
     let saved = [];
@@ -18434,9 +18638,11 @@
       saved = JSON.parse(docStorage.getItem("wa-findings") || "[]");
     } catch {
     }
+    reviewState = saved.document === workView.state.doc.toString() ? saved.state || "partial" : saved.document ? "stale" : "idle";
     if (saved.document === workView.state.doc.toString() && saved.findings?.length && mergeFindings(saved.findings)) syncReviewLabel();
   }
   function clearReview() {
+    editFeedback.hidden = true;
     discardFindingCards();
     for (const stale of document.querySelectorAll(".chat-variants")) stale.remove();
     clearPlainPreview();
@@ -18449,8 +18655,8 @@
   function mergeFindings(rawFindings) {
     const document2 = workView.state.doc.toString();
     const dismissed = JSON.parse(docStorage.getItem("dismissed") || "[]");
-    const filtered = (rawFindings || []).filter((finding) => !dismissed.some((item) => item.document === document2 && item.code === finding.code && item.quote === finding.quote) && !reviewFindings.some((item) => findingRange(item.id) && item.code === finding.code && item.quote === finding.quote));
-    const located = locateFindings(document2, filtered).map((finding) => ({ ...finding, id: findingSeq++ }));
+    const filtered = (rawFindings || []).filter((finding) => !reviewFindings.some((item) => findingRange(item.id) && item.code === finding.code && item.quote === finding.quote));
+    const located = locateFindings(document2, filtered).filter((finding) => !dismissed.some((item) => item.code === finding.code && item.quote === finding.quote && (item.context ? item.context === findingContext(document2, finding) : item.document === document2))).map((finding) => ({ ...finding, id: findingSeq++ }));
     if (!located.length) return 0;
     reviewFindings.push(...located);
     workView.dispatch({ effects: addReviewFx.of(located) });
@@ -18458,7 +18664,7 @@
     return located.length;
   }
   async function reviewRequest(body, replaceAll2 = false) {
-    if (body.document !== workView.state.doc.toString()) throw new Error("Draft changed before review started. Run Review again.");
+    if (body.document !== workView.state.doc.toString()) throw new Error("Draft changed before the check started. Check again.");
     const version = editVersion;
     const job = startJob({ background: Boolean(body.target) });
     try {
@@ -18467,14 +18673,17 @@
         signal: job.signal,
         body: JSON.stringify({ agent: currentAgent(), ...body })
       });
-      if (version !== editVersion) throw new Error("Draft changed during review. Run Review again.");
+      if (version !== editVersion) throw new Error("Draft changed during the check. Check again.");
       if (replaceAll2) clearReview();
       const added = mergeFindings(data.findings);
-      if (data.failedPasses?.length) setReviewStatus(`Partial review (${data.failedPasses.join(", ")}) \u2014 run Review to retry`);
+      reviewState = data.failedPasses?.length || body.target ? "partial" : "complete";
+      saveFindings();
+      if (data.failedPasses?.length) setReviewStatus(`Partial slop check (${data.failedPasses.join(", ")}) \u2014 run again to retry`);
       else if (reviewStatus.dataset.from === "review") setReviewStatus("");
       return { added, complete: !data.failedPasses?.length };
     } finally {
       finishJob(job);
+      syncStyleScore();
     }
   }
   async function runReview() {
@@ -18489,7 +18698,7 @@
       const result = await reviewRequest({ document: document2 }, true);
       if (result.complete) for (const paragraph of reviewParagraphs(document2)) checkedSentences.add(paragraph.key);
     } catch (error) {
-      setReviewStatus(error.name === "AbortError" ? "Review stopped \u2014 findings kept" : `Review failed. ${modelError(error).say}`, error.message);
+      setReviewStatus(error.name === "AbortError" ? "Slop check stopped \u2014 findings kept" : `Slop check failed. ${modelError(error).say}`, error.message);
     } finally {
       reviewButton.disabled = false;
       syncReviewLabel();
@@ -18517,8 +18726,7 @@
   autoSuggestEl.addEventListener("change", () => {
     autoSuggestOn = autoSuggestEl.checked;
     localStorage.setItem("wa-autosuggest", autoSuggestOn ? "on" : "off");
-    clearTimeout(suggestTimer);
-    suggestAbort?.abort();
+    cancelSuggestion();
     ghostClear(workView);
   });
   autoReviewEl.checked = autoReviewOn;
@@ -18531,7 +18739,12 @@
   var UPDATE_INTERVAL = 24 * 60 * 60 * 1e3;
   var updateCheckOn = localStorage.getItem("wa-updatecheck") !== "off";
   updateCheckEl.checked = updateCheckOn;
-  function renderUpdate({ current, latest, error }) {
+  function renderUpdate({ current, latest, error, managed }) {
+    if (managed) {
+      updateSection.hidden = true;
+      updateBadge.hidden = true;
+      return;
+    }
     const stale = newerVersion(latest, current);
     updateBadge.hidden = !stale;
     if (stale) {
@@ -18571,36 +18784,124 @@
     refreshUpdate({ force: updateCheckOn });
   });
   refreshUpdate();
+  var activeStyleFrom = null;
+  function isScoreOpen() {
+    return scoreDetails.matches(":popover-open");
+  }
+  function closeScorePopover() {
+    if (isScoreOpen()) scoreDetails.hidePopover();
+  }
+  function liveReviewFindings() {
+    return reviewFindings.map((finding) => ({ finding, range: findingRange(finding.id) })).filter((item) => item.range).sort((a, b) => a.range.from - b.range.from);
+  }
+  function reviewStateText() {
+    if (reviewButton.disabled || autoReviewBusy) return "";
+    if (reviewNotice) return reviewNotice;
+    if (reviewState === "idle") return "Not checked yet";
+    if (reviewState === "partial") return "Partly checked";
+    return "";
+  }
   function syncStyleScore() {
+    if (typeof workView === "undefined" || !workView?.state) return;
     const text = workView.state.doc.toString();
-    scoreEl.hidden = !text.trim() || !isLatinScript(text);
-    if (scoreEl.hidden) return;
-    const { score, structural } = styleScore(text);
-    scoreValueEl.textContent = `${score}`;
-    scoreEl.title = structural ? `Local slop score ${score}/100 (0 = clean). Click to see what raised it.` : `Local slop score ${score}/100, wording only \u2014 too short to judge rhythm or variety. Click for detail.`;
-    scoreEl.classList.toggle("warn", score >= 40);
-  }
-  function showScoreCard() {
-    const text = workView.state.doc.toString();
-    if (!text.trim() || !isLatinScript(text)) return;
-    const { score, hits, burstiness, diversity, repetition, structural } = styleScore(text);
-    const notes = [];
-    if (structural) {
-      if (burstiness < 0.45) notes.push("Sentence lengths are evenly matched \u2014 vary them.");
-      if (diversity < 0.5) notes.push("Vocabulary repeats within a short window.");
-      if (repetition > 0.05) notes.push("Some three-word sequences repeat.");
-    } else {
-      notes.push("Too short to judge rhythm or variety \u2014 wording only.");
+    scoreEl.hidden = !text.trim();
+    if (scoreEl.hidden) {
+      closeScorePopover();
+      return;
     }
-    const card = chatEl("div", "chat-card");
-    card.append(
-      chatEl("strong", "", `Local slop score ${score}/100`),
-      chatEl("span", "", hits.length ? `Known tells: ${hits.join(", ")}` : "No known tell words or phrases."),
-      chatEl("small", "", `${notes.join(" ")} An English word list and sentence rhythm, nothing else: it does not read your meaning. Use Review for that.`)
-    );
-    chatAdd(card);
+    const count = workView.state.field(styleMarkerField).length + liveReviewFindings().length;
+    scoreValueEl.textContent = "Slop";
+    scoreCountEl.hidden = detailsCountEl.hidden = !count;
+    scoreCountEl.textContent = detailsCountEl.textContent = count ? String(count) : "";
+    scoreEl.title = reviewStateText();
+    syncReviewPanel();
+    if (isScoreOpen()) renderScoreDetails();
   }
-  scoreEl.addEventListener("click", showScoreCard);
+  function syncReviewPanel() {
+    const busy = reviewButton.disabled || autoReviewBusy;
+    scoreReviewRun.disabled = busy || loadingDocument;
+    scoreReviewRun.textContent = "Check for slop";
+    scoreReviewStatus.textContent = reviewStateText();
+    scoreReviewStatus.hidden = !scoreReviewStatus.textContent;
+  }
+  function remarkRow(quote, label, reason, open, kind = "") {
+    const row = chatEl("button", `style-marker-jump${kind ? ` ${kind}` : ""}`);
+    row.type = "button";
+    row.title = reason;
+    const go = chatEl("i", "style-marker-go", "\u203A");
+    go.setAttribute("aria-hidden", "true");
+    row.append(chatEl("span", "", `\u201C${quote}\u201D`), chatEl("small", "", label), go);
+    row.addEventListener("click", () => {
+      closeScorePopover();
+      open();
+    });
+    return row;
+  }
+  function renderScoreDetails() {
+    syncReviewPanel();
+    const text = workView.state.doc.toString();
+    const rows = [
+      ...workView.state.field(styleMarkerField).map((marker) => ({
+        from: marker.from,
+        quote: marker.quote,
+        label: "Stock wording",
+        reason: marker.reason,
+        kind: "",
+        open: () => selectStyleMarker(marker)
+      })),
+      ...liveReviewFindings().map(({ finding, range }) => ({
+        from: range.from,
+        quote: finding.quote,
+        label: finding.pattern,
+        reason: finding.reason,
+        kind: "is-model",
+        open: () => openFinding(finding, true)
+      }))
+    ].sort((a, b) => a.from - b.from);
+    scoreRemarkList.replaceChildren(...rows.map((row) => remarkRow(row.quote, row.label, row.reason, row.open, row.kind)));
+    if (!rows.length) scoreRemarkList.append(chatEl(
+      "p",
+      "style-details-note",
+      reviewState === "complete" ? "No slop found." : "No slop marked yet. Check the draft to catch stock wording and weak spots."
+    ));
+    if (!isLatinScript(text)) scoreRemarkList.append(chatEl("p", "style-details-note", "Local wording checks support English; the model check supports this draft."));
+  }
+  function keepStyleMarker(marker) {
+    const kept = { ...marker, state: "kept" };
+    keptStyle.push(kept);
+    workView.dispatch({ effects: refreshStyleFx.of(null) });
+    saveKeptStyle();
+    removeLocalFinding();
+    syncStyleScore();
+    showEditFeedback("Kept this wording here", () => {
+      keptStyle = keptStyle.filter((item) => item !== kept);
+      saveKeptStyle();
+      workView.dispatch({ effects: refreshStyleFx.of(null) });
+      syncStyleScore();
+    });
+  }
+  function removeLocalFinding() {
+    const card = findingCards.get(-1);
+    if (card) {
+      railAnchors.delete(card);
+      railHomes.delete(card);
+      card.remove();
+      findingCards.delete(-1);
+    }
+    localFinding = null;
+    if (activeFinding?.id === -1) detach();
+  }
+  function selectStyleMarker(marker) {
+    closeScorePopover();
+    if (localFinding?.from !== marker.from || localFinding?.quote !== marker.quote) removeLocalFinding();
+    localFinding = { ...marker, id: -1, pattern: "Stock wording", state: "pending" };
+    openFinding(localFinding, true);
+  }
+  scoreDetails.addEventListener("beforetoggle", (event) => {
+    if (event.newState === "open") renderScoreDetails();
+  });
+  scoreDetails.addEventListener("toggle", () => scoreEl.setAttribute("aria-expanded", String(isScoreOpen())));
+  scoreReviewRun.addEventListener("click", () => runReview());
   function autoReviewSchedule() {
     if (!autoReviewOn || loadingDocument || savePaused) return;
     clearTimeout(autoReviewTimer);
@@ -18635,7 +18936,7 @@
       if (complete) for (const paragraph of pending) checkedSentences.add(paragraph.key);
       syncReviewLabel();
     } catch (error) {
-      setReviewStatus(error.name === "AbortError" ? "Automatic review stopped" : `Automatic review failed. ${modelError(error).say}`, error.message);
+      setReviewStatus(error.name === "AbortError" ? "Automatic slop check stopped" : `Automatic slop check failed. ${modelError(error).say}`, error.message);
     } finally {
       autoReviewBusy = false;
       reviewButton.classList.remove("is-busy");
@@ -18644,6 +18945,7 @@
   }
   var suggestTimer = null;
   var suggestAbort = null;
+  var suggestVersion = 0;
   var SUGGEST_DELAY = 900;
   var SUGGEST_MIN = 15;
   function atParagraphEnd(state) {
@@ -18654,29 +18956,59 @@
     if (line.number === state.doc.lines) return true;
     return state.doc.line(line.number + 1).text.trim() === "";
   }
-  function suggestSchedule() {
-    if (!autoSuggestOn || loadingDocument || savePaused) return;
+  function cancelSuggestion() {
+    suggestVersion++;
     clearTimeout(suggestTimer);
-    if (suggestAbort) {
-      suggestAbort.abort();
-      suggestAbort = null;
-    }
+    suggestTimer = null;
+    suggestAbort?.abort();
+    suggestAbort = null;
+    if (reviewStatus.dataset.from === "suggest" && reviewStatus.textContent === "Suggesting\u2026") setReviewStatus("");
+  }
+  function suggestSchedule() {
+    cancelSuggestion();
+    if (!autoSuggestOn || loadingDocument || savePaused || !workView.hasFocus || document.hidden) return;
     const doc2 = workView.state.doc.toString();
     if (doc2.trim().length < SUGGEST_MIN) return;
     if (!atParagraphEnd(workView.state)) return;
     suggestTimer = setTimeout(suggestFetch, SUGGEST_DELAY);
   }
-  async function suggestFetch() {
+  function suggestionUpdate(update) {
+    if (update.docChanged || update.selectionSet || update.focusChanged && !update.view.hasFocus || update.state.readOnly) {
+      cancelSuggestion();
+    }
+    if (update.focusChanged && !update.view.hasFocus) {
+      queueMicrotask(() => {
+        if (!update.view.hasFocus) ghostClear(update.view);
+      });
+    }
+    if (update.docChanged && update.transactions.some((tr) => tr.isUserEvent("input.type"))) suggestSchedule();
+  }
+  async function suggestFetch(manual = false) {
+    suggestTimer = null;
     const view = workView;
     const state = view.state;
-    if (state.readOnly || !autoSuggestOn || !currentAgent()) return;
-    if (!atParagraphEnd(state)) return;
+    if (state.readOnly || loadingDocument || savePaused || !view.hasFocus || document.hidden || view.composing) return;
+    if (!manual && !autoSuggestOn) return;
+    if (!atParagraphEnd(state)) {
+      if (manual) setReviewStatus("Place the caret at the end of a paragraph to request a continuation.", void 0, "suggest");
+      return;
+    }
     const doc2 = state.doc.toString();
     const pos = state.selection.main.head;
+    if (!doc2.trim() || !manual && doc2.trim().length < SUGGEST_MIN) {
+      if (manual) setReviewStatus("Write a few words before requesting a continuation.", void 0, "suggest");
+      return;
+    }
     const line = state.doc.lineAt(pos);
-    if (/^\/idea/i.test(line.text)) return;
-    const job = startJob({ background: true });
+    if (/^\s*\/idea(?:\s|$)/i.test(line.text)) return;
+    const version = suggestVersion;
+    if (manual && !await ensureAgent()) return;
+    if (version !== suggestVersion || !view.hasFocus || !currentAgent()) return;
+    const agent = currentAgent();
+    const job = startJob({ background: !manual });
     suggestAbort = job;
+    const isCurrent = () => suggestAbort === job && !job.signal.aborted && version === suggestVersion && !loadingDocument && !savePaused && !document.hidden && view.hasFocus && !view.composing && !view.state.readOnly && (manual || autoSuggestOn) && view.state.doc === state.doc && view.state.selection.eq(state.selection) && JSON.stringify(currentAgent()) === JSON.stringify(agent);
+    if (manual) setReviewStatus("Suggesting\u2026", void 0, "suggest");
     try {
       const res = await fetch("/suggest", {
         method: "POST",
@@ -18684,25 +19016,27 @@
         body: JSON.stringify({
           document: doc2,
           cursor: pos,
-          agent: currentAgent()
+          agent
         }),
-        signal: suggestAbort.signal
+        signal: job.signal
       });
       if (!res.ok) {
         const problem = modelError(new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`));
-        setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, "suggest");
+        if (isCurrent() && !saidInStream(problem.say)) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, "suggest");
         return;
       }
       const data = await res.json();
-      if (data.suggestion && view.state.doc.toString() === doc2 && view.state.selection.main.head === pos && !view.state.readOnly) {
-        ghostShow(view, data.suggestion);
-      }
+      if (!isCurrent()) return;
+      if (reviewStatus.dataset.from === "suggest") setReviewStatus("");
+      if (data.suggestion) ghostShow(view, data.suggestion);
+      else if (manual) setReviewStatus("No continuation to suggest.", void 0, "suggest");
     } catch (error) {
       if (error.name === "AbortError") return;
       const problem = modelError(error);
-      setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, "suggest");
+      if (isCurrent() && !saidInStream(problem.say)) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, "suggest");
     } finally {
       finishJob(job);
+      if (suggestAbort === job) suggestAbort = null;
     }
   }
   var readonlyComp = new Compartment();
@@ -18714,11 +19048,7 @@
     const pos = view.state.selection.main.head;
     const line = view.state.doc.lineAt(pos);
     if (!/^\/idea(\s|$)/i.test(line.text)) return false;
-    clearTimeout(suggestTimer);
-    if (suggestAbort) {
-      suggestAbort.abort();
-      suggestAbort = null;
-    }
+    cancelSuggestion();
     ghostClear(view);
     runIdeaExpansion(view, line).catch(console.error);
     return true;
@@ -18752,11 +19082,15 @@
       finishJob(job);
     }
   }
-  var CHAT_PLACEHOLDER = "Ask anything, or select text to rewrite";
+  var CHAT_PLACEHOLDER = "Ask about your draft, or request a rewrite";
   var attached = null;
   var activeFinding = null;
+  var focusedFindingId = null;
   var chatHistory = [];
   var chatAbort = null;
+  var chatRequests = /* @__PURE__ */ new Set();
+  var chatEditCards = /* @__PURE__ */ new Map();
+  var changingChatEdit = null;
   function chatEl(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -18765,33 +19099,157 @@
   }
   var chatAtBottom = () => chatStream.scrollHeight - chatStream.scrollTop - chatStream.clientHeight < 48;
   function chatScroll(stick) {
-    if (stick) chatStream.scrollTop = chatStream.scrollHeight;
+    chatStream.scrollTop = chatStream.scrollHeight;
+    void stick;
   }
   function saveChat() {
-    docStorage.setItem("wa-chat", JSON.stringify(chatHistory.slice(-20)));
+    docStorage.setItem("wa-chat", JSON.stringify({ document: workView.state.doc.toString(), messages: chatHistory.slice(-20) }));
   }
   function restoreChat() {
-    let saved = [];
+    let saved;
     try {
-      saved = JSON.parse(docStorage.getItem("wa-chat") || "[]");
+      saved = JSON.parse(docStorage.getItem("wa-chat") || "null");
     } catch {
+      return;
     }
-    if (!Array.isArray(saved) || !saved.length) return;
-    chatHistory = saved;
-    for (const message of saved) {
-      if (message.role === "user") {
-        chatAdd(chatEl("div", "chat-message is-user", message.display ?? message.content));
-      } else {
-        const node = chatEl("div", "chat-message is-agent is-markdown");
-        node.innerHTML = renderMarkdown(message.content);
-        chatAdd(node);
+    const messages = Array.isArray(saved) ? saved : saved?.messages;
+    if (!Array.isArray(messages)) return;
+    chatHistory = messages.filter((message) => message && ["user", "assistant"].includes(message.role) && typeof message.content === "string").slice(-20);
+    for (const message of chatHistory) {
+      if (message.role === "user") chatAdd(chatEl("div", "chat-message is-user", message.display ?? message.content));
+      else {
+        message.edits = Array.isArray(message.edits) ? message.edits.filter((edit) => edit && typeof edit.quote === "string" && typeof edit.replacement === "string" && typeof edit.label === "string").slice(0, 8) : [];
+        for (const edit of message.edits) {
+          if (saved.document !== workView.state.doc.toString() || !chatEditMatches(edit, workView.state.doc.toString())) {
+            if (edit.state !== "unlocated") edit.state = "stale";
+          }
+        }
+        renderChatAnswer(chatAdd(chatEl("div", "chat-message is-agent is-markdown")), message);
       }
     }
+  }
+  function renderChatAnswer(reply, message) {
+    reply.innerHTML = renderMarkdown(message.content);
+    for (const edit of message.edits || []) reply.append(chatEditCard(edit));
+    if (message.editWarning) reply.append(chatEl("p", "chat-error", message.editWarning));
+    if (!message.edits?.length) {
+      const prepare = chatEl("button", "chat-again", "Prepare rewrite");
+      prepare.type = "button";
+      prepare.addEventListener("click", () => {
+        chatInput.value = `Prepare a concrete rewrite based on this advice:
+${message.content}`;
+        chatSend();
+      });
+      reply.append(prepare);
+    }
+  }
+  function chatEditCard(edit) {
+    const card = chatEl("section", "chat-edit-card");
+    card.setAttribute("aria-label", edit.label);
+    card.append(chatEl("strong", "chat-edit-title", edit.label));
+    card.append(chatEl("p", "chat-edit-replacement", edit.replacement || "(Remove this passage)"));
+    const actions = chatEl("div", "chat-edit-actions");
+    const button = (name2, handler) => {
+      const node = chatEl("button", "review-action", name2);
+      node.type = "button";
+      node.addEventListener("click", handler);
+      actions.append(node);
+      return node;
+    };
+    const preview = button("Preview", () => {
+      if (!chatEditMatches(edit, workView.state.doc.toString())) return;
+      if (plainPreview?.edit === edit) clearPlainPreview();
+      else {
+        clearPlainPreview();
+        workView.dispatch({ effects: EditorView.scrollIntoView(edit.from, { y: "center" }) });
+        showPlainPreview(edit.replacement, edit);
+        plainPreview.edit = edit;
+      }
+      syncChatEditCards();
+    });
+    const apply = button("Apply", () => changeChatEdit(edit));
+    apply.classList.add("is-primary");
+    const keep = button("Keep original", () => {
+      clearPlainPreview();
+      edit.state = "kept";
+      saveChat();
+      syncChatEditCards();
+      undo2.focus();
+    });
+    const undo2 = button("Undo", () => {
+      if (edit.state === "kept") {
+        edit.state = "pending";
+        saveChat();
+        syncChatEditCards();
+        apply.focus();
+      } else changeChatEdit(edit, true);
+    });
+    const refresh = button("Request new edit", () => {
+      if (edit.state === "unlocated") {
+        chatInput.value = `Prepare an edit for the passage I select. Previous suggestion: ${edit.label}`;
+        chatInput.focus();
+        return;
+      }
+      chatInput.value = `Prepare a new edit for the current draft. Previous suggestion: ${edit.label}. Original passage: ${edit.quote}`;
+      chatSend();
+    });
+    const status = chatEl("p", "chat-edit-status");
+    status.setAttribute("role", "status");
+    actions.prepend(status);
+    card.append(actions);
+    chatEditCards.set(edit, { card, preview, apply, keep, undo: undo2, refresh, status });
+    syncChatEditCard(edit, chatEditCards.get(edit));
+    return card;
+  }
+  function syncChatEditCard(edit, ui) {
+    const valid = chatEditMatches(edit, workView.state.doc.toString());
+    const pending = edit.state === "pending" && valid;
+    ui.preview.hidden = ui.apply.hidden = ui.keep.hidden = !pending;
+    ui.undo.hidden = !valid || !["applied", "kept"].includes(edit.state);
+    ui.refresh.hidden = valid;
+    ui.refresh.textContent = edit.state === "unlocated" ? "Choose passage" : "Request new edit";
+    ui.preview.textContent = plainPreview?.edit === edit ? "End preview" : "Preview";
+    ui.preview.setAttribute("aria-pressed", String(plainPreview?.edit === edit));
+    ui.apply.disabled = ui.undo.disabled = workView.state.readOnly || loadingDocument || savePaused;
+    ui.status.textContent = !valid ? edit.state === "unlocated" ? "Select the intended passage and request this edit again." : "" : edit.state === "applied" ? "Applied" : edit.state === "kept" ? "Original kept" : "";
+    ui.status.hidden = !ui.status.textContent;
+    ui.status.classList.toggle("is-ok", valid && edit.state === "applied");
+  }
+  function syncChatEditCards() {
+    for (const [edit, ui] of chatEditCards) {
+      if (!ui.card.isConnected) {
+        chatEditCards.delete(edit);
+        continue;
+      }
+      syncChatEditCard(edit, ui);
+    }
+  }
+  function changeChatEdit(edit, undo2 = false) {
+    if (workView.state.readOnly || loadingDocument || savePaused || !chatEditMatches(edit, workView.state.doc.toString()) || edit.state !== (undo2 ? "applied" : "pending")) return;
+    clearPlainPreview();
+    const text = undo2 ? edit.quote : edit.replacement;
+    changingChatEdit = edit;
+    try {
+      if (undo2) {
+        saveSnapshot("Before undoing chat edit");
+        workView.dispatch({ changes: { from: edit.from, to: edit.to, insert: text }, selection: { anchor: edit.from + text.length } });
+        save();
+      } else applyText(text, { from: edit.from, to: edit.to, text: edit.quote, document: workView.state.doc.toString() });
+      edit.to = edit.from + text.length;
+      edit.state = undo2 ? "pending" : "applied";
+    } finally {
+      changingChatEdit = null;
+    }
+    saveChat();
+    syncChatEditCards();
+    setChatOpen(true);
+    const ui = chatEditCards.get(edit);
+    (undo2 ? ui?.apply : ui?.undo)?.focus();
   }
   var rail = document.getElementById("rail");
   var railAnchors = /* @__PURE__ */ new Map();
   var railHomes = /* @__PURE__ */ new Map();
-  var RAIL_WIDTH = 240;
+  var RAIL_WIDTH = 300;
   var RAIL_GUTTER = 24;
   var railOn = false;
   function syncRail() {
@@ -18805,12 +19263,19 @@
     if (fits === railOn) return;
     railOn = fits;
     rail.hidden = !fits;
+    const focused = focusedFindingId;
     for (const node of railAnchors.keys()) {
       if (!node.isConnected) continue;
       node.style.top = "";
       node.style.visibility = "";
-      if (fits) rail.append(node);
-      else placeHome(node);
+      if (fits) {
+        node.style.display = "";
+        rail.append(node);
+      } else {
+        placeHome(node);
+        const nodeId = Number(node.dataset?.findingId);
+        node.style.display = focused === null || nodeId === focused ? "" : "none";
+      }
     }
     if (!fits) chatScroll(true);
   }
@@ -18860,6 +19325,10 @@
     }
     chatStream.hidden = true;
     detach();
+    for (const card of findingCards.values()) {
+      const kept = card.querySelector(".chat-variants:has(.variant-card.is-applied)");
+      if (kept) streamAppend(kept);
+    }
     discardFindingCards();
     for (const stale of document.querySelectorAll(".chat-variants")) {
       if (!stale.querySelector(".variant-card.is-applied")) stale.remove();
@@ -18874,6 +19343,7 @@
       card.remove();
     }
     findingCards.clear();
+    focusedFindingId = null;
   }
   function chatAdd(node) {
     setChatOpen(true);
@@ -18886,14 +19356,46 @@
     chatClear.hidden = false;
     return node;
   }
+  var editFeedbackTimer = null;
+  var EDIT_FEEDBACK_MS = 6e3;
+  function showEditFeedback(message, onUndo) {
+    editFeedback.replaceChildren(chatEl("span", "", message));
+    const undo2 = chatEl("button", "edit-feedback-undo", "Undo");
+    undo2.type = "button";
+    const hide = () => {
+      clearTimeout(editFeedbackTimer);
+      editFeedback.hidden = true;
+    };
+    undo2.addEventListener("click", () => {
+      hide();
+      onUndo();
+    });
+    const close = chatEl("button", "edit-feedback-close", "\xD7");
+    close.type = "button";
+    close.setAttribute("aria-label", "Hide editing confirmation");
+    close.addEventListener("click", () => {
+      hide();
+      workView.focus();
+    });
+    editFeedback.append(undo2, close);
+    editFeedback.hidden = false;
+    clearTimeout(editFeedbackTimer);
+    editFeedbackTimer = setTimeout(() => {
+      editFeedback.hidden = true;
+    }, EDIT_FEEDBACK_MS);
+  }
+  function basePlaceholder() {
+    if (attached) return activeFinding ? "Ask about this finding" : "Ask about this passage, or request a change";
+    return CHAT_PLACEHOLDER;
+  }
   function attach(range, finding = null, focusComposer = true) {
     attached = range;
     activeFinding = finding;
-    chatChip.classList.toggle("hidden", !!finding);
-    chatChipText.textContent = finding?.pattern ?? "Selected text";
+    chatChip.classList.remove("hidden");
+    chatChipText.textContent = finding ? `Finding: ${finding.pattern}` : "Selected text";
+    chatChipText.title = chatChipText.textContent;
     workView.dispatch({ effects: setAttachFx.of({ from: range.from, to: range.to, finding: !!finding }) });
-    chatInput.placeholder = finding ? "Ask about this finding" : "Describe the change";
-    syncActiveCard();
+    chatInput.placeholder = basePlaceholder();
     if (focusComposer) chatInput.focus();
   }
   function detach() {
@@ -18902,7 +19404,7 @@
     activeFinding = null;
     chatChip.classList.add("hidden");
     syncActiveCard();
-    chatInput.placeholder = CHAT_PLACEHOLDER;
+    chatInput.placeholder = basePlaceholder();
     workView.dispatch({ effects: setAttachFx.of(null) });
   }
   function attachedRange() {
@@ -18913,7 +19415,49 @@
     });
     return range;
   }
-  var DELTA_MATERIAL = 5;
+  var markBubble = document.getElementById("mark-bubble");
+  var bubbleMode = null;
+  function hideMarkBubble() {
+    if (markBubble.hidden) return;
+    markBubble.hidden = true;
+    markBubble.replaceChildren();
+    bubbleMode = null;
+  }
+  function placeBubble(x, y) {
+    markBubble.hidden = false;
+    const box = markBubble.getBoundingClientRect();
+    const left = Math.max(8, Math.min(x - box.width / 2, window.innerWidth - box.width - 8));
+    let top2 = y - box.height - 12;
+    if (top2 < 8) top2 = y + 14;
+    markBubble.style.left = `${left}px`;
+    markBubble.style.top = `${Math.max(8, top2)}px`;
+  }
+  function bubbleButton(label, run) {
+    const button = chatEl("button", "mark-bubble-seg", label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      hideMarkBubble();
+      run();
+      workView.focus();
+    });
+    return button;
+  }
+  function attachLive(finding, range) {
+    attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding, false);
+  }
+  function showSelectionBubble(x, y) {
+    const sel = workView.state.selection.main;
+    if (sel.empty) return;
+    bubbleMode = "selection";
+    const actions = chatEl("div", "mark-bubble-actions");
+    actions.append(bubbleButton("Add to context", () => {
+      const live = workView.state.selection.main;
+      if (live.empty) return;
+      attach({ from: live.from, to: live.to, text: workView.state.sliceDoc(live.from, live.to) }, null, true);
+    }));
+    markBubble.replaceChildren(actions);
+    placeBubble(x, y);
+  }
   var PlainVariantWidget = class extends WidgetType {
     constructor(text, block2) {
       super();
@@ -18949,6 +19493,22 @@
       }).range(value.from, value.to)], true);
     })
   });
+  var setFlashFx = StateEffect.define();
+  var flashField = StateField.define({
+    create: () => null,
+    update(value, tr) {
+      for (const effect of tr.effects) if (effect.is(setFlashFx)) return effect.value;
+      if (tr.docChanged) return null;
+      return value;
+    },
+    provide: (field) => EditorView.decorations.from(field, (value) => {
+      if (!value || value.from === value.to) return Decoration.none;
+      return Decoration.set([Decoration.mark({ class: "cm-applied-flash" }).range(value.from, value.to)]);
+    })
+  });
+  var flashTimer = null;
+  var unpreviewTimer = null;
+  var UNPREVIEW_DELAY = 120;
   var plainPreview = null;
   function showPlainPreview(text, target) {
     plainPreview = { target };
@@ -18962,12 +19522,14 @@
     });
   }
   function clearPlainPreview() {
+    clearTimeout(unpreviewTimer);
     if (!plainPreview) return;
     plainPreview = null;
     try {
       workView.dispatch({ effects: setPlainVariantFx.of(null) });
     } catch {
     }
+    syncChatEditCards();
   }
   function applyText(text, target, wrap = null, card = null) {
     if (!replacementTarget(workView.state.doc.toString(), target) || workView.state.readOnly) {
@@ -18975,15 +19537,30 @@
       return;
     }
     const range = target;
-    clearPlainPreview();
+    plainPreview = null;
     saveSnapshot("Before AI replacement");
     workView.dispatch({
       changes: { from: range.from, to: range.to, insert: text },
-      selection: { anchor: range.from + text.length }
+      selection: { anchor: range.from + text.length },
+      effects: [
+        setPlainVariantFx.of(null),
+        setFlashFx.of({ from: range.from, to: range.from + text.length })
+      ]
     });
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      try {
+        workView.dispatch({ effects: setFlashFx.of(null) });
+      } catch {
+      }
+    }, 1300);
     workView.focus();
     save();
     detach();
+    try {
+      localStorage.setItem("wa-variant-hint", "seen");
+    } catch {
+    }
     if (card) card.classList.add("is-applied");
     if (wrap) {
       wrap.classList.add("is-spent");
@@ -18995,8 +19572,68 @@
       const soloHint = wrap.querySelector(":scope > .variant-hint");
       if (soloHint) soloHint.hidden = true;
       attachUndo(card, text, target);
-      setChatOpen(false);
+      const hostCard = wrap.closest(".chat-card");
+      if (hostCard && findingCards.has(Number(hostCard.dataset.findingId))) {
+        railAnchors.set(hostCard, () => target.from);
+        layoutRail();
+        scheduleAppliedHide(hostCard, Number(hostCard.dataset.findingId));
+      } else {
+        setChatOpen(true);
+      }
     }
+  }
+  var APPLIED_HIDE_MS = 6e3;
+  var appliedHideTimers = /* @__PURE__ */ new Map();
+  function scheduleAppliedHide(hostCard, id) {
+    clearTimeout(appliedHideTimers.get(id));
+    appliedHideTimers.set(id, setTimeout(() => {
+      const card = findingCards.get(id);
+      if (!card || !card.isConnected) {
+        appliedHideTimers.delete(id);
+        return;
+      }
+      if (card.matches(":hover") || card.contains(document.activeElement)) {
+        scheduleAppliedHide(card, id);
+        return;
+      }
+      appliedHideTimers.delete(id);
+      resolveFinding(id);
+    }, APPLIED_HIDE_MS));
+  }
+  function resolveFinding(id) {
+    clearTimeout(appliedHideTimers.get(id));
+    appliedHideTimers.delete(id);
+    if (id === -1) {
+      removeLocalFinding();
+      saveFindings();
+      syncReviewLabel();
+      syncStyleScore();
+      updateFindingNav();
+      layoutRail();
+      return;
+    }
+    reviewFindings = reviewFindings.filter((finding) => finding.id !== id);
+    const card = findingCards.get(id);
+    if (card) {
+      railAnchors.delete(card);
+      railHomes.delete(card);
+      card.remove();
+    }
+    findingCards.delete(id);
+    try {
+      workView.dispatch({ effects: dropReviewFx.of(id) });
+    } catch {
+    }
+    if (focusedFindingId === id) {
+      focusedFindingId = null;
+      syncActiveCard();
+    }
+    saveFindings();
+    syncReviewLabel();
+    syncStyleScore();
+    updateFindingNav();
+    layoutRail();
+    if (chatStream.children.length === 0) setChatOpen(false);
   }
   function attachUndo(card, text, target) {
     if (!card) return;
@@ -19007,16 +19644,32 @@
       undo3.type = "button";
       undo3.title = "Put the passage back as it was";
       undo3.addEventListener("click", () => {
+        const host = undo3.closest(".chat-card");
+        if (host?.dataset.findingId !== void 0 && host.dataset.findingId !== "") {
+          clearTimeout(appliedHideTimers.get(Number(host.dataset.findingId)));
+          appliedHideTimers.delete(Number(host.dataset.findingId));
+        }
         const at = Number(undo3.dataset.from);
         const { applied, previous } = undo3.dataset;
-        if (workView.state.sliceDoc(at, at + applied.length) !== applied) {
+        if (!undo3.isConnected || undo3.dataset.stale || workView.state.sliceDoc(at, at + applied.length) !== applied) {
           chatAdd(chatEl("div", "chat-error", "That passage has changed since. Use the editor\u2019s undo instead."));
           return;
         }
         workView.dispatch({ changes: { from: at, to: at + applied.length, insert: previous }, selection: { anchor: at + previous.length } });
         workView.focus();
         save();
-        undo3.closest(".chat-variants")?.remove();
+        const spentWrap = undo3.closest(".chat-variants");
+        const hostCard = undo3.closest(".chat-card");
+        spentWrap?.remove();
+        if (hostCard && hostCard.dataset.findingId && !hostCard.querySelector(".chat-variants")) {
+          const hostId = Number(hostCard.dataset.findingId);
+          railAnchors.delete(hostCard);
+          railHomes.delete(hostCard);
+          findingCards.delete(hostId);
+          hostCard.remove();
+          refocusAfterRemoval(hostId);
+        }
+        layoutRail();
         if (chatStream.children.length === 0) setChatOpen(false);
       });
       row.append(undo3);
@@ -19026,85 +19679,139 @@
     undo2.dataset.from = String(target.from);
     undo2.dataset.applied = text;
     undo2.dataset.previous = target.text;
+    delete undo2.dataset.stale;
+    return undo2;
   }
   function markFor(id) {
     return workView.dom.querySelector(`.cm-slop[data-slop-id="${id}"]`);
   }
   function syncActiveCard() {
-    for (const [id, card] of findingCards) card.classList.toggle("is-active", id === activeFinding?.id);
+    const focused = focusedFindingId;
+    for (const [id, card] of findingCards) {
+      const isFocused = id === focused;
+      card.classList.toggle("is-active", isFocused);
+      const finding = reviewFindings.find((item) => item.id === id);
+      if (finding) {
+        railAnchors.set(card, () => {
+          if (card.hidden) return null;
+          if (focused !== null && id !== focused) return null;
+          return findingRange(id)?.from ?? null;
+        });
+      }
+      if (!railOn && card.isConnected && card.parentElement === chatStream) {
+        card.style.display = focused === null || isFocused ? "" : "none";
+      } else {
+        card.style.display = "";
+      }
+    }
+    updateFindingNav();
+    layoutRail();
+  }
+  function refocusAfterRemoval(removedId) {
+    if (focusedFindingId !== removedId) return;
+    const live = reviewFindings.map((finding) => ({ finding, range: findingRange(finding.id) })).filter((item) => item.range).sort((a, b) => a.range.from - b.range.from || a.finding.id - b.finding.id);
+    const next = live.find((item) => findingCards.has(item.finding.id));
+    focusedFindingId = next ? next.finding.id : null;
+    syncActiveCard();
   }
   function findingCard(finding, instruction) {
     const card = chatEl("div", "chat-card");
+    card.dataset.findingId = String(finding.id);
     card.addEventListener("mouseenter", () => markFor(finding.id)?.classList.add("is-hot"));
     card.addEventListener("mouseleave", () => markFor(finding.id)?.classList.remove("is-hot"));
-    const dismiss = chatEl("button", "chat-card-dismiss", "\xD7");
+    const nav2 = chatEl("div", "finding-nav");
+    const prev = chatEl("button", "finding-nav-btn", "\u2039");
+    prev.type = "button";
+    prev.title = "Previous finding (Shift+F8)";
+    prev.setAttribute("aria-label", "Previous finding");
+    prev.addEventListener("click", () => jumpToNextFinding(-1));
+    const count = chatEl("span", "finding-nav-count", "");
+    const next = chatEl("button", "finding-nav-btn", "\u203A");
+    next.type = "button";
+    next.title = "Next finding (F8)";
+    next.setAttribute("aria-label", "Next finding");
+    next.addEventListener("click", () => jumpToNextFinding(1));
+    nav2.append(prev, count, next);
+    const dismiss = chatEl("button", "chat-card-dismiss", "Keep as is");
     dismiss.type = "button";
-    dismiss.title = "Dismiss this finding";
-    dismiss.setAttribute("aria-label", "Dismiss this finding");
+    dismiss.title = "Keep this wording and dismiss the finding";
     dismiss.addEventListener("click", () => {
       chatAbort?.abort();
       clearPlainPreview();
       dismissFinding(finding.id);
     });
     card.append(
-      dismiss,
+      nav2,
       chatEl("strong", "", finding.pattern),
       chatEl("span", "", finding.reason),
       chatEl("small", "", finding.fix)
     );
+    if (finding.id === -1) nav2.hidden = true;
     const offer = chatEl("button", "chat-offer", "Options");
     offer.type = "button";
     offer.addEventListener("click", () => {
       const live = findingRange(finding.id);
       if (!live) {
-        if (!card.querySelector(".chat-error")) card.append(chatEl("div", "chat-error", "This passage has changed. Run Review again."));
+        if (!card.querySelector(".chat-error")) card.append(chatEl("div", "chat-error", "This passage has changed. Check again."));
         return;
       }
+      if (offer.disabled) return;
+      if (card.querySelector(".finding-variants .variant-card:not(.is-loading)")) return;
       offer.disabled = true;
       offer.textContent = "Looking\u2026";
-      if (activeFinding?.id !== finding.id) {
-        const target = { ...live, text: workView.state.sliceDoc(live.from, live.to) };
-        attach(target, finding, false);
-      }
-      requestVariants(instruction, null, card);
+      const target = { ...live, text: workView.state.sliceDoc(live.from, live.to), document: workView.state.doc.toString() };
+      requestVariants(instruction, target, card);
     });
-    card.append(offer);
+    const actions = chatEl("div", "finding-actions");
+    actions.append(offer, dismiss);
+    const discuss = chatEl("button", "chat-again", "Discuss");
+    discuss.type = "button";
+    discuss.addEventListener("click", () => {
+      const range = findingRange(finding.id);
+      if (range) attachLive(finding, range);
+      chatInput.focus();
+    });
+    actions.append(discuss);
+    if (finding.id === -1) dismiss.textContent = "Keep here";
+    const variantsBox = chatEl("div", "finding-variants");
+    card.append(actions, variantsBox);
+    updateFindingNav();
     return card;
+  }
+  function updateFindingNav() {
+    const live = reviewFindings.map((finding) => ({ finding, range: findingRange(finding.id) })).filter((item) => item.range).sort((a, b) => a.range.from - b.range.from || a.finding.id - b.finding.id);
+    for (const [id, card] of findingCards) {
+      const count = card.querySelector(".finding-nav-count");
+      if (!count) continue;
+      const index = live.findIndex((item) => item.finding.id === id);
+      count.textContent = live.length ? `${index >= 0 ? index + 1 : "\u2013"} of ${live.length}` : "";
+    }
   }
   function variantCards(variants, instruction, target, card = null) {
     const doc2 = workView.state.doc.toString();
-    const measurable = isLatinScript(doc2);
-    const base2 = measurable ? styleScore(doc2).score : null;
-    const scored = variants.map((text) => ({
-      text,
-      score: measurable ? styleScore(doc2.slice(0, target.from) + text + doc2.slice(target.to)).score : null
-    }));
-    if (measurable) scored.sort((a, b) => a.score - b.score);
+    const ordered = isLatinScript(doc2) ? variants.map((text) => ({ text, score: styleScore(doc2.slice(0, target.from) + text + doc2.slice(target.to)).score })).sort((a, b) => a.score - b.score).map((item) => item.text) : variants.slice();
     const wrap = chatEl("div", "chat-variants");
     wrap.setAttribute("role", "list");
     wrap.dataset.targetFrom = String(target.from);
-    scored.forEach(({ text, score }, index) => {
+    ordered.forEach((text, index) => {
       const item = chatEl("div", "variant-card");
       item.setAttribute("role", "listitem");
       item.tabIndex = 0;
       item.setAttribute("role", "button");
       item.setAttribute("aria-label", `Apply option ${index + 1}`);
       const label = chatEl("div", "variant-label", `Option ${index + 1}`);
-      if (score !== null) {
-        const move = score - base2;
-        const tone = move <= -DELTA_MATERIAL ? " is-better" : move >= DELTA_MATERIAL ? " is-worse" : "";
-        const delta = chatEl("span", `variant-delta${tone}`, `${base2} \u2192 ${score}`);
-        delta.title = "Local AI-tell score for the whole draft if you pick this variant";
-        label.append(delta);
-      }
       const body = chatEl("div", "variant-text", text);
       item.append(label, body);
       const previewIt = () => {
         if (wrap.classList.contains("is-spent")) return;
         if (!replacementTarget(workView.state.doc.toString(), target)) return;
+        clearTimeout(unpreviewTimer);
         showPlainPreview(text, target);
       };
-      const unpreview = () => clearPlainPreview();
+      const unpreview = () => {
+        clearTimeout(unpreviewTimer);
+        unpreviewTimer = setTimeout(clearPlainPreview, UNPREVIEW_DELAY);
+      };
       item.addEventListener("mouseenter", previewIt);
       item.addEventListener("mouseleave", unpreview);
       item.addEventListener("focus", previewIt);
@@ -19126,6 +19833,13 @@
       });
       wrap.append(item);
     });
+    const hintSeen = (() => {
+      try {
+        return localStorage.getItem("wa-variant-hint") === "seen";
+      } catch {
+        return false;
+      }
+    })();
     if (instruction !== null) {
       const foot = chatEl("div", "variant-foot");
       const again = chatEl("button", "chat-again is-icon");
@@ -19139,12 +19853,11 @@
         wrap.remove();
         requestVariants(instruction, target, card);
       });
-      const hint = chatEl("span", "variant-hint", "Hover to preview \xB7 Click to apply \xB7 Esc to dismiss");
-      foot.append(hint, again);
+      if (!hintSeen) foot.append(chatEl("span", "variant-hint", "Hover to preview \xB7 Click to apply \xB7 Esc to dismiss"));
+      foot.append(again);
       wrap.append(foot);
-    } else {
-      const hint = chatEl("div", "variant-hint", "Hover to preview \xB7 Click to apply \xB7 Esc to dismiss");
-      wrap.append(hint);
+    } else if (!hintSeen) {
+      wrap.append(chatEl("div", "variant-hint", "Hover to preview \xB7 Click to apply \xB7 Esc to dismiss"));
     }
     return wrap;
   }
@@ -19178,8 +19891,16 @@
     card.hidden = false;
     layoutRail();
   }
+  function retireStaleVariants(except) {
+    for (const stale of document.querySelectorAll(".chat-variants:not(.is-spent):not(.is-loading)")) {
+      if (stale !== except) stale.remove();
+    }
+    layoutRail();
+  }
   function showVariants(variants, instruction, target) {
-    chatAdd(variantCards(variants, instruction, target));
+    const wrap = variantCards(variants, instruction, target);
+    retireStaleVariants(wrap);
+    chatAdd(wrap);
     try {
       workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "center" }) });
     } catch {
@@ -19195,8 +19916,13 @@
     if (!await ensureAgent()) return;
     if (!replacementTarget(workView.state.doc.toString(), target)) return;
     clearPlainPreview();
-    if (card) hideFindingCard(card);
-    const placeholder2 = chatAdd(skeletonCards());
+    const inCard = !!(card && card.isConnected && card.querySelector(".finding-variants"));
+    const box = inCard ? card.querySelector(".finding-variants") : null;
+    if (inCard) {
+      box.replaceChildren();
+      retireStaleVariants(null);
+    } else if (card) hideFindingCard(card);
+    const placeholder2 = inCard ? box.appendChild(skeletonCards()) : chatAdd(skeletonCards());
     chatAbort?.abort();
     const job = startJob();
     chatAbort = job;
@@ -19218,57 +19944,95 @@
       if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
       if (!replacementTarget(workView.state.doc.toString(), target)) throw new Error("The draft changed while the rewrites were coming back. Select the passage again.");
       const stick = chatAtBottom();
-      const wrap = variantCards(data.variants, instruction, target);
-      if (placeholder2.isConnected) {
-        placeholder2.replaceWith(wrap);
-        chatScroll(stick);
+      const wrap = variantCards(data.variants, instruction, target, card);
+      retireStaleVariants(wrap);
+      if (inCard) {
+        if (placeholder2.isConnected) placeholder2.replaceWith(wrap);
+        else box.append(wrap);
+        const done = card.querySelector(".chat-offer:disabled");
+        if (done) {
+          done.disabled = false;
+          done.textContent = "Options";
+        }
+        layoutRail();
+        try {
+          workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "center" }) });
+        } catch {
+        }
       } else {
-        placeholder2.remove();
-        chatAdd(wrap);
+        if (placeholder2.isConnected) {
+          placeholder2.replaceWith(wrap);
+          chatScroll(stick);
+        } else {
+          placeholder2.remove();
+          chatAdd(wrap);
+        }
       }
     } catch (error) {
       if (error.name === "AbortError") {
         placeholder2.remove();
-        restoreFindingCard(card);
+        if (card) restoreFindingCard(card);
+        else layoutRail();
         return;
       }
       console.error("[/rewrite]", error);
       placeholder2.remove();
-      restoreFindingCard(card);
-      chatAdd(errorCard(modelError(error), () => requestVariants(instruction, target, card)));
+      if (!inCard) restoreFindingCard(card);
+      const err = errorCard(modelError(error), () => requestVariants(instruction, target, card));
+      if (inCard) {
+        box.append(err);
+        restoreFindingCard(card);
+      } else chatAdd(err);
     } finally {
       finishJob(job);
       if (chatAbort === job) chatAbort = null;
     }
   }
   var findingCards = /* @__PURE__ */ new Map();
-  function openFinding(finding, center = false) {
+  function openFinding(finding, center = false, at = null) {
+    closeScorePopover();
+    if (finding.id !== -1) removeLocalFinding();
     clearPlainPreview();
     const range = findingRange(finding.id);
     if (!range) return;
-    attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding, false);
+    focusedFindingId = finding.id;
     if (center) workView.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: "center" }) });
     if (findingCards.get(finding.id)?.isConnected) {
+      syncActiveCard();
+      collapseStreamBehind(findingCards.get(finding.id));
+      findingCards.get(finding.id)?.querySelector(".chat-offer")?.focus({ preventScroll: true });
       chatScroll(true);
       return;
     }
     const instruction = `Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`;
     const card = findingCard(finding, instruction);
-    findingCards.set(finding.id, railAdd(card, () => card.hidden ? null : findingRange(finding.id)?.from ?? null));
+    findingCards.set(finding.id, railAdd(card, () => {
+      if (card.hidden) return null;
+      if (focusedFindingId !== null && focusedFindingId !== finding.id) return null;
+      return findingRange(finding.id)?.from ?? null;
+    }));
     if (card.parentElement === chatStream) setChatOpen(true);
+    else collapseStreamBehind(card);
     syncActiveCard();
+    card.querySelector(".chat-offer")?.focus({ preventScroll: true });
+  }
+  function collapseStreamBehind(card) {
+    if (!card || card.parentElement === chatStream) return;
+    if (chatStream.hidden || chatStream.children.length === 0) return;
+    chatStream.hidden = true;
+    chatClear.hidden = false;
+    chatClear.textContent = "Conversation";
+    chatClear.setAttribute("aria-label", "Show the conversation");
+    chatClear.title = "Show the conversation";
   }
   async function chatSend() {
+    if ([...jobs].some((job) => !job.background)) return;
     const text = chatInput.value.trim();
     if (!text) return;
     if (!await ensureAgent()) return;
     chatInput.value = "";
     chatResize();
     chatAdd(chatEl("div", "chat-message is-user", text));
-    if (attached && !activeFinding) {
-      requestVariants(text);
-      return;
-    }
     chatHistory.push(attached && activeFinding ? {
       role: "user",
       content: `${text}
@@ -19279,21 +20043,30 @@ Editing direction: ${activeFinding.fix}`,
       display: text
     } : { role: "user", content: text });
     saveChat();
+    streamReply(newReplyBubble());
+  }
+  function newReplyBubble() {
     const reply = chatAdd(chatEl("div", "chat-message is-agent is-markdown"));
     reply.append(chatEl("span", "chat-caret"));
+    return reply;
+  }
+  async function streamReply(reply) {
     chatAbort?.abort();
     const job = startJob();
     chatAbort = job;
-    let answer = "";
+    const request = { document: workView.state.doc.toString(), selection: attachedRange(), changes: [] };
+    chatRequests.add(request);
+    let answer = "", result = null;
     try {
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: chatAbort.signal,
+        signal: job.signal,
         body: JSON.stringify({
-          messages: chatHistory.map(({ role, content: content2 }) => ({ role, content: content2 })),
-          document: workView.state.doc.toString(),
-          selection: attachedRange()?.text,
+          messages: chatHistory.map(({ role, content: content2, edits: edits2 }) => ({ role, content: content2 + (edits2?.length ? "\nProposed edits:\n" + JSON.stringify(edits2.map(({ label, quote, replacement, state }) => ({ label, quote, replacement, state }))) : "") })),
+          document: request.document,
+          selection: request.selection?.text,
+          selectionRange: request.selection && { from: request.selection.from, to: request.selection.to },
           agent: currentAgent()
         })
       });
@@ -19301,21 +20074,32 @@ Editing direction: ${activeFinding.fix}`,
       for await (const chunk of sseChunks(res)) {
         if (chunk.error) throw new Error(chunk.error);
         const stick = chatAtBottom();
-        answer += chunk.text ?? "";
+        if (typeof chunk.answer === "string") {
+          answer = chunk.answer;
+          result = chunk;
+        } else answer += chunk.text ?? "";
         reply.innerHTML = renderMarkdown(answer);
         chatScroll(stick);
       }
-      chatHistory.push({ role: "assistant", content: answer });
+      if (job.signal.aborted || !reply.isConnected) return;
+      const edits = locateChatEdits(result?.edits || [], request.document, request.selection);
+      for (const edit of edits) for (const changes of request.changes) mapChatEdit(edit, changes);
+      const message = { role: "assistant", content: answer, edits, editWarning: result?.editWarning };
+      chatHistory.push(message);
+      renderChatAnswer(reply, message);
       saveChat();
+      chatScroll(true);
     } catch (error) {
+      if (!reply.isConnected) return;
       if (error.name === "AbortError") {
         reply.innerHTML = renderMarkdown(answer ? answer + "\n\n[Stopped \u2014 incomplete]" : "Stopped");
         return;
       }
       console.error("[/chat]", error);
-      reply.title = error.message;
-      reply.innerHTML = renderMarkdown((answer ? answer + "\n\n" : "") + modelError(error).say);
+      if (!answer) reply.replaceWith(errorCard(modelError(error), () => streamReply(newReplyBubble())));
+      else reply.innerHTML = renderMarkdown(answer + "\n\n" + modelError(error).say);
     } finally {
+      chatRequests.delete(request);
       finishJob(job);
       if (chatAbort === job) chatAbort = null;
     }
@@ -19348,7 +20132,14 @@ Editing direction: ${activeFinding.fix}`,
     chatSendButton.classList.toggle("is-busy", busy);
     chatSendButton.disabled = !busy && !chatInput.value.trim();
     chatSendButton.setAttribute("aria-label", busy ? "Stop" : "Send");
+    chatInput.readOnly = busy;
+    chatInput.closest(".chat-composer")?.classList.toggle("is-busy", busy);
+    chatInput.placeholder = busy ? "Working\u2026" : basePlaceholder();
   }
+  document.getElementById("chat-rewrite").addEventListener("click", () => {
+    const range = attachedRange();
+    if (range) requestVariants(chatInput.value.trim() || "Make this passage clearer. Preserve meaning, facts and voice.");
+  });
   chatSendButton.addEventListener("click", () => {
     if ([...jobs].some((job) => !job.background)) {
       stopJobs();
@@ -19357,7 +20148,7 @@ Editing direction: ${activeFinding.fix}`,
     chatSend();
     chatInput.focus();
   });
-  chatInput.placeholder = CHAT_PLACEHOLDER;
+  syncSend();
   chatInput.addEventListener("input", chatResize);
   chatInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -19382,6 +20173,7 @@ Editing direction: ${activeFinding.fix}`,
     setChatOpen(open);
     (open ? chatInput : workView).focus();
   });
+  var MANUAL_ATTACH = false;
   document.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
@@ -19436,15 +20228,16 @@ Editing direction: ${activeFinding.fix}`,
       display: "flex",
       alignItems: "baseline",
       gap: "10px",
-      margin: "6px 0 2px",
-      padding: "8px 12px",
-      // Sits between two lines of the writer's own prose — it has to read as a
-      // panel on top of the draft, not as another paragraph of it.
-      border: "1px solid var(--border)",
+      margin: "4px 0 2px",
+      padding: "6px 10px",
+      // Sits between two lines of the writer's own prose. It is an inset strip
+      // of the draft — not a floating chat card, which is what --overlay plus a
+      // shadow reads as — so it takes the sunken surface and no shadow. The
+      // accent edge is what names it as model-suggested.
+      border: "1px solid var(--border-subtle)",
       borderLeft: "2px solid var(--accent)",
       borderRadius: "0 var(--r-sm) var(--r-sm) 0",
-      background: "var(--overlay)",
-      boxShadow: "var(--shadow-md)",
+      background: "var(--surface-2)",
       color: "var(--text-2)",
       pointerEvents: "none",
       userSelect: "none"
@@ -19468,25 +20261,29 @@ Editing direction: ${activeFinding.fix}`,
       borderRadius: "3px",
       boxShadow: "0 0 0 2px var(--attached-tint)"
     },
-    // A finding already marks its own span. Layering the selection tint over it
-    // read as the sentence being highlighted rather than a remark being opened —
-    // so here the decoration keeps tracking the live position (that is what lets
-    // an edit end the attachment) and gives up the look entirely.
+    // A finding already carries its own warm band. The attachment still needs a
+    // visible mark of its own — transparent here meant an open finding showed
+    // nothing of the working state — so it draws a blue underline over the band
+    // instead of a second fill. Tracking the live position is unchanged: that is
+    // what lets an edit end the attachment.
     ".cm-attached.cm-attached-finding": {
       background: "transparent",
-      boxShadow: "none"
-    },
-    // A quiet band, not a spell-checker's wavy red. Findings run over whole
-    // clauses here, and a wave under three lines of prose reads as an error the
-    // writer must clear rather than a remark they may weigh.
-    ".cm-slop": {
-      background: "var(--slop-tint)",
       borderRadius: "2px",
-      boxShadow: "inset 0 -1px 0 var(--slop-line)",
+      boxShadow: "inset 0 -2px 0 var(--accent)"
+    },
+    // A quiet amber band, not a spell-checker's wavy red and not a blue
+    // selection. Findings run over whole clauses here, and a wave under three
+    // lines of prose reads as an error the writer must clear rather than a
+    // remark they may weigh. Blue stays reserved for what the writer does:
+    // selection, attachment, suggestion.
+    ".cm-slop": {
+      background: "var(--remark-tint)",
+      borderRadius: "2px",
+      boxShadow: "inset 0 -1px 0 var(--remark-line)",
       cursor: "pointer",
       transition: "background .12s ease"
     },
-    ".cm-slop:hover": { background: "var(--slop-tint-hover)" },
+    ".cm-slop:hover": { background: "var(--remark-tint-hover)" },
     // Hover preview of a variant: a plain white sheet over the passage, no
     // colours. The attached tint stays underneath for the passage itself; this
     // replace decoration only shows while a card is hovered or focused.
@@ -19503,7 +20300,6 @@ Editing direction: ${activeFinding.fix}`,
     // readable, not a watermark.
     ".cm-placeholder": {
       color: "var(--muted)",
-      opacity: "0.75",
       lineHeight: "1.7"
     },
     // Hide gutters and fold markers — this is a prose editor
@@ -19522,8 +20318,7 @@ Editing direction: ${activeFinding.fix}`,
         //
         Prec.high(keymap.of([
           {
-            // Tab: accept ghost suggestion if one is showing;
-            //      otherwise swallow (no tab characters in prose).
+            // Tab accepts a suggestion; otherwise it moves focus normally.
             key: "Tab",
             run(view) {
               if (ghostAccept(view)) return true;
@@ -19535,9 +20330,19 @@ Editing direction: ${activeFinding.fix}`,
             key: "Escape",
             run(view) {
               const ghost = view.state.field(ghostField);
-              if (!ghost) return false;
+              const pending = suggestTimer !== null || suggestAbort !== null;
+              if (!ghost && !pending) return false;
+              cancelSuggestion();
               ghostClear(view);
-              clearTimeout(suggestTimer);
+              return true;
+            }
+          },
+          {
+            key: "Mod-Enter",
+            run(view) {
+              cancelSuggestion();
+              ghostClear(view);
+              void suggestFetch(true);
               return true;
             }
           },
@@ -19549,12 +20354,14 @@ Editing direction: ${activeFinding.fix}`,
         ])),
         // Standard text-editing and history keymaps
         keymap.of([...searchKeymap, ...historyKeymap, ...defaultKeymap]),
-        EditorView.contentAttributes.of({ "aria-label": "Draft editor" }),
+        EditorView.contentAttributes.of({ "aria-label": "Draft editor", "aria-describedby": "suggest-shortcut" }),
         // Ghost text state + decoration provider
         ghostField,
         reviewField,
+        styleMarkerField,
         attachField,
         variantPlainField,
+        flashField,
         // Read-only compartment — toggled during /idea streaming
         readonlyComp.of(EditorState.readOnly.of(true)),
         // Word wrap (essential for prose)
@@ -19562,22 +20369,34 @@ Editing direction: ${activeFinding.fix}`,
         // Reserve the covered strip so CodeMirror scrolls the caret above the
         // panel instead of under it.
         EditorView.scrollMargins.of(() => ({ bottom: chatHeight })),
-        // The empty draft is the only place an explanation is read: it is where
-        // the writer is already looking and the only moment nothing is at stake.
-        placeholder(
-          "Start writing, or open a file."
-        ),
+        placeholder("Start writing"),
         // Visual theme
         editorTheme,
         // Both gestures attach the passage to the composer instead of opening a
         // window — one place for context, one place for answers.
         EditorView.domEventHandlers({
+          compositionstart(_event, view) {
+            cancelSuggestion();
+            ghostClear(view);
+            return false;
+          },
+          compositionend() {
+            suggestSchedule();
+            return false;
+          },
           click(event, view) {
+            if (!view.state.selection.main.empty) return false;
+            const at = { x: event.clientX, y: event.clientY };
             const mark = event.target.closest?.(".cm-slop");
-            if (!mark) return false;
+            if (!mark) {
+              const local = event.target.closest?.(".cm-style-marker");
+              const marker = local && view.state.field(styleMarkerField).find((item) => item.from === Number(local.dataset.styleFrom));
+              if (marker) selectStyleMarker(marker);
+              return false;
+            }
             const finding = reviewFindings.find((item) => item.id === Number(mark.dataset.slopId));
             if (!finding) return false;
-            openFinding(finding);
+            openFinding(finding, false, at);
             return false;
           },
           // Reaching for the text dismisses a hover preview; the cards stay —
@@ -19587,6 +20406,7 @@ Editing direction: ${activeFinding.fix}`,
             return false;
           },
           contextmenu(event, view) {
+            if (!MANUAL_ATTACH) return false;
             const sel = view.state.selection.main;
             if (sel.empty) return false;
             event.preventDefault();
@@ -19594,18 +20414,46 @@ Editing direction: ${activeFinding.fix}`,
             return true;
           }
         }),
-        // Save on every edit + schedule a suggestion
+        EditorView.updateListener.of(suggestionUpdate),
+        // Save on every edit.
         // Anything that moves the text moves the cards beside it.
         EditorView.updateListener.of((update) => {
-          if (update.docChanged || update.geometryChanged || update.viewportChanged) layoutRail();
+          if (update.docChanged || update.geometryChanged || update.viewportChanged) {
+            layoutRail();
+            hideMarkBubble();
+          } else if (bubbleMode === "selection" && update.selectionSet && update.state.selection.main.empty) {
+            hideMarkBubble();
+          }
         }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             editVersion++;
-            setReviewStatus(reviewFindings.length ? "Review is out of date" : "");
+            activeStyleFrom = null;
+            if (reviewState !== "idle") {
+              reviewState = "stale";
+              reviewNotice = "";
+            }
+            for (const request of chatRequests) request.changes.push(update.changes);
+            for (const message of chatHistory) for (const edit of message.edits || []) {
+              if (edit !== changingChatEdit) mapChatEdit(edit, update.changes);
+            }
+            if (localFinding) mapChatEdit(localFinding, update.changes);
+            syncChatEditCards();
+            if (!loadingDocument) {
+              saveChat();
+              saveKeptStyle();
+              saveFindings();
+            }
+            for (const undo2 of chatStream.querySelectorAll(".variant-undo-row button")) {
+              const from = Number(undo2.dataset.from), to = from + undo2.dataset.applied.length;
+              update.changes.iterChangedRanges((a, b) => {
+                if (a < to && b > from) undo2.dataset.stale = "true";
+              });
+              undo2.dataset.from = String(update.changes.mapPos(from, 1));
+            }
+            if (update.transactions.some((tr) => tr.isUserEvent("undo") || tr.isUserEvent("redo"))) editFeedback.hidden = true;
             if (attached && update.state.field(attachField).size === 0) {
               queueMicrotask(() => {
-                chatAbort?.abort();
                 detach();
               });
             }
@@ -19615,7 +20463,6 @@ Editing direction: ${activeFinding.fix}`,
               saveFindings();
             }
             if (!loadingDocument) save();
-            suggestSchedule();
             autoReviewSchedule();
             syncStyleScore();
           }
@@ -19644,9 +20491,9 @@ Editing direction: ${activeFinding.fix}`,
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1e3);
   }
-  function dialog(title) {
+  function dialog(title, { size = "lg" } = {}) {
     const trigger = document.activeElement;
-    const modal = chatEl("dialog", "settings-dialog document-dialog");
+    const modal = chatEl("dialog", `settings-dialog document-dialog dialog-${size}`);
     const heading2 = chatEl("h2", "", title);
     heading2.id = "document-dialog-" + crypto.randomUUID();
     modal.setAttribute("aria-labelledby", heading2.id);
@@ -19664,10 +20511,43 @@ Editing direction: ${activeFinding.fix}`,
     modal.showModal();
     return modal;
   }
+  function confirmDialog({ title, body, okLabel = "Confirm", danger = false }) {
+    return new Promise((resolve) => {
+      const modal = dialog(title, { size: "sm" });
+      modal.append(chatEl("p", "confirm-body", body));
+      const actions = chatEl("div", "confirm-actions");
+      const cancel = chatEl("button", "", "Cancel");
+      cancel.type = "button";
+      const ok = chatEl("button", "is-primary", okLabel);
+      ok.type = "button";
+      if (danger) ok.dataset.danger = "true";
+      actions.append(cancel, ok);
+      modal.append(actions);
+      let done = false;
+      const finish = (value) => {
+        done = true;
+        modal.close();
+        resolve(value);
+      };
+      cancel.addEventListener("click", () => finish(false));
+      ok.addEventListener("click", () => finish(true));
+      modal.addEventListener("close", () => {
+        if (!done) resolve(false);
+      }, { once: true });
+      (danger ? ok : cancel).focus();
+    });
+  }
   function loadFromDisk(text) {
     loadingDocument = true;
+    reviewState = "idle";
+    reviewNotice = "";
+    keptStyle = [];
+    removeLocalFinding();
+    chatEditCards.clear();
+    scoreDetails.hidePopover();
+    editFeedback.hidden = true;
     for (const job of jobs) job.abort();
-    suggestAbort?.abort();
+    cancelSuggestion();
     saveSnapshot("Before replacing document");
     detach();
     workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: text } });
@@ -19676,6 +20556,7 @@ Editing direction: ${activeFinding.fix}`,
     chatStream.replaceChildren();
     findingCards.clear();
     docStorage.removeItem("wa-chat");
+    docStorage.removeItem("wa-kept-wording");
     docStorage.removeItem("dismissed");
     setChatOpen(false);
     loadingDocument = false;
@@ -19683,18 +20564,13 @@ Editing direction: ${activeFinding.fix}`,
   function saveToDisk() {
     clearTimeout(diskTimer);
     if (savePaused || loadingDocument) return;
-    saveStatus.textContent = "Unsaved changes";
     diskTimer = setTimeout(flushSave, 800);
   }
   async function flushSave() {
     if (saving || savePaused || loadingDocument) return;
     const text = workView.state.doc.toString();
-    if (text === diskText && diskRevision !== "missing") {
-      saveStatus.textContent = "Saved";
-      return;
-    }
+    if (text === diskText && diskRevision !== "missing") return;
     saving = true;
-    saveStatus.textContent = "Saving\u2026";
     try {
       const response = await fetch("/draft", {
         method: "PUT",
@@ -19709,17 +20585,22 @@ Editing direction: ${activeFinding.fix}`,
       if (!response.ok) throw new Error(data.error || "Save failed");
       diskText = text;
       diskRevision = data.revision;
-      saveStatus.textContent = "Saved";
+      saveStatus.textContent = "";
+      saveStatus.title = "";
     } catch (error) {
       savePaused = true;
-      saveStatus.textContent = "Not saved: " + error.message + " \u2014 use Export or retry";
-      const retry = chatEl("button", "chat-again", "Retry saving");
-      retry.addEventListener("click", () => {
-        retry.remove();
-        savePaused = false;
-        saveToDisk();
-      });
-      chatAdd(retry);
+      cancelSuggestion();
+      ghostClear(workView);
+      saveStatus.textContent = "Not saved \u2014 autosave paused";
+      saveStatus.title = error.message;
+      chatAdd(errorCard(
+        { say: "The draft could not be saved to disk.", act: "retry", detail: error.message },
+        () => {
+          savePaused = false;
+          saveToDisk();
+        },
+        "Retry saving"
+      ));
     } finally {
       saving = false;
       if (!savePaused && workView.state.doc.toString() !== diskText) saveToDisk();
@@ -19732,12 +20613,18 @@ Editing direction: ${activeFinding.fix}`,
   var diskPrompt = null;
   function promptDiskDrift(current) {
     savePaused = true;
+    cancelSuggestion();
+    ghostClear(workView);
     clearTimeout(diskTimer);
     saveStatus.textContent = "Conflict \u2014 autosave paused";
+    if (diskPrompt?.open) return;
     diskPrompt?.close();
     const modal = dialog("Two versions of this document");
     diskPrompt = modal;
-    modal.append(chatEl("p", "", "Autosave is paused. Both copies remain available until you choose. A disk backup is kept before overwriting."));
+    modal.addEventListener("close", () => {
+      if (diskPrompt === modal) diskPrompt = null;
+    });
+    modal.append(chatEl("p", "conflict-lead", "Autosave is paused. Both copies remain available until you choose. A disk backup is kept before overwriting."));
     const compare2 = document.createElement("details");
     compare2.append(
       chatEl("summary", "", "Compare browser and disk"),
@@ -19756,7 +20643,7 @@ Editing direction: ${activeFinding.fix}`,
       save();
       modal.close();
     });
-    const keep = chatEl("button", "", "Keep browser copy");
+    const keep = chatEl("button", "is-primary", "Keep browser copy");
     keep.addEventListener("click", () => {
       saveSnapshot("Browser copy at conflict");
       diskText = current.text;
@@ -19767,24 +20654,25 @@ Editing direction: ${activeFinding.fix}`,
     });
     const both = chatEl("button", "", "Export browser copy");
     both.addEventListener("click", () => exportText(workView.state.doc.toString(), "recovered-browser-draft.md"));
-    modal.append(load, keep, both);
-    const reopen = chatEl("button", "chat-again", "Resolve file conflict");
-    reopen.addEventListener("click", async () => {
-      try {
-        promptDiskDrift(await api("/draft"));
-        reopen.remove();
-      } catch (error) {
-        saveStatus.textContent = error.message;
-      }
-    });
-    chatAdd(reopen);
+    const actions = chatEl("div", "conflict-actions");
+    actions.append(load, keep, both);
+    modal.append(actions);
+    if (!saidInStream("This draft also changed on disk. Autosave stays paused until you choose a copy.")) {
+      chatAdd(errorCard(
+        { say: "This draft also changed on disk. Autosave stays paused until you choose a copy.", act: "retry" },
+        async () => {
+          if (modal.isConnected && !modal.open) modal.showModal();
+          else promptDiskDrift(await api("/draft"));
+        },
+        "Show versions"
+      ));
+    }
   }
   async function initializeDocument() {
     try {
       const current = await api("/draft");
       documentKey = "litura:" + current.id + ":";
-      document.getElementById("document-name").textContent = current.path.split(/[\\/]/).pop();
-      document.getElementById("document-name").title = current.path;
+      documentName = current.path.split(/[\\/]/).pop();
       diskText = current.text;
       diskRevision = current.revision;
       const cached = docStorage.getItem("wa-working");
@@ -19794,10 +20682,20 @@ Editing direction: ${activeFinding.fix}`,
       for (const paragraph of reviewParagraphs(workView.state.doc.toString())) checkedSentences.add(paragraph.key);
       syncReviewLabel();
       savePaused = false;
+      try {
+        const kept = JSON.parse(docStorage.getItem("wa-kept-wording") || "null");
+        if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter((mark) => chatEditMatches(mark, kept.document));
+      } catch {
+      }
+      workView.dispatch({ effects: refreshStyleFx.of(null) });
       restoreFindings();
       restoreChat();
+      syncStyleScore();
       if (cached !== null && cached !== current.text) promptDiskDrift(current);
-      else saveStatus.textContent = "Saved";
+      else {
+        saveStatus.textContent = "";
+        saveStatus.title = "";
+      }
       const legacy = localStorage.getItem("wa-working");
       if (legacy !== null && legacy !== current.text && !docStorage.getItem("legacy-offered")) {
         const recover = chatEl("button", "chat-again", "Export draft from the previous Litura version");
@@ -19809,13 +20707,13 @@ Editing direction: ${activeFinding.fix}`,
         chatAdd(recover);
       }
     } catch (error) {
-      saveStatus.textContent = "Cannot open draft: " + error.message;
-      const retry = chatEl("button", "chat-again", "Retry opening document");
-      retry.addEventListener("click", () => {
-        retry.remove();
-        initializeDocument();
-      });
-      chatAdd(retry);
+      saveStatus.textContent = "Cannot open draft";
+      saveStatus.title = error.message;
+      chatAdd(errorCard(
+        { say: "Litura could not open the draft.", act: "retry", detail: error.message },
+        initializeDocument,
+        "Retry opening document"
+      ));
     }
   }
   initializeDocument();
@@ -19830,7 +20728,10 @@ Editing direction: ${activeFinding.fix}`,
   }
   window.addEventListener("focus", checkDiskDrift);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
+    if (document.hidden) {
+      cancelSuggestion();
+      ghostClear(workView);
+    } else {
       checkDiskDrift();
       refreshUpdate();
     }
@@ -19841,26 +20742,35 @@ Editing direction: ${activeFinding.fix}`,
       event.returnValue = "";
     }
   });
-  document.getElementById("file-new").addEventListener("click", () => {
+  document.getElementById("file-new").addEventListener("click", async () => {
     if (workView.state.doc.length) {
+      const ok = await confirmDialog({
+        title: "Start a new document",
+        body: "The current text will be kept in History.",
+        okLabel: "Start new"
+      });
+      if (!ok) {
+        workView.focus();
+        return;
+      }
       loadFromDisk("");
       save();
     }
     workView.focus();
   });
   document.getElementById("file-export").addEventListener("click", () => {
-    const modal = dialog("Save as new file");
+    const modal = dialog("Save as new file", { size: "sm" });
     const form = chatEl("form", "save-as-form");
     const label = chatEl("label", "", "File name");
     const input = document.createElement("input");
     input.required = true;
-    input.value = document.getElementById("document-name").textContent;
+    input.value = documentName;
     label.append(input);
     const actions = chatEl("div", "save-as-actions");
     const cancel = chatEl("button", "", "Cancel");
     cancel.type = "button";
     cancel.addEventListener("click", () => modal.close());
-    const submit = chatEl("button", "", "Save");
+    const submit = chatEl("button", "is-primary", "Save");
     submit.type = "submit";
     actions.append(cancel, submit);
     form.append(label, actions);
@@ -19883,12 +20793,17 @@ Editing direction: ${activeFinding.fix}`,
   async function importFile(file) {
     if (!file || loadingDocument) return;
     if (file.size > 1024 * 1024 || !/\.(md|markdown|txt)$/i.test(file.name)) {
-      alert("Open a Markdown or text file under 1 MB.");
+      chatAdd(chatEl("div", "chat-error", "Open a Markdown or text file under 1 MB."));
       return;
     }
     try {
       const text = await file.text();
-      if (!confirm(`Import ${file.name} into this workspace draft? The current text will be kept in History.`)) return;
+      const ok = await confirmDialog({
+        title: `Import ${file.name}`,
+        body: "The file replaces this workspace draft. The current text will be kept in History.",
+        okLabel: "Import"
+      });
+      if (!ok) return;
       loadFromDisk(text);
       save();
     } catch (error) {
@@ -19919,20 +20834,21 @@ Editing direction: ${activeFinding.fix}`,
   document.getElementById("file-history").addEventListener("click", async () => {
     const modal = dialog("Document history");
     const current = workView.state.doc.toString();
+    const search = document.createElement("input");
+    search.type = "search";
+    search.className = "history-search";
+    search.placeholder = "Search versions";
+    search.setAttribute("aria-label", "Search versions");
+    search.autocomplete = "off";
+    search.spellcheck = false;
     const list = chatEl("div", "history-list");
-    modal.append(list);
-    try {
-      const { snapshots } = await api("/draft/history");
-      const local = JSON.parse(docStorage.getItem("snapshots") || "[]");
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key.startsWith(documentKey + "wa-working:") && !key.endsWith(":" + tabId)) {
-          const text = localStorage.getItem(key);
-          if (text !== current) local.push({ text, at: (/* @__PURE__ */ new Date()).toISOString(), label: "Copy from another tab" });
-        }
-      }
-      const versions = [...local, ...snapshots].sort((a, b) => b.at.localeCompare(a.at));
-      for (const item of versions) {
+    modal.append(search, list);
+    let versions = [];
+    function renderHistory() {
+      const query = search.value.trim().toLowerCase();
+      const shown = versions.filter((item) => !query || (item.label || "Saved to disk").toLowerCase().includes(query) || item.text.toLowerCase().includes(query));
+      list.replaceChildren();
+      for (const item of shown) {
         const row = chatEl("div", "history-item");
         const words = item.text.match(/\S+/g)?.length ?? 0;
         row.append(chatEl(
@@ -19949,10 +20865,19 @@ Editing direction: ${activeFinding.fix}`,
           row.append(chatEl("div", "history-current", "Same as the text you have now"));
         } else {
           const full = document.createElement("details");
-          full.append(chatEl("summary", "", "Full text"), chatEl("pre", "passage-preview", item.text));
+          const preview = chatEl("pre", "passage-preview", "");
+          full.append(chatEl("summary", "", "Full text"), preview);
+          full.addEventListener("toggle", () => {
+            if (full.open && !preview.textContent) preview.textContent = item.text;
+          }, { once: true });
           const restore = chatEl("button", "", "Restore");
-          restore.addEventListener("click", () => {
-            if (confirm("Restore this version? The current text is kept in History.")) {
+          restore.addEventListener("click", async () => {
+            const ok = await confirmDialog({
+              title: "Restore this version",
+              body: "The current text is kept in History.",
+              okLabel: "Restore"
+            });
+            if (ok) {
               loadFromDisk(item.text);
               save();
               modal.close();
@@ -19963,6 +20888,21 @@ Editing direction: ${activeFinding.fix}`,
         list.append(row);
       }
       if (!versions.length) list.append(chatEl("p", "", "No previous versions yet. One is kept before every save, import, and AI replacement."));
+      else if (!shown.length) list.append(chatEl("p", "", "Nothing matches this search."));
+    }
+    search.addEventListener("input", renderHistory);
+    try {
+      const { snapshots } = await api("/draft/history");
+      const local = JSON.parse(docStorage.getItem("snapshots") || "[]");
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key.startsWith(documentKey + "wa-working:") && !key.endsWith(":" + tabId)) {
+          const text = localStorage.getItem(key);
+          if (text !== current) local.push({ text, at: (/* @__PURE__ */ new Date()).toISOString(), label: "Copy from another tab" });
+        }
+      }
+      versions = [...local, ...snapshots].sort((a, b) => b.at.localeCompare(a.at));
+      renderHistory();
       modal.append(chatEl(
         "small",
         "history-note",

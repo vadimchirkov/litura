@@ -20,7 +20,7 @@ export async function completeText({systemPrompt, userPrompt, signal}) {
     const selected = userPrompt.split('SELECTED TEXT — replace exactly this, nothing more:\\n')[1].split('\\n\\n---')[0];
     return JSON.stringify([selected + ' revised A', selected + ' revised B', selected + ' revised C']);
   }
-  if (systemPrompt.includes('inline writing assistant')) return ' and continued';
+  if (systemPrompt.includes('inline writing assistant')) return 'TEXT: and continued';
   if (systemPrompt.includes('global structure pass')) return '[]';
   return JSON.stringify(['Alpha passage.', 'Beta passage.'].filter(quote=>userPrompt.includes(quote)).map(quote=>({code:'generic-prose',quote,pattern:'Test wording',reason:'Fixture finding for safe editing',fix:'Make the passage clearer'})));
 }

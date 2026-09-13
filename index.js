@@ -15,15 +15,21 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { completeText, getAgentStatus, removeProviderApiKey, saveProviderApiKey, streamText } from './pi.js';
 import {
-  markSelection, parseVariants, selectionSlot, trimOverlap, variantLimit,
+  markSelection, parseVariants, selectionSlot, variantLimit,
   SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
 } from './review.js';
 import { requestReview } from './review-model.js';
 import { buildReviewTask, buildReviewUser, reviewCodesForPass } from './review-prompt.js';
 import { documentStore, MAX_DOCUMENT_BYTES } from './document-store.js';
+import { suggestionPrompts, parseSuggestion } from './suggestions.js';
+import { CHAT_EDITS_PROMPT, chatVisibleText, parseChatResponse } from './chat-edits.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MANIFEST = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+// In the npm package the server sits next to its own assets. In the desktop
+// build it is a single bundled file and the assets are Tauri resources, so the
+// shell says where they are.
+const ROOT = process.env.LITURA_ROOT || __dirname;
+const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const VERSION = MANIFEST.version;
 
 // Ask npm what it publishes. `null` means the package is not published at all
@@ -68,13 +74,13 @@ if (process.argv.includes('--check-update')) {
 // ─── Bundle frontend (CodeMirror 6 → public/app.js) ────────────────────────
 // Only in a source checkout. The published package ships public/app.js already
 // built and has no esbuild, so src/ missing is the signal to skip.
-if (fs.existsSync(path.join(__dirname, 'src/app.js'))) {
+if (fs.existsSync(path.join(ROOT, 'src/app.js'))) {
   try {
     const { build } = await import('esbuild');
     await build({
-      entryPoints: [path.join(__dirname, 'src/app.js')],
+      entryPoints: [path.join(ROOT, 'src/app.js')],
       bundle:      true,
-      outfile:     path.join(__dirname, 'public/app.js'),
+      outfile:     path.join(ROOT, 'public/app.js'),
       format:      'iife',
       logLevel:    'warning',
     });
@@ -85,8 +91,12 @@ if (fs.existsSync(path.join(__dirname, 'src/app.js'))) {
   }
 }
 
-const PORT = parseInt(process.env.PORT || '3456', 10);
-const PUBLIC = path.join(__dirname, 'public');
+// Started by the desktop shell rather than by a person at a terminal. The shell
+// owns the window, the update path, and this process's lifetime.
+const SIDECAR = Boolean(process.env.LITURA_SIDECAR);
+
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const PUBLIC = path.join(ROOT, 'public');
 
 // Draft and style live in the folder Litura was started from, not inside the
 // install directory — `npx litura` in a notes folder edits that folder. The
@@ -95,7 +105,7 @@ const CWD        = process.cwd();
 const DRAFT_FILE = process.env.DRAFT_FILE || path.join(CWD, 'draft.md');
 const draftStore = documentStore(DRAFT_FILE);
 const STYLE_FILE = process.env.STYLE_FILE
-  || [path.join(CWD, 'style.md'), path.join(__dirname, 'style.md')].find(p => fs.existsSync(p))
+  || [path.join(CWD, 'style.md'), path.join(ROOT, 'style.md')].find(p => fs.existsSync(p))
   || path.join(CWD, 'style.md');
 
 // ─── Style guide ───────────────────────────────────────────────────────────
@@ -170,6 +180,7 @@ const MIME = {
   '.html':  'text/html; charset=utf-8',
   '.css':   'text/css; charset=utf-8',
   '.js':    'application/javascript; charset=utf-8',
+  '.svg':   'image/svg+xml',
   '.woff2': 'font/woff2',
   '.woff':  'font/woff',
 };
@@ -252,7 +263,11 @@ async function handleRequest(req, res) {
   // A registry that is down is reported, not retried: this is a nicety.
   if (req.method === 'GET' && url.pathname === '/api/version') {
     const payload = { name: MANIFEST.name, current: VERSION };
-    if (url.searchParams.get('check') === '1') {
+    // The desktop build updates itself through the shell, which knows about
+    // signed bundles the registry knows nothing about. Asking npm there would
+    // offer the writer a command they have no reason to run.
+    if (SIDECAR) payload.managed = 'desktop';
+    else if (url.searchParams.get('check') === '1') {
       try { payload.latest = await latestPublished(); }
       catch (error) { payload.error = error.message; }
     }
@@ -307,6 +322,7 @@ async function handleRequest(req, res) {
     if      (url.pathname === '/')          serveStatic(res, path.join(PUBLIC, 'index.html'));
     else if (url.pathname === '/style.css') serveStatic(res, path.join(PUBLIC, 'style.css'));
     else if (url.pathname === '/app.js')    serveStatic(res, path.join(PUBLIC, 'app.js'));
+    else if (url.pathname === '/logo.svg')  serveStatic(res, path.join(PUBLIC, 'logo.svg'));
     else if (url.pathname.startsWith('/fonts/')) {
       const fontFile = path.basename(url.pathname);
       serveStatic(res, path.join(PUBLIC, 'fonts', fontFile));
@@ -367,6 +383,13 @@ async function handleRequest(req, res) {
     //  document does so because the writer clicked it.
     //
     if (url.pathname === '/chat') {
+      if (typeof body.document !== 'string') return sendJson(res, 400, { error: 'Chat requires a draft' });
+      const selectedRange = body.selectionRange;
+      if (selectedRange && (!Number.isInteger(selectedRange.from) || !Number.isInteger(selectedRange.to)
+        || selectedRange.from < 0 || selectedRange.to <= selectedRange.from || selectedRange.to > body.document.length
+        || body.document.slice(selectedRange.from, selectedRange.to) !== body.selection)) {
+        return sendJson(res, 400, { error: 'Selected passage does not match the draft' });
+      }
       const history = Array.isArray(body.messages) ? body.messages : [];
       const turns = history
         .filter(message => (message?.role === 'user' || message?.role === 'assistant') && String(message.content ?? '').trim())
@@ -378,7 +401,7 @@ async function handleRequest(req, res) {
         'You are a writing assistant working alongside the author on the draft below. ' +
         'Answer questions about it and propose concrete wording when asked. ' +
         'You cannot edit the document yourself — the author applies what they choose, ' +
-        'so give text they can paste rather than describing an edit you claim to have made. ' +
+        'so propose replacements for their approval. ' + CHAT_EDITS_PROMPT +
         'Be brief. Skip preamble, restating the question, and offers of further help. ' +
         NO_SLOP +
         (body.selection ? 'The author has selected a passage; treat it as the subject unless they say otherwise.' : '')
@@ -395,13 +418,27 @@ async function handleRequest(req, res) {
           'Cache-Control': 'no-cache',
           'Connection':    'keep-alive',
         });
+        let raw = '', sent = 0;
         await streamText({
           systemPrompt: `${system}\n\n---\n\n${user}`,
           messages: turns,
           selection: body.agent,
           signal,
-          onText: text => res.write(`data: ${JSON.stringify({ text })}\n\n`),
+          maxTokens: 6000,
+          onText: text => {
+            raw += text;
+            if (raw.length > 180_000) throw new Error('Chat response is too long');
+            const visible = chatVisibleText(raw);
+            if (visible.length > sent) res.write(`data: ${JSON.stringify({ text: visible.slice(sent) })}\n\n`);
+            sent = visible.length;
+          },
         });
+        let result;
+        try { result = parseChatResponse(raw, body.document, selectedRange); }
+        catch {
+          result = { text: chatVisibleText(raw), edits: [], editWarning: 'The proposed edits could not be verified. Ask for the rewrite again.' };
+        }
+        res.write(`data: ${JSON.stringify({ answer: result.text, edits: result.edits, editWarning: result.editWarning })}\n\n`);
         res.write('data: [DONE]\n\n');
         res.end();
       } catch (e) {
@@ -508,37 +545,16 @@ async function handleRequest(req, res) {
 
       const at     = cursor ?? (doc ?? '').length;
       const prefix = (doc ?? '').slice(0, at);
-      const suffix = (doc ?? '').slice(at);
-
-      // The same patterns /review flags — the assistant must not generate what
-      // the assistant is about to underline.
-      const system = buildSystemPrompt(
-        'You are an inline writing assistant. ' +
-        'Continue the text with 5 to 15 words — just enough to finish the thought, then stop. ' +
-        'Match the draft\'s voice, vocabulary, and rhythm; stay on the specific subject of the last sentence. ' +
-        NO_SLOP +
-        'Carry the thought to its next concrete step — a fact, an action, a consequence — not a general claim. ' +
-        'Resume from exactly where the text stops: never repeat or restate words already written, ' +
-        'and never start the sentence over. ' +
-        'Return ONLY the continuation. No commentary, no quotes, no explanation.'
-      );
-
-      const userMsg = [
-        context ? `CONTEXT:\n${context}` : '',
-        suffix.trim() ? `TEXT THAT ALREADY FOLLOWS (do not repeat or contradict it):\n${suffix}` : '',
-        `Continue:\n\n${prefix}`,
-      ].filter(Boolean).join('\n\n---\n\n');
 
       try {
         const suggestion = await completeText({
-          systemPrompt: system,
-          userPrompt: userMsg,
+          ...suggestionPrompts({ document: doc, cursor: at, context, style: readStyle() }),
           selection: body.agent,
           continuation: true,
           signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
         });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ suggestion: trimOverlap(prefix, suggestion) }));
+        const text = suggestion ? parseSuggestion(prefix, suggestion) : '';
+        sendJson(res, 200, { suggestion: text });
       } catch (e) {
         console.error('[/suggest]', e.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -562,7 +578,7 @@ function openBrowser(url) {
     .unref();
 }
 
-// A stale Litura, or anything else, may hold 3456. Walk up rather than die.
+// A stale Litura, or anything else, may hold 3000. Walk up rather than die.
 function listen(port, attempt = 0) {
   // A failed attempt leaves its handlers queued; without this the next success
   // fires every one of them and announces a port nothing is bound to.
@@ -579,9 +595,22 @@ function listen(port, attempt = 0) {
     console.log(`Litura → ${url}`);
     console.log(`Draft  → ${DRAFT_FILE}`);
     console.log(`Style  → ${STYLE_FILE}`);
-    if (!process.env.LITURA_NO_OPEN) openBrowser(url);
+    // One machine-readable line for the desktop shell. It waits for this before
+    // it opens a window, so it must not be a log line someone may reword.
+    if (SIDECAR) console.log(`LITURA_READY ${url}`);
+    // The shell already has a window for this; a browser tab beside it would be
+    // a second, stale copy of the same draft.
+    if (!process.env.LITURA_NO_OPEN && !SIDECAR) openBrowser(url);
   });
   server.listen(port, '127.0.0.1');
+}
+
+// A shell that dies takes its server with it. Without this the writer's next
+// launch meets an orphan holding the draft's lock file.
+if (SIDECAR) {
+  process.stdin.resume();
+  process.stdin.on('end', () => process.exit(0));
+  process.stdin.on('error', () => process.exit(0));
 }
 
 listen(PORT);

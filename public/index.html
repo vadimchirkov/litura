@@ -4,7 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Litura</title>
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
+  <!-- The desktop shell asks for the page with ?shell=desktop. On macOS its
+       window buttons float over this header, which has to leave them room —
+       inline, so the header is never painted at the browser's padding first. -->
+  <script>if (new URLSearchParams(location.search).has('shell')) document.documentElement.classList.add('shell-desktop');</script>
 </head>
 <body>
   <div class="app">
@@ -12,18 +17,21 @@
     <!--
       The working pane uses CodeMirror 6 instead of a textarea.
       #editor-wrapper is where CM6 mounts the .cm-editor element.
-      Ghost text suggestions appear as non-editable inline spans
-      right after the cursor — press Tab to accept, Escape to dismiss.
+      Continuations appear in a non-editable panel below the current line.
+      Tab accepts, Escape cancels, Cmd/Ctrl+Enter requests one explicitly.
     -->
     <div class="pane" id="pane-work">
-      <!-- One row. Everything about the file lives behind its name; everything
-           about the review lives next to the Review button; status text sits
-           where the action that produced it is. -->
+      <!-- One row. Everything about the file lives behind the logo — the name
+           included; the header shows no label for it. Everything about the
+           review lives next to the Review button; status text sits where the
+           action that produced it is. -->
       <div class="pane-header">
-        <span class="wordmark">Litura</span>
-        <button type="button" id="document-menu-button" popovertarget="document-menu" title="Document actions">
-          <span id="document-name" title="Loading document">Loading…</span>
-          <span aria-hidden="true">▾</span>
+        <button type="button" id="document-menu-button" class="logo-button" popovertarget="document-menu" title="Document actions" aria-label="Litura — document actions">
+          <svg aria-hidden="true" viewBox="0 0 89 90" xmlns="http://www.w3.org/2000/svg">
+          <path d="M27.8438 48.2812C25.8438 48.8125 24.2188 49.5781 22.9688 50.5781C21.7188 51.5469 20.7344 52.6719 20.0156 53.9531C19.2969 55.2344 18.7812 56.6562 18.4688 58.2188C18.1875 59.75 18.0156 61.3438 17.9531 63C17.8906 64.6562 17.875 66.3438 17.9062 68.0625C17.9375 69.75 17.9375 71.4062 17.9062 73.0312C17.8438 75.0938 17.4062 77.0312 16.5938 78.8438C15.8125 80.6562 14.7656 82.2656 13.4531 83.6719C12.1406 85.0781 10.6094 86.25 8.85938 87.1875C7.14062 88.1562 5.28125 88.8125 3.28125 89.1562L1.40625 80.7188C3.09375 80.6562 4.45312 80.2969 5.48438 79.6406C6.54688 79.0156 7.375 78.2031 7.96875 77.2031C8.59375 76.2031 9.01562 75.0625 9.23438 73.7812C9.48438 72.5 9.64062 71.1719 9.70312 69.7969C9.76562 68.4219 9.78125 67.0625 9.75 65.7188C9.71875 64.3438 9.75 63.0938 9.84375 61.9688C9.96875 60.1562 10.1719 58.3906 10.4531 56.6719C10.7344 54.9531 11.1875 53.3438 11.8125 51.8438C12.4688 50.3438 13.3438 48.9844 14.4375 47.7656C15.5625 46.5469 17.0312 45.5 18.8438 44.625C16.9688 43.9375 15.4531 42.7656 14.2969 41.1094C13.1719 39.4531 12.2969 37.6094 11.6719 35.5781C11.0781 33.5156 10.6875 31.4219 10.5 29.2969C10.3125 27.1719 10.2188 25.2812 10.2188 23.625C10.2188 21.8125 10.0781 20.0781 9.79688 18.4219C9.51562 16.7656 9 15.2656 8.25 13.9219C7.5 12.5469 6.45312 11.3906 5.10938 10.4531C3.79688 9.48438 2.09375 8.8125 0 8.4375L1.40625 0C4.625 0.8125 7.3125 2.04688 9.46875 3.70312C11.6562 5.35938 13.4062 7.3125 14.7188 9.5625C16.0312 11.8125 16.9688 14.3125 17.5312 17.0625C18.0938 19.7812 18.375 22.6562 18.375 25.6875C18.375 26.6875 18.4219 27.75 18.5156 28.875C18.6406 30 18.8438 31.125 19.125 32.25C19.4062 33.375 19.7812 34.4531 20.25 35.4844C20.7188 36.4844 21.2969 37.3906 21.9844 38.2031C22.7031 38.9844 23.5312 39.625 24.4688 40.125C25.4375 40.5938 26.5625 40.8438 27.8438 40.875V48.2812Z" fill="#FF7C3B"/>
+          <path d="M40.1406 12.2812H48.1094V77.2031H40.1406V12.2812Z" fill="currentColor"/>
+          <path d="M88.4375 8.4375C86.3125 8.8125 84.5781 9.48438 83.2344 10.4531C81.9219 11.3906 80.8906 12.5469 80.1406 13.9219C79.3906 15.2656 78.875 16.7656 78.5938 18.4219C78.3438 20.0781 78.2188 21.8125 78.2188 23.625C78.2188 24.7188 78.1719 25.9375 78.0781 27.2812C78.0156 28.625 77.875 30 77.6562 31.4062C77.4375 32.7812 77.125 34.1719 76.7188 35.5781C76.3125 36.9531 75.7812 38.2344 75.125 39.4219C74.5 40.6094 73.7344 41.6719 72.8281 42.6094C71.9219 43.5156 70.8438 44.1875 69.5938 44.625C71.2812 45.4375 72.6719 46.4688 73.7656 47.7188C74.8906 48.9688 75.7812 50.375 76.4375 51.9375C77.125 53.4688 77.625 55.1094 77.9375 56.8594C78.2812 58.5781 78.5156 60.3438 78.6406 62.1562C78.7969 63.9375 78.875 65.7188 78.875 67.5C78.875 69.2812 78.9062 70.9688 78.9688 72.5625C79 73.7188 79.2188 74.7812 79.625 75.75C80.0312 76.7188 80.5938 77.5625 81.3125 78.2812C82.0312 79 82.875 79.5781 83.8438 80.0156C84.8125 80.4531 85.875 80.6875 87.0312 80.7188L85.1562 89.1562C83.1562 88.8125 81.2812 88.1562 79.5312 87.1875C77.7812 86.25 76.25 85.0781 74.9375 83.6719C73.625 82.2656 72.5781 80.6562 71.7969 78.8438C71.0156 77.0312 70.5938 75.0938 70.5312 73.0312C70.4688 71.4062 70.4531 69.75 70.4844 68.0625C70.5469 66.3438 70.5469 64.6562 70.4844 63C70.4219 61.3438 70.2344 59.75 69.9219 58.2188C69.6406 56.6562 69.1406 55.2344 68.4219 53.9531C67.7031 52.6719 66.7188 51.5469 65.4688 50.5781C64.2188 49.5781 62.5938 48.8125 60.5938 48.2812V40.875C62.0938 40.8438 63.3594 40.5312 64.3906 39.9375C65.4531 39.3438 66.3281 38.5781 67.0156 37.6406C67.7344 36.6719 68.2969 35.5781 68.7031 34.3594C69.1094 33.1094 69.4062 31.8281 69.5938 30.5156C69.8125 29.2031 69.9375 27.9062 69.9688 26.625C70.0312 25.3125 70.0625 24.125 70.0625 23.0625C70.0625 20.3125 70.4219 17.7031 71.1406 15.2344C71.8906 12.7344 72.9844 10.4688 74.4219 8.4375C75.8594 6.40625 77.625 4.67188 79.7188 3.23438C81.8438 1.76562 84.2812 0.6875 87.0312 0L88.4375 8.4375Z" fill="#FF7C3B"/>
+          </svg>
         </button>
         <div id="document-menu" popover>
           <button type="button" id="file-new">New</button>
@@ -32,21 +40,35 @@
           <button type="button" id="file-export">Save as new…</button>
           <button type="button" id="file-history">History</button>
         </div>
-        <span id="save-status" role="status"></span>
         <!-- Only shown when a newer version exists. Clicking it copies the
              update command; the running process is never replaced in place. -->
         <button type="button" class="update-badge" id="update-badge" hidden></button>
         <div class="header-actions">
-          <button type="button" class="style-score" id="style-score" hidden title="Local slop score">
-            <span class="style-score-label">Slop Score</span>
-            <span id="style-score-value"></span>
+          <!-- Slop trigger: the word names the feature, the pill counts what is
+               waiting. The popover behind it lists every mark in document
+               order — local wording and model findings alike. -->
+          <button type="button" class="style-score" id="style-score" hidden popovertarget="style-details" aria-controls="style-details" aria-expanded="false">
+            <span id="style-score-value">Slop</span>
+            <span class="style-score-count" id="style-score-count" hidden></span>
           </button>
+          <section id="style-details" class="style-details" popover aria-label="Slop in the draft">
+            <header class="style-details-header">
+              <div class="style-details-title">
+                <strong>Slop</strong>
+                <span class="style-details-count" id="style-details-count" hidden></span>
+              </div>
+              <button type="button" popovertarget="style-details" popovertargetaction="hide" aria-label="Close">×</button>
+            </header>
+            <div class="style-review-actions">
+              <button type="button" class="review-action is-primary" id="style-review-run">Check for slop</button>
+              <span id="style-review-status" role="status"></span>
+            </div>
+            <div class="style-remark-list" id="style-remark-list"></div>
+          </section>
           <button class="settings-open" id="settings-open" title="Model and access" aria-label="Model and access">
-            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-              <path d="M3 5h14M3 10h14M3 15h14"/>
-              <circle cx="7" cy="5" r="1.5" fill="var(--surface)"/>
-              <circle cx="13" cy="10" r="1.5" fill="var(--surface)"/>
-              <circle cx="9" cy="15" r="1.5" fill="var(--surface)"/>
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
             </svg>
           </button>
         </div>
@@ -67,27 +89,29 @@
   -->
   <div class="chat" id="chat">
     <!-- Closing puts the conversation away; it does not end it. The same
-         control brings it back, and the turns are still there. -->
+         control brings it back, and the turns are still there. Own row above
+         the stream — never overlapping cards or the composer. -->
     <button type="button" class="chat-clear" id="chat-clear" hidden aria-label="Close conversation" title="Close — the conversation is kept">×</button>
     <div class="chat-stream" id="chat-stream"></div>
     <!-- Actions that spend a model call sit with the assistant, not in the
-         header: the draft's frame stays the draft's. -->
+         header: the draft's frame stays the draft's. This row is part of the
+         composer — it appears when the writer reaches for the field — and
+         more actions will join Review here. -->
     <div class="chat-recipes">
+      <!-- Review hidden for now; the row still carries the status line. -->
+      <button type="button" class="recipe" id="review-button" title="Check the whole draft for slop. F8 and Shift+F8 step through findings." hidden>Slop</button>
       <span id="review-status" role="status"></span>
     </div>
     <div class="chat-composer">
-      <div class="chat-recipe-suggestions">
-        <button type="button" class="recipe" id="review-button" title="Review the whole draft. F8 and Shift+F8 step through findings.">Review</button>
-      </div>
       <!-- The passage itself stays highlighted in the draft; this only names
            what is attached and offers the way out. -->
       <div class="chat-chip hidden" id="chat-chip">
         <span class="chat-chip-text" id="chat-chip-text"></span>
+        <button type="button" id="chat-rewrite">Rewrite</button>
         <button type="button" id="chat-chip-clear" aria-label="Detach selection">×</button>
       </div>
       <div class="chat-row">
         <textarea id="chat-input" aria-label="Message or rewrite instruction" rows="1" placeholder="Ask anything" autocomplete="off" spellcheck="false"></textarea>
-        <span class="chat-thinking" aria-hidden="true">Thinking<span class="chat-thinking-caret"></span></span>
         <!-- Send, and while the model is working, the same button is where the
              work is shown and where it is stopped. -->
         <button type="button" class="chat-send" id="chat-send" aria-label="Send" disabled>
@@ -97,8 +121,19 @@
     </div>
   </div>
 
+  <!-- Mark bubble: explicit actions for a clicked mark or a selection.
+        Reading arms nothing — attaching and rewriting live here. -->
+  <div id="mark-bubble" class="mark-bubble" hidden></div>
+
+  <!-- Editing confirmation toast. Lives at body level — not inside #chat, whose
+       transform would capture fixed positioning — bottom-left, where neither
+       the centred draft nor the right-side rail usually are. -->
+  <div id="edit-feedback" class="edit-feedback" role="status" hidden></div>
+
   <dialog id="settings-dialog" class="settings-dialog">
-    <form method="dialog" id="settings-form">
+    <!-- No method="dialog": Enter in the API-key field adds the key instead of
+         closing the whole dialog. Closing is only via the × button or Escape. -->
+    <form id="settings-form">
       <header>
         <div>
           <h2>Model and access</h2>
@@ -112,29 +147,50 @@
              it: its popup never reaches the top layer over a modal dialog, and
              a pre-filled value means typing filters against the old answer. -->
         <div class="settings-grid">
-          <label>Provider
-            <button type="button" class="combo-trigger" id="agent-provider" popovertarget="provider-combo" aria-haspopup="listbox">
+          <div class="settings-field">
+            <span class="settings-label" id="provider-label">Provider</span>
+            <button type="button" class="combo-trigger" id="agent-provider" popovertarget="provider-combo" aria-haspopup="listbox" aria-labelledby="provider-label agent-provider">
               <span class="combo-value"></span>
             </button>
-          </label>
-          <label>Model
-            <button type="button" class="combo-trigger" id="agent-model" popovertarget="model-combo" aria-haspopup="listbox">
+          </div>
+          <div class="settings-field">
+            <span class="settings-label" id="model-label">Model</span>
+            <button type="button" class="combo-trigger" id="agent-model" popovertarget="model-combo" aria-haspopup="listbox" aria-labelledby="model-label agent-model">
               <span class="combo-value"></span>
             </button>
-          </label>
-          <label>Reasoning<select id="agent-thinking"></select></label>
+          </div>
+          <div class="settings-field">
+            <span class="settings-label" id="reasoning-label">Reasoning</span>
+            <select id="agent-thinking" aria-labelledby="reasoning-label"></select>
+          </div>
         </div>
         <div class="combo" id="provider-combo" popover>
           <input type="search" class="combo-search" aria-label="Search providers" placeholder="Search providers" autocomplete="off" spellcheck="false">
+          <p class="combo-count" aria-live="polite"></p>
           <div class="combo-list" role="listbox" aria-label="Providers"></div>
           <p class="combo-empty" hidden>Nothing matches</p>
         </div>
         <div class="combo" id="model-combo" popover>
           <input type="search" class="combo-search" aria-label="Search models" placeholder="Search models" autocomplete="off" spellcheck="false">
+          <p class="combo-count" aria-live="polite"></p>
           <div class="combo-list" role="listbox" aria-label="Models"></div>
           <p class="combo-empty" hidden>Nothing matches</p>
         </div>
         <p class="settings-hint" id="model-hint"></p>
+      </section>
+
+      <section>
+        <h3>API keys</h3>
+        <div class="key-entry">
+          <select id="key-provider" aria-label="API key provider"></select>
+          <div class="key-input-wrap">
+            <input id="api-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false" aria-label="API key">
+            <button type="button" id="key-toggle" aria-label="Show API key" title="Show API key">Show</button>
+          </div>
+          <button type="button" id="key-add" disabled>Add</button>
+        </div>
+        <div class="configured-keys" id="configured-keys"></div>
+        <p class="settings-error" id="settings-error" role="alert"></p>
       </section>
 
       <section>
@@ -147,6 +203,7 @@
           <input type="checkbox" id="auto-suggest" checked>
           <span>Suggest continuations while typing<small>Switch both off to send your text only when you ask.</small></span>
         </label>
+        <p class="settings-hint" id="suggest-shortcut">Cmd/Ctrl+Enter requests a continuation in the editor, even with automatic suggestions off. Tab accepts; Escape dismisses or cancels.</p>
         <p class="settings-hint">All changes take effect immediately.</p>
       </section>
 
@@ -158,24 +215,13 @@
         </label>
       </section>
 
-      <section>
+      <section id="settings-updates">
         <h3>Updates</h3>
         <label class="settings-check">
           <input type="checkbox" id="update-check" checked>
           <span>Ask npm about new versions<small>Once a day. The only request Litura makes to anyone but your own model provider.</small></span>
         </label>
         <p class="settings-hint" id="update-status"></p>
-      </section>
-
-      <section>
-        <h3>API keys</h3>
-        <div class="key-entry">
-          <select id="key-provider" aria-label="API key provider"></select>
-          <input id="api-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false">
-          <button type="button" id="key-add">Add</button>
-        </div>
-        <div class="configured-keys" id="configured-keys"></div>
-        <p class="settings-error" id="settings-error" role="alert"></p>
       </section>
 
     </form>

@@ -1,0 +1,87 @@
+name: Desktop build
+
+# A tag builds the desktop app for every platform and attaches the bundles —
+# and the signed latest.json the updater reads — to that tag's release. Manual
+# runs are for checking that the build still works without cutting a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    permissions:
+      contents: write   # the release the bundles are attached to
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest    # Apple silicon
+            target: aarch64-apple-darwin
+          - platform: macos-13        # Intel
+            target: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Cargo compiles the same 500 crates on every run otherwise.
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: Linux system dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev xvfb
+
+      - run: npm ci
+
+      # tauri build runs desktop:prepare itself (beforeBuildCommand), which
+      # bundles the frontend, bundles the server, and fetches the Node runtime
+      # for this target.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Unset before an Apple Developer ID exists. Then the fallback signs
+          # the bundle ad-hoc, which is not a trusted signature but is a valid
+          # one: macOS offers the writer `Open Anyway` instead of calling the
+          # app damaged and sending them to the Trash.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: Litura ${{ github.ref_name }}
+          releaseBody: See CHANGELOG.md for what changed.
+          releaseDraft: false
+          # The updater reads this file from the latest release; without it a
+          # published build is invisible to every copy already installed.
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+
+      # Everything below the window has its own checks. What only a built
+      # bundle can get wrong — resources that did not travel, a sidecar for the
+      # wrong architecture, a runtime that will not start — is asked here, by
+      # running the thing that was just packaged. A red job after a tag means
+      # the release is up but should not be announced.
+      - name: Smoke-test the bundle
+        run: ${{ startsWith(matrix.platform, 'ubuntu') && 'xvfb-run -a npm run smoke:desktop' || 'npm run smoke:desktop' }}

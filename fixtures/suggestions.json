@@ -1,0 +1,81 @@
+[
+  {
+    "id": "ru-unfinished-word",
+    "prefix": "Она закрыла дверь и выдох",
+    "expected": "нула",
+    "rubric": "Complete выдохнула without repeating выдох or adding a space inside the word. Keep the quiet tone."
+  },
+  {
+    "id": "en-unfinished-word",
+    "prefix": "We left the office and started walk",
+    "expected": "ing",
+    "rubric": "Complete walking without a space inside the word. Do not invent a destination."
+  },
+  {
+    "id": "ru-known-fact",
+    "prefix": "Поезд отправляется в восемь. На часах без пяти восемь. До отправления осталось",
+    "expected": "пять минут",
+    "rubric": "Complete using only the supplied times, ideally пять минут."
+  },
+  {
+    "id": "en-known-fact",
+    "prefix": "The box held six cups. Two broke in transit. That left",
+    "expected": "four",
+    "rubric": "Finish the arithmetic in the same plain voice without adding a new claim."
+  },
+  {
+    "id": "ru-complete-thought",
+    "prefix": "Я выключил свет, закрыл дверь и ушёл. На сегодня всё.",
+    "empty": true,
+    "rubric": "Abstain. The passage has explicitly ended."
+  },
+  {
+    "id": "en-complete-thought",
+    "prefix": "The key is under the blue pot. That is all you need to get inside.",
+    "empty": true,
+    "rubric": "Abstain rather than append a generic conclusion or another instruction."
+  },
+  {
+    "id": "ru-unknown-intention",
+    "prefix": "Я долго думал о предложении и наконец решил",
+    "empty": true,
+    "rubric": "Do not decide on the author's behalf. Return empty text."
+  },
+  {
+    "id": "en-unknown-evidence",
+    "prefix": "We have not collected the survey responses yet. The percentage of satisfied customers is",
+    "empty": true,
+    "rubric": "Do not invent a number or source. Return empty text."
+  },
+  {
+    "id": "ru-punctuation",
+    "prefix": "Она спросила: «Ты дома",
+    "expected": "?",
+    "rubric": "Close the question and quotation without inserting a space before punctuation or inventing an answer."
+  },
+  {
+    "id": "en-punctuation",
+    "prefix": "The sign read “Keep the door closed",
+    "rubric": "Close the quote and optionally the sentence. Do not invent additional text on the sign."
+  },
+  {
+    "id": "ru-blank-paragraph",
+    "prefix": "Посылку забрал. Коробка целая.\n\n",
+    "empty": true,
+    "rubric": "A blank paragraph is not permission to invent its topic. Abstain."
+  },
+  {
+    "id": "en-existing-suffix",
+    "prefix": "The spare key is under the blue pot. To get inside, first",
+    "suffix": "\n\nOnce inside, leave the key on the kitchen table.",
+    "expected": "key",
+    "forbid": ["deadbolt", "firmly"],
+    "rubric": "Use the existing key location. Do not repeat the paragraph after the cursor or invent a type of lock."
+  },
+  {
+    "id": "en-long-context",
+    "prefix": "The booking confirmation lists the check-in code as 4827. I copied the message into these notes so I would not need to search my inbox at the door.\n\nThe rest of the message described the flat. There is a small table by the window, enough room for a laptop and a notebook, and a reading lamp next to the armchair. The kitchen faces the courtyard. The host asked guests to close the courtyard gate gently because the latch is loose. None of that changes how we enter the building, but I kept the details with the booking information.\n\nI also wrote down what to carry in the small bag: a charger, the paperback I am halfway through, and a spare shirt. The larger bag can stay in the luggage rack until we reach the station. I would rather avoid opening both bags on the platform. The train ticket is saved on my phone, and I printed a copy because the screen is difficult to read outside.\n\nThe arrival plan is deliberately simple. We will walk from the station to the building and leave the bags before looking for somewhere to eat. I have not chosen a restaurant. There is no need to fit another reservation around the train, and we can decide once we know whether we are hungry. If the weather is unpleasant, we can eat whatever we brought for the journey and go out later.\n\nBefore leaving home, I need to close the windows, take out the rubbish and move the plant away from the radiator. Those are reminders for me, not instructions from the host. I put them in a separate paragraph so I would not confuse the things to do before departure with the information needed on arrival. The host's message remains the source for entering the flat; my packing list and departure reminders do not add any access information.\n\nThe check-in code on the confirmation is",
+    "expected": "4827",
+    "rubric": "Repeat only the code supplied at the start. A shortened context that drops the code must abstain rather than guess; that abstention still loses a useful production completion."
+  }
+]

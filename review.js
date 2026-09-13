@@ -63,25 +63,25 @@ const TELL_WORDS_WEAK = [
 ];
 
 const TELL_PHRASES = [
-  /\bin today'?s [a-z-]+ world\b/i,
-  /\bat the end of the day\b/i,
-  /\bexperts? (?:agree|say|believe)\b/i,
-  /\bstudies show\b/i,
-  /\bit is important to note\b/i,
-  /\bnot (?:just|only)\b[^.!?]{0,60}\bbut\b/i,
-  /\b(?:serves|stands) as a\b/i,
-  /\bplays? a (?:vital|crucial|pivotal|key|significant) role\b/i,
-  /\bat its core\b/i,
-  /\bthe real question is\b/i,
-  /\blet'?s (?:dive|explore|break this down)\b/i,
-  /\bhere'?s what you need to know\b/i,
-  /\ba testament to\b/i,
-  /\bevolving landscape\b/i,
-  /\bin order to\b/i,
-  /\bdue to the fact that\b/i,
-  /\b(?:dashboard|data|design|roadmap|platform|system|tool|app|algorithm) (?:understands?|knows?|decides?|wants?|believes?|cares?)\b/i,
-  /\b(?:could|may|might|arguably|potentially|possibly)(?:\s+\w+){0,2}\s+(?:potentially|possibly|arguably|perhaps|may|might)\b/i,
-  /(?:["“][^"”\n]{1,24}["”][\s,]*){3,}|\b[A-Z]{3,}(?:\s+[A-Z]{3,}){2,}\b/,
+  [/\bin today'?s [a-z-]+ world\b/i, 'A broad opening can delay the point.', 'Start with the concrete subject instead of a broad setup.'],
+  [/\bat the end of the day\b/i, 'This stock summary can add padding.', 'State the conclusion directly.'],
+  [/\bexperts? (?:agree|say|believe)\b/i, 'The experts are not named in this phrase.', 'Use a source already identified in the draft, or qualify the claim. Never invent a source.'],
+  [/\bstudies show\b/i, 'The studies are not identified in this phrase.', 'Use research already identified in the draft, or qualify the claim. Never invent evidence.'],
+  [/\bit is important to note\b/i, 'This announces importance before giving the information.', 'Let the information carry its own importance.'],
+  [/\bnot (?:just|only)\b[^.!?]{0,60}\bbut\b/i, 'Check whether both sides of this contrast add meaning.', 'Simplify the contrast only if it adds no useful distinction.'],
+  [/\b(?:serves|stands) as a\b/i, 'An indirect phrase may hide a simpler verb.', 'Use a direct verb that fits the sentence.'],
+  [/\bplays? a (?:vital|crucial|pivotal|key|significant) role\b/i, 'Importance is asserted without naming the contribution here.', 'Name the contribution using only details already in the draft.'],
+  [/\bat its core\b/i, 'This framing phrase may delay the point.', 'State the point directly.'],
+  [/\bthe real question is\b/i, 'This can frame a question instead of getting to it.', 'Ask the question directly, preserving any meaningful contrast.'],
+  [/\blet'?s (?:dive|explore|break this down)\b/i, 'This narrates the explanation before it starts.', 'Begin the explanation directly.'],
+  [/\bhere'?s what you need to know\b/i, 'This introduction may repeat what the reader expects.', 'Lead with the information itself.'],
+  [/\ba testament to\b/i, 'This praise may be less useful than concrete evidence.', 'Describe what the example demonstrates without adding facts.'],
+  [/\bevolving landscape\b/i, 'This metaphor does not say what is changing.', 'Name the change if the draft supplies it; otherwise use plainer wording.'],
+  [/\bin order to\b/i, 'The purpose usually stays clear with fewer words.', 'Use a shorter expression such as “to” if the grammar allows it.'],
+  [/\bdue to the fact that\b/i, 'A long phrase introduces a simple cause.', 'Use a direct causal link such as “because” if the grammar allows it.'],
+  [/\b(?:dashboard|data|design|roadmap|platform|system|tool|app|algorithm) (?:understands?|knows?|decides?|wants?|believes?|cares?)\b/i, 'Check whether this describes real behavior or gives an object human intentions.', 'Describe the observable behavior supported by the draft.'],
+  [/\b(?:could|may|might|arguably|potentially|possibly)(?:\s+\w+){0,2}\s+(?:potentially|possibly|arguably|perhaps|may|might)\b/i, 'Several qualifiers may express the same uncertainty.', 'Keep the necessary uncertainty with fewer qualifiers.'],
+  [/(?:["“][^"”\n]{1,24}["”][\s,]*){3,}|\b[A-Z]{3,}(?:\s+[A-Z]{3,}){2,}\b/, 'Clustered emphasis can compete with the words themselves.', 'Reduce decorative emphasis while preserving names, actual quotations, and meaning.'],
 ];
 
 const WORD_RE = /\p{L}[\p{L}\p{N}'’-]*/gu;
@@ -92,6 +92,39 @@ export function isLatinScript(text) {
   const letters = text.match(/\p{L}/gu) ?? [];
   if (!letters.length) return true;
   return letters.filter(ch => /[\p{Script=Latin}]/u.test(ch)).length / letters.length > 0.5;
+}
+
+// Keep exact offsets and every occurrence for editor navigation. Phrase marks
+// own any tell words inside them, so one expression gets one underline.
+export function styleMarkers(text) {
+  if (!isLatinScript(text)) return [];
+  const phrases = TELL_PHRASES.flatMap(([pattern, reason, fix]) =>
+    [...text.matchAll(new RegExp(pattern.source, pattern.flags + 'g'))]
+      .map(match => ({ from: match.index, to: match.index + match[0].length, quote: match[0], reason, fix })));
+  const words = [...text.matchAll(WORD_RE)]
+    .filter(match => TELL_WORDS_STRONG.includes(match[0].toLowerCase()) || TELL_WORDS_WEAK.includes(match[0].toLowerCase()))
+    .map(match => ({ from: match.index, to: match.index + match[0].length, quote: match[0],
+      reason: 'This word can sound generic. Keep it if its precise meaning matters here.',
+      fix: 'Make this wording more direct and specific in its sentence without changing its meaning.' }))
+    .filter(word => !phrases.some(phrase => word.from < phrase.to && word.to > phrase.from));
+  const markers = [];
+  for (const marker of [...phrases, ...words].sort((a, b) => a.from - b.from || b.to - a.to)) {
+    if (!markers.length || marker.from >= markers.at(-1).to) markers.push(marker);
+  }
+  return markers;
+}
+
+// Dismissal belongs to the passage, so edits in another paragraph do not bring
+// it back. A changed paragraph can be reviewed again in its new context.
+export function findingContext(document, finding) {
+  const from = Number.isInteger(finding.from) ? finding.from : document.indexOf(finding.quote);
+  if (from < 0 || document.slice(from, from + finding.quote.length) !== finding.quote) return null;
+  const before = document.slice(0, from);
+  const after = document.slice(from + finding.quote.length);
+  const start = [...before.matchAll(/\n\s*\n/g)].at(-1);
+  const end = after.search(/\n\s*\n/);
+  return document.slice(start ? start.index + start[0].length : 0,
+    end < 0 ? document.length : from + finding.quote.length + end).trim();
 }
 
 function splitAllSentences(text) {
@@ -136,7 +169,7 @@ export function styleMetrics(text) {
   const weakHits = words.filter(word => TELL_WORDS_WEAK.includes(word));
   // The matched text itself, not the pattern — a score the writer cannot trace
   // back to words in their own draft is just a number to argue with.
-  const phraseHits = TELL_PHRASES.map(pattern => text.match(pattern)?.[0]).filter(Boolean);
+  const phraseHits = TELL_PHRASES.map(([pattern]) => text.match(pattern)?.[0]).filter(Boolean);
   const strong = strongHits.length;
   const weak = weakHits.length;
   const phrases = phraseHits.length;
@@ -229,7 +262,9 @@ export function parseVariants(raw) {
 export function trimOverlap(prefix, suggestion) {
   const max = Math.min(prefix.length, suggestion.length, 60);
   for (let n = max; n >= 3; n--) {
-    if (prefix.slice(-n).toLowerCase() === suggestion.slice(0, n).toLowerCase()) {
+    if (prefix.slice(-n).toLowerCase() === suggestion.slice(0, n).toLowerCase()
+      && !/[\p{L}\p{N}\p{M}_]/u.test(prefix.at(-n - 1) ?? '')
+      && !/[\p{L}\p{N}\p{M}_]/u.test(suggestion[n] ?? '')) {
       return suggestion.slice(n);
     }
   }

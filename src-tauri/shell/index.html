@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Litura</title>
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: grid;
+        place-items: center;
+        background: #f3eee2;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #1a1917; }
+      }
+
+      .mark { width: 88px; height: 88px; display: block; }
+
+      /* The name means a correction struck through a manuscript, so that is
+         what the wait shows: the stroke being made, over and over, until the
+         editor itself is ready. */
+      .stroke {
+        transform-box: fill-box;
+        transform-origin: left center;
+        animation: strike 1.9s cubic-bezier(.4, 0, .2, 1) infinite;
+      }
+      @keyframes strike {
+        0%   { transform: scaleX(0); opacity: 1; }
+        40%  { transform: scaleX(1); opacity: 1; }
+        75%  { transform: scaleX(1); opacity: 1; }
+        100% { transform: scaleX(1); opacity: 0; }
+      }
+      /* Drawn, not drawing: the same picture without the movement. */
+      @media (prefers-reduced-motion: reduce) {
+        .stroke { animation: none; }
+      }
+    </style>
+  </head>
+  <!-- Shown for the second it takes the server to bind a port. The editor
+       itself is served by that server, not from here. -->
+  <body>
+    <svg class="mark" viewBox="0 0 24 24" role="img" aria-label="Starting Litura">
+      <rect x="1" y="1" width="22" height="22" rx="6" fill="#161616"/>
+      <rect x="6" y="6.3" width="12" height="2.4" rx="0.6" fill="#f3eee2"/>
+      <rect x="6" y="10.8" width="12" height="2.4" rx="0.6" fill="#f3eee2"/>
+      <rect x="6" y="15.3" width="7" height="2.4" rx="0.6" fill="#f3eee2"/>
+      <rect class="stroke" x="4.8" y="11.35" width="14.4" height="1.5" rx="0.5" fill="#c4714b"/>
+    </svg>
+  </body>
+</html>

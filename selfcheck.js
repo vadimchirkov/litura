@@ -5,8 +5,8 @@ import { clampThinkingLevel } from '@earendil-works/pi-ai';
 import { getAgentStatus } from './pi.js';
 import { renderMarkdown } from './markdown.js';
 import {
-  completedSentences, isLatinScript, locateFindings, markSelection, mergeReviewFindings,
-  parseReviewResponse, parseVariants, selectionSlot, styleMetrics, styleScore, trimOverlap,
+  completedSentences, findingContext, isLatinScript, locateFindings, markSelection, mergeReviewFindings,
+  parseReviewResponse, parseVariants, selectionSlot, styleMarkers, styleMetrics, styleScore, trimOverlap,
   validateReviewFindings, variantLimit, SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
 } from './review.js';
 
@@ -144,6 +144,32 @@ const hits = styleMetrics("In today's fast-paced world we leverage robust toolin
 assert(hits.includes("In today's fast-paced world"));
 assert(hits.includes('leverage') && hits.includes('robust'));
 assert.deepEqual(styleMetrics('Rent had doubled since 2019.').hits, []);
+
+// Every mark navigates to its exact occurrence, including UTF-16 offsets and
+// repeated phrases. Nested dictionary words do not double-mark a phrase.
+{
+  const text = '✍️ A testament to ROBUST tools. A testament to robust tools.';
+  const markers = styleMarkers(text);
+  assert.deepEqual(markers.map(marker => marker.quote), ['A testament to', 'ROBUST', 'A testament to', 'robust']);
+  for (const [i, marker] of markers.entries()) {
+    assert.equal(text.slice(marker.from, marker.to), marker.quote);
+    if (i) assert(markers[i - 1].to <= marker.from);
+  }
+  assert.deepEqual(styleMarkers('The bakery closed in March.'), []);
+  assert.deepEqual(styleMarkers('Мы пишем обычный текст.'), []);
+  assert.match(styleMarkers('Studies show the effect.')[0].fix, /Never invent evidence/);
+  assert.match(styleMarkers('We left in order to arrive early.')[0].fix, /shorter expression/);
+
+  const first = 'First paragraph.\n\nThe robust tools work.\n\nClosing paragraph.';
+  const moved = 'An edited opening paragraph.\n\nThe robust tools work.\n\nClosing paragraph.';
+  const finding = document => ({ quote: 'robust', from: document.indexOf('robust') });
+  assert.equal(findingContext(first, finding(first)), findingContext(moved, finding(moved)));
+  const changed = moved.replace('tools work', 'tools failed');
+  assert.notEqual(findingContext(first, finding(first)), findingContext(changed, finding(changed)));
+  const repeated = 'The robust tools work.\n\nA robust cable broke.';
+  assert.equal(findingContext(repeated, { quote: 'robust', from: repeated.lastIndexOf('robust') }), 'A robust cable broke.');
+  assert.equal(findingContext(first, { quote: 'missing' }), null);
+}
 
 // The word lists are English; a Cyrillic draft must not be mistaken for clean.
 assert.equal(isLatinScript('The bakery closed'), true);

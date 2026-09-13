@@ -122,10 +122,20 @@ async function resolveModel(selection) {
 }
 
 // Either a single user turn or a whole transcript — the chat needs the latter.
+// Assistant turns need content as blocks and a usage stub: Pi's context-token
+// estimator reads assistant.usage.totalTokens unconditionally, and its Anthropic
+// payload builder iterates assistant.content as blocks — a plain string crashes both.
 const request = (systemPrompt, userPrompt, history) => ({
   systemPrompt,
   messages: (history ?? [{ role: 'user', content: userPrompt }])
-    .map(message => ({ role: message.role, content: message.content, timestamp: Date.now() })),
+    .map(message => message.role === 'assistant'
+      ? {
+          role: 'assistant',
+          content: [{ type: 'text', text: message.content }],
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+          timestamp: Date.now(),
+        }
+      : { role: message.role, content: message.content, timestamp: Date.now() }),
 });
 
 const options = (selection, maxTokens, signal) => ({

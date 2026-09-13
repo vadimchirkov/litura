@@ -121,3 +121,41 @@ try {
   if (child.exitCode === null) await once(child, 'exit');
   fs.rmSync(temp, { recursive: true, force: true }); // Only this test's mkdtemp directory.
 }
+
+// ─── The contract the desktop shell holds us to ────────────────────────────
+//
+//  The Rust shell waits for one line to learn the port, and exits its server
+//  by closing stdin. Both are invisible from the browser, so nothing else
+//  would notice them breaking.
+//
+const sidecarTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-sidecar-'));
+const sidecar = spawn(process.execPath, ['index.js'], {
+  cwd: import.meta.dirname,
+  env: { ...process.env, PORT: '0', DRAFT_FILE: path.join(sidecarTemp, 'draft.md'), LITURA_SIDECAR: '1' },
+  stdio: ['pipe', 'pipe', 'inherit'],
+});
+try {
+  let seen = '';
+  const ready = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('No LITURA_READY line: ' + seen)), 20_000);
+    sidecar.stdout.on('data', chunk => {
+      seen += chunk;
+      const match = seen.match(/^LITURA_READY (http:\/\/127\.0\.0\.1:\d+)$/m);
+      if (match) { clearTimeout(timer); resolve(match[1]); }
+    });
+    sidecar.once('exit', code => { clearTimeout(timer); reject(new Error(`Sidecar exited ${code}: ${seen}`)); });
+  });
+  // The desktop build updates itself; offering an npm command there would name
+  // a second, wrong way to update.
+  const version = await (await fetch(ready + '/api/version?check=1', { signal: AbortSignal.timeout(5000) })).json();
+  assert.equal(version.managed, 'desktop');
+  assert.equal(version.latest, undefined);
+} finally {
+  sidecar.stdin.end();
+  const exit = await Promise.race([once(sidecar, 'exit'), new Promise(resolve => setTimeout(() => resolve(null), 5000))]);
+  const orphan = exit === null;
+  sidecar.kill('SIGKILL');
+  fs.rmSync(sidecarTemp, { recursive: true, force: true });
+  assert(!orphan, 'Sidecar outlived its stdin — a dead shell would leave the server running');
+}
+console.log('Sidecar checks passed: ready line, managed updates, exit with the shell.');

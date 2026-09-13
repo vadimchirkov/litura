@@ -4,6 +4,6 @@
   "type": "webview",
   "cmd": "node",
   "args": ["index.js"],
-  "port": 3456,
+  "port": 3000,
   "triggers": ["/write"]
 }

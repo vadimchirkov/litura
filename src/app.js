@@ -19,10 +19,13 @@ import {
   history,
   historyKeymap,
 } from '@codemirror/commands';
-import { isLatinScript, locateFindings, styleScore } from '../review.js';
+import { findingContext, isLatinScript, locateFindings, styleMarkers, styleScore } from '../review.js';
 import { renderMarkdown } from '../markdown.js';
 import { replacementTarget, newerVersion } from '../editing.js';
+import { locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
 import { searchKeymap } from '@codemirror/search';
+
+// Naming a shortcut with the wrong modifier is worse than not naming it.
 
 // ─── Elements ──────────────────────────────────────────────────────────────────
 
@@ -48,12 +51,20 @@ const chatSendButton = document.getElementById('chat-send');
 const chatClear     = document.getElementById('chat-clear');
 const scoreEl       = document.getElementById('style-score');
 const scoreValueEl  = document.getElementById('style-score-value');
+const scoreCountEl  = document.getElementById('style-score-count');
+const scoreDetails = document.getElementById('style-details');
+const detailsCountEl = document.getElementById('style-details-count');
+const scoreReviewRun = document.getElementById('style-review-run');
+const scoreReviewStatus = document.getElementById('style-review-status');
+const scoreRemarkList = document.getElementById('style-remark-list');
+const editFeedback = document.getElementById('edit-feedback');
 const chatPanel     = document.getElementById('chat');
 const autoReviewEl  = document.getElementById('auto-review');
 const updateCheckEl = document.getElementById('update-check');
 const themeToggleEl = document.getElementById('theme-toggle');
 const updateBadge   = document.getElementById('update-badge');
 const updateStatus  = document.getElementById('update-status');
+const updateSection = document.getElementById('settings-updates');
 
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
 const savedTheme = localStorage.getItem('wa-theme');
@@ -75,6 +86,9 @@ themeToggleEl.addEventListener('change', () => setTheme(themeToggleEl.checked ? 
 // and the suggestion under it — hidden behind the cards.
 let chatHeight = 140;
 let documentKey = null;
+// The header no longer shows the file name; `Save as new…` still needs it to
+// prefill its field.
+let documentName = '';
 let diskRevision = null;
 let diskText = null;
 let diskTimer = null;
@@ -82,14 +96,29 @@ let saving = false;
 let savePaused = true;
 let loadingDocument = true;
 let editVersion = 0;
-const saveStatus = document.getElementById('save-status');
+// The header carries no save-status line any more. What it said was never
+// routine — paused autosave, a conflict, a draft that would not open — so the
+// messages move to the chat stream rather than disappearing. Repeats are
+// dropped: a paused autosave retries on a timer and would otherwise stack up.
+let lastSaveStatus = '';
+const saveStatus = {
+  set textContent(text) {
+    if (text === lastSaveStatus) return;
+    lastSaveStatus = text;
+    if (text) chatAdd(chatEl('div', 'chat-error', text));
+  },
+  set title(_message) {},
+};
 const reviewStatus = document.getElementById('review-status');
+let reviewState = 'idle';
+let reviewNotice = '';
 // One header line, truncated when the window is narrow — the title keeps the
 // whole message reachable instead of pushing the draft down a row.
 // Two background features share this line, so each says who wrote it: a
 // finished review must not wipe the line that told the writer why their
 // continuations went quiet.
 function setReviewStatus(text, detail, from = 'review') {
+  if (from === 'review') { reviewNotice = text; syncReviewPanel(); }
   reviewStatus.textContent = text;
   reviewStatus.title = detail ?? text;
   reviewStatus.dataset.from = text ? from : '';
@@ -132,8 +161,10 @@ function modelError(error) {
   };
 }
 
-// The message is the cause; the button is the answer to it.
-function errorCard(problem, retry) {
+// The message is the cause; the button is the answer to it. Every failure the
+// writer can act on takes this shape — a bare retry pill with no sentence
+// beside it is a button for a problem that was never named.
+function errorCard(problem, retry, label = 'Try again') {
   const card = chatEl('div', 'chat-error', problem.say);
   card.title = problem.detail ?? '';
   if (problem.act === 'settings') {
@@ -141,11 +172,25 @@ function errorCard(problem, retry) {
     open.addEventListener('click', openSettings);
     card.append(open);
   } else if (problem.act === 'retry' && retry) {
-    const again = chatEl('button', 'chat-again', 'Try again');
-    again.addEventListener('click', () => { card.remove(); retry(); });
+    const again = chatEl('button', 'chat-again', label);
+    // The card goes as the retry starts, so a working retry leaves no stale
+    // complaint behind — but a retry that rejects puts the way out back,
+    // rather than leaving a paused draft with no control to unpause it.
+    again.addEventListener('click', async () => {
+      card.remove();
+      try { await retry(); } catch { chatAdd(card); }
+    });
     card.append(again);
   }
   return card;
+}
+
+// One outage, one message. Background work fails at the same moment the
+// writer's own request does, and printing the same sentence in the status line
+// that a card is already showing turns one dead server into three complaints.
+function saidInStream(say) {
+  return !chatStream.hidden
+    && [...chatStream.querySelectorAll('.chat-error')].some(card => card.firstChild?.nodeValue === say);
 }
 let tabId;
 try {
@@ -176,9 +221,8 @@ function finishJob(job) {
 // writer is already looking, and pressing it stops what it is showing.
 function stopJobs() {
   for (const job of jobs) job.abort();
-  suggestAbort?.abort();
+  cancelSuggestion();
   clearTimeout(autoReviewTimer);
-  clearTimeout(suggestTimer);
 }
 
 // ─── Stored state across versions ──────────────────────────────────────────
@@ -190,6 +234,7 @@ const STORAGE_SCHEMA = '1';
 if (localStorage.getItem('wa-schema') !== STORAGE_SCHEMA) {
   docStorage.removeItem('wa-findings');
   docStorage.removeItem('wa-chat');
+  docStorage.removeItem('wa-kept-wording');
   localStorage.setItem('wa-schema', STORAGE_SCHEMA);
 }
 
@@ -222,6 +267,8 @@ function saveAgentSelection() {
   if (!normalized) return;
   draftSelection = normalized;
   agentSelection = normalized;
+  cancelSuggestion();
+  ghostClear(workView);
   localStorage.setItem('wa-agent', JSON.stringify(agentSelection));
 }
 
@@ -233,20 +280,25 @@ function saveAgentSelection() {
 //  So: a trigger that names the choice, and a popover with a search box and a
 //  list. The popover API still does the top layer, light dismiss and Escape.
 const combos = new WeakMap();
+// Hundreds of rows are never all needed: the writer types to narrow, and the
+// first screenful plus a count is enough to show the filter is working.
+const COMBO_LIMIT = 50;
 
 function combobox(trigger) {
   const popover = document.getElementById(trigger.getAttribute('popovertarget'));
   const search = popover.querySelector('.combo-search');
   const list = popover.querySelector('.combo-list');
   const empty = popover.querySelector('.combo-empty');
-  const state = { options: [], value: '', render };
+  const count = popover.querySelector('.combo-count');
+  const state = { options: [], value: '', render, trigger };
   combos.set(trigger, state);
 
   function render() {
     const query = search.value.trim().toLowerCase();
-    const shown = state.options.filter(option => !query
+    const matched = state.options.filter(option => !query
       || option.label.toLowerCase().includes(query)
       || option.value.toLowerCase().includes(query));
+    const shown = matched.slice(0, COMBO_LIMIT);
     list.replaceChildren(...shown.map(option => {
       const item = chatEl('button', 'combo-item', '');
       item.type = 'button';
@@ -256,15 +308,25 @@ function combobox(trigger) {
       item.append(chatEl('span', '', option.label));
       return item;
     }));
-    empty.hidden = shown.length > 0;
+    empty.hidden = matched.length > 0;
+    if (count) count.textContent = !state.options.length ? ''
+      : matched.length > shown.length ? `Showing ${shown.length} of ${matched.length}` : '';
   }
 
-  trigger.addEventListener('click', () => {
+  // The popover is positioned, not anchored: a scroll, resize or dialog move
+  // after opening leaves it floating where the trigger was. Re-measure while
+  // it is open so it follows the field instead.
+  function reposition() {
+    if (!popover.matches(':popover-open')) return;
     const box = trigger.getBoundingClientRect();
-    popover.style.left = `${box.left}px`;
+    const width = Math.max(box.width, 260);
+    popover.style.left = `${Math.min(box.left, window.innerWidth - width - 8)}px`;
     popover.style.top = `${box.bottom + 4}px`;
-    popover.style.width = `${Math.max(box.width, 260)}px`;
-  });
+    popover.style.width = `${width}px`;
+  }
+  state.reposition = reposition;
+
+  trigger.addEventListener('click', reposition);
   popover.addEventListener('toggle', event => {
     if (event.newState !== 'open') return;
     search.value = '';   // the search starts empty, never at the current answer
@@ -303,6 +365,16 @@ function combobox(trigger) {
 
 combobox(providerEl);
 combobox(modelEl);
+
+// One open popover at most follows its field; closed ones cost nothing.
+for (const event of ['resize', 'scroll']) {
+  window.addEventListener(event, () => {
+    for (const popover of document.querySelectorAll('.combo:popover-open')) {
+      const trigger = document.querySelector(`[popovertarget="${popover.id}"]`);
+      combos.get(trigger)?.reposition?.();
+    }
+  }, { passive: true, capture: true });
+}
 
 function setOptions(field, options, value) {
   const combo = combos.get(field);
@@ -392,6 +464,7 @@ async function openSettings() {
   draftSelection = currentAgent();
   renderModelSettings();
   renderCredentials();
+  syncKeyAdd();
   if (!settingsDialog.open) settingsDialog.showModal();
 }
 
@@ -436,7 +509,29 @@ thinkingEl.addEventListener('change', () => {
 });
 keyProviderEl.addEventListener('change', renderCredentials);
 
-keyAddEl.addEventListener('click', async () => {
+// The settings form has no method="dialog" on purpose: Enter in the key field
+// adds the key (below) instead of closing the whole dialog. Stop any implicit
+// submit from navigating or dismissing as well.
+document.getElementById('settings-form').addEventListener('submit', event => event.preventDefault());
+
+const keyToggleEl = document.getElementById('key-toggle');
+function syncKeyAdd() {
+  keyAddEl.disabled = !apiKeyEl.value.trim();
+}
+apiKeyEl.addEventListener('input', syncKeyAdd);
+apiKeyEl.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !keyAddEl.disabled) { event.preventDefault(); keyAddEl.click(); }
+});
+keyToggleEl.addEventListener('click', () => {
+  const show = apiKeyEl.type === 'password';
+  apiKeyEl.type = show ? 'text' : 'password';
+  keyToggleEl.textContent = show ? 'Hide' : 'Show';
+  keyToggleEl.setAttribute('aria-label', show ? 'Hide API key' : 'Show API key');
+  apiKeyEl.focus();
+});
+
+async function addProviderKey() {
+  if (!apiKeyEl.value.trim()) return;
   settingsError.textContent = '';
   keyAddEl.disabled = true;
   try {
@@ -445,11 +540,13 @@ keyAddEl.addEventListener('click', async () => {
       body: JSON.stringify({ provider: keyProviderEl.value, apiKey: apiKeyEl.value }),
     });
     apiKeyEl.value = '';
+    syncKeyAdd();
     renderModelSettings();
     renderCredentials();
   } catch (error) { settingsError.textContent = error.message; }
-  finally { keyAddEl.disabled = false; }
-});
+  finally { syncKeyAdd(); }
+}
+keyAddEl.addEventListener('click', addProviderKey);
 
 async function removeProviderKey(provider) {
   settingsError.textContent = '';
@@ -531,7 +628,7 @@ function ghostShow(view, text) {
   view.dispatch({
     // The panel is a block below the line, so reserve its own height on top of
     // the strip the chat already covers — otherwise it opens out of sight.
-    effects: [setGhostFx.of({ text, pos, line }), EditorView.scrollIntoView(line, { y: 'nearest', yMargin: 72 })],
+    effects: [setGhostFx.of({ text, pos, line }), EditorView.announce.of(`Suggestion: ${text.trim()}. Tab to accept; Escape to dismiss.`), EditorView.scrollIntoView(line, { y: 'nearest', yMargin: 72 })],
   });
 }
 
@@ -542,18 +639,45 @@ function ghostClear(view) {
 // Accept ghost: insert suggestion text at ghost.pos, move cursor after it
 function ghostAccept(view) {
   const ghost = view.state.field(ghostField);
-  if (!ghost) return false;
+  if (!ghost || view.state.readOnly || !view.hasFocus || !view.state.selection.main.empty) return false;
   view.dispatch({
     changes:   { from: ghost.pos, insert: ghost.text },
     selection: { anchor: ghost.pos + ghost.text.length },
     effects:   clearGhostFx.of(null),
     userEvent: 'input.acceptGhost',
   });
-  save();
   return true;
 }
 
 // ─── Slop review highlights ───────────────────────────────────────────────────
+
+let keptStyle = [];
+let localFinding = null;
+function saveKeptStyle() {
+  docStorage.setItem('wa-kept-wording', JSON.stringify({ document: workView.state.doc.toString(), marks: keptStyle }));
+}
+function visibleStyleMarkers(text) {
+  return styleMarkers(text).filter(marker =>
+    !keptStyle.some(kept => kept.state === 'kept' && kept.from === marker.from && kept.to === marker.to && kept.quote === marker.quote));
+}
+
+const refreshStyleFx = StateEffect.define();
+
+const styleMarkerField = StateField.define({
+  create: state => visibleStyleMarkers(state.doc.toString()),
+  update: (markers, tr) => {
+    if (tr.docChanged) { for (const kept of keptStyle) mapChatEdit(kept, tr.changes); keptStyle = keptStyle.filter(kept => kept.state !== 'stale'); }
+    for (const effect of tr.effects) {
+      if (effect.is(refreshStyleFx)) return visibleStyleMarkers(tr.newDoc.toString());
+    }
+    return tr.docChanged ? visibleStyleMarkers(tr.newDoc.toString()) : markers;
+  },
+  provide: field => EditorView.decorations.from(field, markers => Decoration.set(markers.map(marker =>
+    Decoration.mark({
+      class: 'cm-style-marker',
+      attributes: { 'data-style-from': String(marker.from), title: 'Possible stock wording — click to explore' },
+    }).range(marker.from, marker.to)), true)),
+});
 
 const setReviewFx = StateEffect.define();
 const addReviewFx = StateEffect.define();
@@ -602,8 +726,10 @@ const attachField = StateField.define({
   update(decorations, tr) {
     for (const effect of tr.effects) {
       if (effect.is(setAttachFx)) {
-        // A finding's span already carries its own mark; layering the plain-
-        // selection tint on top of it read as the sentence being selected.
+        // A finding's span already carries its own warm band; layering the
+        // plain-selection tint on top of it read as the sentence being
+        // selected. The attachment draws a blue underline over the band
+        // instead — same hue family as the selection, different shape.
         // The decoration still has to exist — it is what tracks the live
         // position and ends the attachment on an edit — only its look differs.
         const cls = effect.value?.finding ? 'cm-attached cm-attached-finding' : 'cm-attached';
@@ -627,6 +753,7 @@ const attachField = StateField.define({
 // Live position of a finding — decorations move with the document, the
 // from/to captured at review time do not.
 function findingRange(id) {
+  if (id === -1) return localFinding && chatEditMatches(localFinding, workView.state.doc.toString()) ? { from: localFinding.from, to: localFinding.to } : null;
   let found = null;
   workView.state.field(reviewField).between(0, workView.state.doc.length, (from, to, deco) => {
     if (deco.spec.attributes['data-slop-id'] === String(id)) { found = { from, to }; return false; }
@@ -643,7 +770,8 @@ function currentRanges() {
 function syncReviewLabel() {
   const count = workView.state.field(reviewField).size;
   reviewButton.classList.toggle('has-findings', count > 0);
-  reviewButton.textContent = reviewButton.disabled ? 'Reviewing…' : 'Review';
+  reviewButton.textContent = reviewButton.disabled ? 'Checking…' : 'Slop';
+  syncStyleScore();
 }
 let jumpFrom = -1;
 function jumpToNextFinding(direction = 1) {
@@ -659,24 +787,54 @@ function jumpToNextFinding(direction = 1) {
 // pointing device. F8 is the editor convention for "next problem".
 document.addEventListener('keydown', event => {
   if (event.key === 'F8') { event.preventDefault(); jumpToNextFinding(event.shiftKey ? -1 : 1); }
+  if (event.key === 'Escape' && !markBubble.hidden) { hideMarkBubble(); workView.focus(); return; }
   if (event.key === 'Escape' && plainPreview) { clearPlainPreview(); workView.focus(); }
 });
+// A press outside the bubble puts it away; a mark click re-opens its own on
+// the following click event, so hiding here never swallows an opening.
+document.addEventListener('mousedown', event => {
+  if (!markBubble.hidden && !markBubble.contains(event.target)) hideMarkBubble();
+}, true);
+// Selecting with the mouse offers the one explicit context action; keyboard
+// selections keep Cmd+K. Copying is acting on the text, not asking — no bubble.
+document.addEventListener('mouseup', event => {
+  if (!workView.dom.contains(event.target)) return;
+  if (event.button === 2) return;
+  if (workView.state.selection.main.empty) return;
+  showSelectionBubble(event.clientX, event.clientY);
+});
+document.addEventListener('copy', () => { if (bubbleMode === 'selection') hideMarkBubble(); });
 // Disagreeing with a finding has to be as cheap as accepting one, or the
 // counter keeps advertising work the writer already rejected.
 function dismissFinding(id) {
+  if (id === -1) { if (localFinding) keepStyleMarker(localFinding); return; }
+  clearTimeout(appliedHideTimers.get(id));
+  appliedHideTimers.delete(id);
   const finding = reviewFindings.find(item => item.id === id);
+  const document = workView.state.doc.toString();
+  const range = findingRange(id);
   const dismissed = JSON.parse(docStorage.getItem('dismissed') || '[]');
-  if (finding) dismissed.push({ code: finding.code, quote: finding.quote, document: workView.state.doc.toString() });
+  const decision = finding && { code: finding.code, quote: finding.quote, context: findingContext(document, { ...finding, ...range }) };
+  if (decision) dismissed.push(decision);
   docStorage.setItem('dismissed', JSON.stringify(dismissed.slice(-100)));
   reviewFindings = reviewFindings.filter(finding => finding.id !== id);
   const card = findingCards.get(id);
   if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); }
   findingCards.delete(id);
   workView.dispatch({ effects: dropReviewFx.of(id) });
+  hideMarkBubble();
   if (activeFinding?.id === id) detach();
   else clearPlainPreview();
+  refocusAfterRemoval(id);
   saveFindings();
   syncReviewLabel();
+  workView.focus();
+  if (decision) showEditFeedback('Kept as is', () => {
+    const saved = JSON.parse(docStorage.getItem('dismissed') || '[]');
+    docStorage.setItem('dismissed', JSON.stringify(saved.filter(item => JSON.stringify(item) !== JSON.stringify(decision))));
+    if (workView.state.doc.toString() === document) { mergeFindings([finding]); syncReviewLabel(); }
+    else setReviewStatus('Dismissal undone. Check again to cover the changed text.');
+  });
 }
 
 // A full review costs two model calls. Losing it to a reload is the writer
@@ -685,16 +843,18 @@ function saveFindings() {
   const live = reviewFindings
     .filter(finding => findingRange(finding.id))
     .map(({ code, quote, pattern, reason, fix }) => ({ code, quote, pattern, reason, fix }));
-  docStorage.setItem('wa-findings', JSON.stringify({ document: workView.state.doc.toString(), findings: live }));
+  docStorage.setItem('wa-findings', JSON.stringify({ document: workView.state.doc.toString(), findings: live, state: reviewState }));
 }
 
 function restoreFindings() {
   let saved = [];
   try { saved = JSON.parse(docStorage.getItem('wa-findings') || '[]'); } catch {}
+  reviewState = saved.document === workView.state.doc.toString() ? (saved.state || 'partial') : saved.document ? 'stale' : 'idle';
   if (saved.document === workView.state.doc.toString() && saved.findings?.length && mergeFindings(saved.findings)) syncReviewLabel();
 }
 
 function clearReview() {
+  editFeedback.hidden = true;
   discardFindingCards();
   for (const stale of document.querySelectorAll('.chat-variants')) stale.remove();
   clearPlainPreview();
@@ -711,9 +871,10 @@ function mergeFindings(rawFindings) {
   const document = workView.state.doc.toString();
   const dismissed = JSON.parse(docStorage.getItem('dismissed') || '[]');
   const filtered = (rawFindings || []).filter(finding =>
-    !dismissed.some(item => item.document === document && item.code === finding.code && item.quote === finding.quote) &&
     !reviewFindings.some(item => findingRange(item.id) && item.code === finding.code && item.quote === finding.quote));
   const located = locateFindings(document, filtered)
+    .filter(finding => !dismissed.some(item => item.code === finding.code && item.quote === finding.quote &&
+      (item.context ? item.context === findingContext(document, finding) : item.document === document)))
     .map(finding => ({ ...finding, id: findingSeq++ }));
   if (!located.length) return 0;
   reviewFindings.push(...located);
@@ -723,7 +884,7 @@ function mergeFindings(rawFindings) {
 }
 
 async function reviewRequest(body, replaceAll = false) {
-  if (body.document !== workView.state.doc.toString()) throw new Error('Draft changed before review started. Run Review again.');
+  if (body.document !== workView.state.doc.toString()) throw new Error('Draft changed before the check started. Check again.');
   const version = editVersion;
   // A targeted pass is the automatic one: it runs while the writer types.
   const job = startJob({ background: Boolean(body.target) });
@@ -732,15 +893,17 @@ async function reviewRequest(body, replaceAll = false) {
       method: 'POST', signal: job.signal,
       body: JSON.stringify({ agent: currentAgent(), ...body }),
     });
-    if (version !== editVersion) throw new Error('Draft changed during review. Run Review again.');
+    if (version !== editVersion) throw new Error('Draft changed during the check. Check again.');
     if (replaceAll) clearReview();
     const added = mergeFindings(data.findings);
+    reviewState = data.failedPasses?.length || body.target ? 'partial' : 'complete';
+    saveFindings();
     // The marks in the draft are the result. A line announcing that the review
     // finished says nothing the marks do not already say.
-    if (data.failedPasses?.length) setReviewStatus(`Partial review (${data.failedPasses.join(', ')}) — run Review to retry`);
+    if (data.failedPasses?.length) setReviewStatus(`Partial slop check (${data.failedPasses.join(', ')}) — run again to retry`);
     else if (reviewStatus.dataset.from === 'review') setReviewStatus('');   // the marks are the result
     return { added, complete: !data.failedPasses?.length };
-  } finally { finishJob(job); }
+  } finally { finishJob(job); syncStyleScore(); }
 }
 async function runReview() {
   const document = workView.state.doc.toString();
@@ -754,7 +917,7 @@ async function runReview() {
     const result = await reviewRequest({ document }, true);
     if (result.complete) for (const paragraph of reviewParagraphs(document)) checkedSentences.add(paragraph.key);
   } catch (error) {
-    setReviewStatus(error.name === 'AbortError' ? 'Review stopped — findings kept' : `Review failed. ${modelError(error).say}`, error.message);
+    setReviewStatus(error.name === 'AbortError' ? 'Slop check stopped — findings kept' : `Slop check failed. ${modelError(error).say}`, error.message);
   } finally { reviewButton.disabled = false; syncReviewLabel(); }
 }
 reviewButton.addEventListener('click', () => { workView.focus(); runReview(); });
@@ -785,7 +948,7 @@ autoSuggestEl.checked = autoSuggestOn;
 autoSuggestEl.addEventListener('change', () => {
   autoSuggestOn = autoSuggestEl.checked;
   localStorage.setItem('wa-autosuggest', autoSuggestOn ? 'on' : 'off');
-  clearTimeout(suggestTimer); suggestAbort?.abort(); ghostClear(workView);
+  cancelSuggestion(); ghostClear(workView);
 });
 autoReviewEl.checked = autoReviewOn;
 autoReviewEl.addEventListener('change', () => {
@@ -804,7 +967,14 @@ const UPDATE_INTERVAL = 24 * 60 * 60 * 1000;
 let updateCheckOn = localStorage.getItem('wa-updatecheck') !== 'off';
 updateCheckEl.checked = updateCheckOn;
 
-function renderUpdate({ current, latest, error }) {
+function renderUpdate({ current, latest, error, managed }) {
+  // The desktop shell checks, verifies a signature, and installs. Offering an
+  // npm command next to that would name a second, wrong way to update.
+  if (managed) {
+    updateSection.hidden = true;
+    updateBadge.hidden = true;
+    return;
+  }
   const stale = newerVersion(latest, current);
   updateBadge.hidden = !stale;
   if (stale) {
@@ -853,44 +1023,99 @@ updateCheckEl.addEventListener('change', () => {
 
 refreshUpdate();
 
-// Live local readout. Pure string work, so it can run on every keystroke.
-// English word lists and rhythm only — it says nothing about a draft in
-// another language, which is why it hides itself rather than guessing.
+let activeStyleFrom = null;
+function isScoreOpen() { return scoreDetails.matches(':popover-open'); }
+function closeScorePopover() { if (isScoreOpen()) scoreDetails.hidePopover(); }
+function liveReviewFindings() {
+  return reviewFindings.map(finding => ({ finding, range: findingRange(finding.id) }))
+    .filter(item => item.range).sort((a, b) => a.range.from - b.range.from);
+}
+function reviewStateText() {
+  // No running or finished line — the button dims while it works and the
+  // marks speak when it lands. Only what needs attention takes the line.
+  if (reviewButton.disabled || autoReviewBusy) return '';
+  if (reviewNotice) return reviewNotice;
+  if (reviewState === 'idle') return 'Not checked yet';
+  if (reviewState === 'partial') return 'Partly checked';
+  return '';
+}
 function syncStyleScore() {
+  if (typeof workView === 'undefined' || !workView?.state) return;
   const text = workView.state.doc.toString();
-  scoreEl.hidden = !text.trim() || !isLatinScript(text);
-  if (scoreEl.hidden) return;
-  const { score, structural } = styleScore(text);
-  scoreValueEl.textContent = `${score}`;
-  scoreEl.title = structural
-    ? `Local slop score ${score}/100 (0 = clean). Click to see what raised it.`
-    : `Local slop score ${score}/100, wording only — too short to judge rhythm or variety. Click for detail.`;
-  scoreEl.classList.toggle('warn', score >= 40);
+  scoreEl.hidden = !text.trim();
+  if (scoreEl.hidden) { closeScorePopover(); return; }
+  const count = workView.state.field(styleMarkerField).length + liveReviewFindings().length;
+  // The trigger names the feature; the pill counts what is waiting. With
+  // nothing marked there is no zero — just the invitation to check.
+  scoreValueEl.textContent = 'Slop';
+  scoreCountEl.hidden = detailsCountEl.hidden = !count;
+  scoreCountEl.textContent = detailsCountEl.textContent = count ? String(count) : '';
+  scoreEl.title = reviewStateText();
+  syncReviewPanel();
+  if (isScoreOpen()) renderScoreDetails();
 }
-
-// A bare number in the header is something to argue with. Clicking it shows
-// what produced it — the matched words are in the writer's own draft.
-function showScoreCard() {
+function syncReviewPanel() {
+  // The button keeps one name in every state; running shows as dimmed, and
+  // the status line underneath carries only what needs attention.
+  const busy = reviewButton.disabled || autoReviewBusy;
+  scoreReviewRun.disabled = busy || loadingDocument;
+  scoreReviewRun.textContent = 'Check for slop';
+  scoreReviewStatus.textContent = reviewStateText();
+  scoreReviewStatus.hidden = !scoreReviewStatus.textContent;
+}
+function remarkRow(quote, label, reason, open, kind = '') {
+  const row = chatEl('button', `style-marker-jump${kind ? ` ${kind}` : ''}`);
+  row.type = 'button';
+  row.title = reason;  // the card carries the reason in full; the row identifies
+  const go = chatEl('i', 'style-marker-go', '›');
+  go.setAttribute('aria-hidden', 'true');
+  row.append(chatEl('span', '', `“${quote}”`), chatEl('small', '', label), go);
+  row.addEventListener('click', () => { closeScorePopover(); open(); });
+  return row;
+}
+function renderScoreDetails() {
+  syncReviewPanel();
   const text = workView.state.doc.toString();
-  if (!text.trim() || !isLatinScript(text)) return;
-  const { score, hits, burstiness, diversity, repetition, structural } = styleScore(text);
-  const notes = [];
-  if (structural) {
-    if (burstiness < 0.45) notes.push('Sentence lengths are evenly matched — vary them.');
-    if (diversity < 0.5) notes.push('Vocabulary repeats within a short window.');
-    if (repetition > 0.05) notes.push('Some three-word sequences repeat.');
-  } else {
-    notes.push('Too short to judge rhythm or variety — wording only.');
-  }
-  const card = chatEl('div', 'chat-card');
-  card.append(
-    chatEl('strong', '', `Local slop score ${score}/100`),
-    chatEl('span', '', hits.length ? `Known tells: ${hits.join(', ')}` : 'No known tell words or phrases.'),
-    chatEl('small', '', `${notes.join(' ')} An English word list and sentence rhythm, nothing else: it does not read your meaning. Use Review for that.`),
-  );
-  chatAdd(card);
+  const rows = [
+    ...workView.state.field(styleMarkerField).map(marker => ({
+      from: marker.from, quote: marker.quote, label: 'Stock wording', reason: marker.reason, kind: '',
+      open: () => selectStyleMarker(marker),
+    })),
+    ...liveReviewFindings().map(({ finding, range }) => ({
+      from: range.from, quote: finding.quote, label: finding.pattern, reason: finding.reason, kind: 'is-model',
+      open: () => openFinding(finding, true),
+    })),
+  ].sort((a, b) => a.from - b.from);
+  scoreRemarkList.replaceChildren(...rows.map(row => remarkRow(row.quote, row.label, row.reason, row.open, row.kind)));
+  if (!rows.length) scoreRemarkList.append(chatEl('p', 'style-details-note',
+    reviewState === 'complete' ? 'No slop found.' : 'No slop marked yet. Check the draft to catch stock wording and weak spots.'));
+  if (!isLatinScript(text)) scoreRemarkList.append(chatEl('p', 'style-details-note', 'Local wording checks support English; the model check supports this draft.'));
 }
-scoreEl.addEventListener('click', showScoreCard);
+function keepStyleMarker(marker) {
+  const kept = { ...marker, state: 'kept' };
+  keptStyle.push(kept);
+  workView.dispatch({ effects: refreshStyleFx.of(null) });
+  saveKeptStyle(); removeLocalFinding(); syncStyleScore();
+  showEditFeedback('Kept this wording here', () => {
+    keptStyle = keptStyle.filter(item => item !== kept); saveKeptStyle();
+    workView.dispatch({ effects: refreshStyleFx.of(null) }); syncStyleScore();
+  });
+}
+function removeLocalFinding() {
+  const card = findingCards.get(-1);
+  if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); findingCards.delete(-1); }
+  localFinding = null;
+  if (activeFinding?.id === -1) detach();
+}
+function selectStyleMarker(marker) {
+  closeScorePopover();
+  if (localFinding?.from !== marker.from || localFinding?.quote !== marker.quote) removeLocalFinding();
+  localFinding = { ...marker, id: -1, pattern: 'Stock wording', state: 'pending' };
+  openFinding(localFinding, true);
+}
+scoreDetails.addEventListener('beforetoggle', event => { if (event.newState === 'open') renderScoreDetails(); });
+scoreDetails.addEventListener('toggle', () => scoreEl.setAttribute('aria-expanded', String(isScoreOpen())));
+scoreReviewRun.addEventListener('click', () => runReview());
 
 function autoReviewSchedule() {
   if (!autoReviewOn || loadingDocument || savePaused) return;
@@ -929,7 +1154,7 @@ async function autoReviewRun() {
     if (complete) for (const paragraph of pending) checkedSentences.add(paragraph.key);
     syncReviewLabel();
   } catch (error) {
-    setReviewStatus(error.name === 'AbortError' ? 'Automatic review stopped' : `Automatic review failed. ${modelError(error).say}`, error.message);
+    setReviewStatus(error.name === 'AbortError' ? 'Automatic slop check stopped' : `Automatic slop check failed. ${modelError(error).say}`, error.message);
   } finally {
     autoReviewBusy = false;
     reviewButton.classList.remove('is-busy');
@@ -941,6 +1166,7 @@ async function autoReviewRun() {
 
 let suggestTimer = null;
 let suggestAbort = null;
+let suggestVersion = 0;
 
 const SUGGEST_DELAY = 900;  // ms after last keystroke
 const SUGGEST_MIN   = 15;   // minimum doc length before suggesting
@@ -957,11 +1183,18 @@ function atParagraphEnd(state) {
   return state.doc.line(line.number + 1).text.trim() === '';
 }
 
-function suggestSchedule() {
-  if (!autoSuggestOn || loadingDocument || savePaused) return;
+function cancelSuggestion() {
+  suggestVersion++;
   clearTimeout(suggestTimer);
-  if (suggestAbort) { suggestAbort.abort(); suggestAbort = null; }
+  suggestTimer = null;
+  suggestAbort?.abort();
+  suggestAbort = null;
+  if (reviewStatus.dataset.from === 'suggest' && reviewStatus.textContent === 'Suggesting…') setReviewStatus('');
+}
 
+function suggestSchedule() {
+  cancelSuggestion();
+  if (!autoSuggestOn || loadingDocument || savePaused || !workView.hasFocus || document.hidden) return;
   const doc = workView.state.doc.toString();
   if (doc.trim().length < SUGGEST_MIN) return;
   if (!atParagraphEnd(workView.state)) return;
@@ -969,21 +1202,53 @@ function suggestSchedule() {
   suggestTimer = setTimeout(suggestFetch, SUGGEST_DELAY);
 }
 
-async function suggestFetch() {
+// Selection changes cancel both the debounce and the in-flight request, even
+// when the selection's head stays at the same offset. Only typing starts work.
+function suggestionUpdate(update) {
+  if (update.docChanged || update.selectionSet || (update.focusChanged && !update.view.hasFocus) || update.state.readOnly) {
+    cancelSuggestion();
+  }
+  if (update.focusChanged && !update.view.hasFocus) {
+    queueMicrotask(() => { if (!update.view.hasFocus) ghostClear(update.view); });
+  }
+  if (update.docChanged && update.transactions.some(tr => tr.isUserEvent('input.type'))) suggestSchedule();
+}
+
+async function suggestFetch(manual = false) {
+  suggestTimer = null;
   const view  = workView;
   const state = view.state;
-  if (state.readOnly || !autoSuggestOn || !currentAgent()) return;
-  if (!atParagraphEnd(state)) return;
+  if (state.readOnly || loadingDocument || savePaused || !view.hasFocus || document.hidden || view.composing) return;
+  if (!manual && !autoSuggestOn) return;
+  if (!atParagraphEnd(state)) {
+    if (manual) setReviewStatus('Place the caret at the end of a paragraph to request a continuation.', undefined, 'suggest');
+    return;
+  }
 
   const doc = state.doc.toString();
   const pos = state.selection.main.head;
+  if (!doc.trim() || (!manual && doc.trim().length < SUGGEST_MIN)) {
+    if (manual) setReviewStatus('Write a few words before requesting a continuation.', undefined, 'suggest');
+    return;
+  }
 
   // Don't suggest while on a /idea line
   const line = state.doc.lineAt(pos);
-  if (/^\/idea/i.test(line.text)) return;
+  if (/^\s*\/idea(?:\s|$)/i.test(line.text)) return;
 
-  const job = startJob({ background: true });
+  const version = suggestVersion;
+  if (manual && !await ensureAgent()) return;
+  if (version !== suggestVersion || !view.hasFocus || !currentAgent()) return;
+  const agent = currentAgent();
+
+  const job = startJob({ background: !manual });
   suggestAbort = job;
+  const isCurrent = () => suggestAbort === job && !job.signal.aborted && version === suggestVersion
+    && !loadingDocument && !savePaused && !document.hidden && view.hasFocus && !view.composing
+    && !view.state.readOnly && (manual || autoSuggestOn)
+    && view.state.doc === state.doc && view.state.selection.eq(state.selection)
+    && JSON.stringify(currentAgent()) === JSON.stringify(agent);
+  if (manual) setReviewStatus('Suggesting…', undefined, 'suggest');
 
   try {
     const res = await fetch('/suggest', {
@@ -992,35 +1257,34 @@ async function suggestFetch() {
       body:    JSON.stringify({
         document: doc,
         cursor:   pos,
-        agent:    currentAgent(),
+        agent,
       }),
-      signal: suggestAbort.signal,
+      signal: job.signal,
     });
     // A background feature that fails in silence looks like a broken one. Say
     // it once in the status line; the next keystroke schedules another try.
     if (!res.ok) {
       // The provider's own status is in the body; the 500 is only our wrapper.
       const problem = modelError(new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`));
-      setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
+      if (isCurrent() && !saidInStream(problem.say)) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
       return;
     }
 
     const data = await res.json();
 
     // Only show if nothing changed while we were waiting
-    if (
-      data.suggestion &&
-      view.state.doc.toString() === doc &&
-      view.state.selection.main.head === pos &&
-      !view.state.readOnly
-    ) {
-      ghostShow(view, data.suggestion);
-    }
+    if (!isCurrent()) return;
+    if (reviewStatus.dataset.from === 'suggest') setReviewStatus('');
+    if (data.suggestion) ghostShow(view, data.suggestion);
+    else if (manual) setReviewStatus('No continuation to suggest.', undefined, 'suggest');
   } catch (error) {
     if (error.name === 'AbortError') return;
     const problem = modelError(error);
-    setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
-  } finally { finishJob(job); }
+    if (isCurrent() && !saidInStream(problem.say)) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
+  } finally {
+    finishJob(job);
+    if (suggestAbort === job) suggestAbort = null;
+  }
 }
 
 // ─── Read-only compartment (blocks input during /idea streaming) ────────────────
@@ -1041,8 +1305,7 @@ function handleEnter(view) {
   if (!/^\/idea(\s|$)/i.test(line.text)) return false; // not our line
 
   // Cancel any pending suggestion
-  clearTimeout(suggestTimer);
-  if (suggestAbort) { suggestAbort.abort(); suggestAbort = null; }
+  cancelSuggestion();
   ghostClear(view);
 
   runIdeaExpansion(view, line).catch(console.error);
@@ -1085,18 +1348,25 @@ async function runIdeaExpansion(view, line) {
 //  so the draft stays readable and editable while you decide.
 //
 //  Context attaches to the composer as a chip rather than opening a window:
-//  right-click a selection, or click a slop underline, and the passage rides
+//  right-click a selection, or click a marked passage, and the passage rides
 //  along with whatever you type next.
 //
 
-const CHAT_PLACEHOLDER = 'Ask anything, or select text to rewrite';
+const CHAT_PLACEHOLDER = 'Ask about your draft, or request a rewrite';
 
 let attached = null;   // { from, to, text } — the passage the chip refers to
 let activeFinding = null;
+// Which remark card stands in the rail — independent of `attached`. Reading a
+// mark opens its card; only an explicit action (the bubble, the card's own
+// Options, Cmd+K) arms the composer. The marks stay the navigation either way.
+let focusedFindingId = null;
 // { role, content, display? } — `content` goes to the model, `display` is what
 // the writer typed when the two differ (a finding adds context to the message).
 let chatHistory = [];
 let chatAbort = null;
+const chatRequests = new Set();
+const chatEditCards = new Map();
+let changingChatEdit = null;
 
 function chatEl(tag, className, text) {
   const node = document.createElement(tag);
@@ -1111,29 +1381,131 @@ const chatAtBottom = () =>
   chatStream.scrollHeight - chatStream.scrollTop - chatStream.clientHeight < 48;
 
 function chatScroll(stick) {
-  if (stick) chatStream.scrollTop = chatStream.scrollHeight;
+  chatStream.scrollTop = chatStream.scrollHeight;
+  void stick;
 }
 
-// Only the conversation survives a reload — cards point at document ranges
-// that the restored findings re-anchor for themselves.
 function saveChat() {
-  docStorage.setItem('wa-chat', JSON.stringify(chatHistory.slice(-20)));
+  docStorage.setItem('wa-chat', JSON.stringify({ document: workView.state.doc.toString(), messages: chatHistory.slice(-20) }));
 }
-
 function restoreChat() {
-  let saved = [];
-  try { saved = JSON.parse(docStorage.getItem('wa-chat') || '[]'); } catch {}
-  if (!Array.isArray(saved) || !saved.length) return;
-  chatHistory = saved;
-  for (const message of saved) {
-    if (message.role === 'user') {
-      chatAdd(chatEl('div', 'chat-message is-user', message.display ?? message.content));
-    } else {
-      const node = chatEl('div', 'chat-message is-agent is-markdown');
-      node.innerHTML = renderMarkdown(message.content);
-      chatAdd(node);
+  let saved;
+  try { saved = JSON.parse(docStorage.getItem('wa-chat') || 'null'); } catch { return; }
+  const messages = Array.isArray(saved) ? saved : saved?.messages;
+  if (!Array.isArray(messages)) return;
+  chatHistory = messages.filter(message => message && ['user', 'assistant'].includes(message.role) && typeof message.content === 'string').slice(-20);
+  for (const message of chatHistory) {
+    if (message.role === 'user') chatAdd(chatEl('div', 'chat-message is-user', message.display ?? message.content));
+    else {
+      message.edits = Array.isArray(message.edits) ? message.edits.filter(edit => edit && typeof edit.quote === 'string' && typeof edit.replacement === 'string' && typeof edit.label === 'string').slice(0, 8) : [];
+      for (const edit of message.edits) {
+        if (saved.document !== workView.state.doc.toString() || !chatEditMatches(edit, workView.state.doc.toString())) {
+          if (edit.state !== 'unlocated') edit.state = 'stale';
+        }
+      }
+      renderChatAnswer(chatAdd(chatEl('div', 'chat-message is-agent is-markdown')), message);
     }
   }
+}
+function renderChatAnswer(reply, message) {
+  reply.innerHTML = renderMarkdown(message.content);
+  for (const edit of message.edits || []) reply.append(chatEditCard(edit));
+  if (message.editWarning) reply.append(chatEl('p', 'chat-error', message.editWarning));
+  if (!message.edits?.length) {
+    const prepare = chatEl('button', 'chat-again', 'Prepare rewrite');
+    prepare.type = 'button';
+    prepare.addEventListener('click', () => {
+      chatInput.value = `Prepare a concrete rewrite based on this advice:\n${message.content}`;
+      chatSend();
+    });
+    reply.append(prepare);
+  }
+}
+function chatEditCard(edit) {
+  const card = chatEl('section', 'chat-edit-card');
+  card.setAttribute('aria-label', edit.label);
+  card.append(chatEl('strong', 'chat-edit-title', edit.label));
+  card.append(chatEl('p', 'chat-edit-replacement', edit.replacement || '(Remove this passage)'));
+  const actions = chatEl('div', 'chat-edit-actions');
+  const button = (name, handler) => {
+    const node = chatEl('button', 'review-action', name); node.type = 'button';
+    node.addEventListener('click', handler); actions.append(node); return node;
+  };
+  const preview = button('Preview', () => {
+    if (!chatEditMatches(edit, workView.state.doc.toString())) return;
+    if (plainPreview?.edit === edit) clearPlainPreview();
+    else {
+      clearPlainPreview();
+      workView.dispatch({ effects: EditorView.scrollIntoView(edit.from, { y: 'center' }) });
+      showPlainPreview(edit.replacement, edit); plainPreview.edit = edit;
+    }
+    syncChatEditCards();
+  });
+  const apply = button('Apply', () => changeChatEdit(edit));
+  apply.classList.add('is-primary');
+  const keep = button('Keep original', () => { clearPlainPreview(); edit.state = 'kept'; saveChat(); syncChatEditCards(); undo.focus(); });
+  const undo = button('Undo', () => {
+    if (edit.state === 'kept') { edit.state = 'pending'; saveChat(); syncChatEditCards(); apply.focus(); }
+    else changeChatEdit(edit, true);
+  });
+  const refresh = button('Request new edit', () => {
+    if (edit.state === 'unlocated') {
+      chatInput.value = `Prepare an edit for the passage I select. Previous suggestion: ${edit.label}`;
+      chatInput.focus(); return;
+    }
+    chatInput.value = `Prepare a new edit for the current draft. Previous suggestion: ${edit.label}. Original passage: ${edit.quote}`;
+    chatSend();
+  });
+  const status = chatEl('p', 'chat-edit-status'); status.setAttribute('role', 'status');
+  // The status leads the row: message left, actions right — so Applied stands
+  // directly before Undo instead of on a line of its own.
+  actions.prepend(status);
+  card.append(actions);
+  chatEditCards.set(edit, { card, preview, apply, keep, undo, refresh, status });
+  syncChatEditCard(edit, chatEditCards.get(edit));
+  return card;
+}
+function syncChatEditCard(edit, ui) {
+  const valid = chatEditMatches(edit, workView.state.doc.toString());
+  const pending = edit.state === 'pending' && valid;
+  ui.preview.hidden = ui.apply.hidden = ui.keep.hidden = !pending;
+  ui.undo.hidden = !valid || !['applied', 'kept'].includes(edit.state);
+  ui.refresh.hidden = valid;
+  ui.refresh.textContent = edit.state === 'unlocated' ? 'Choose passage' : 'Request new edit';
+  // Unlocated proposals need an explicit selection, then a fresh response.
+  ui.preview.textContent = plainPreview?.edit === edit ? 'End preview' : 'Preview';
+  ui.preview.setAttribute('aria-pressed', String(plainPreview?.edit === edit));
+  ui.apply.disabled = ui.undo.disabled = workView.state.readOnly || loadingDocument || savePaused;
+  // A stale card names no problem — the Request button beside it is the way
+  // forward, so the status line stays out of the way.
+  ui.status.textContent = !valid ? (edit.state === 'unlocated' ? 'Select the intended passage and request this edit again.' : '')
+    : edit.state === 'applied' ? 'Applied' : edit.state === 'kept' ? 'Original kept' : '';
+  ui.status.hidden = !ui.status.textContent;
+  ui.status.classList.toggle('is-ok', valid && edit.state === 'applied');
+}
+function syncChatEditCards() {
+  for (const [edit, ui] of chatEditCards) {
+    if (!ui.card.isConnected) { chatEditCards.delete(edit); continue; }
+    syncChatEditCard(edit, ui);
+  }
+}
+function changeChatEdit(edit, undo = false) {
+  if (workView.state.readOnly || loadingDocument || savePaused || !chatEditMatches(edit, workView.state.doc.toString())
+    || edit.state !== (undo ? 'applied' : 'pending')) return;
+  clearPlainPreview();
+  const text = undo ? edit.quote : edit.replacement;
+  changingChatEdit = edit;
+  try {
+    if (undo) {
+      saveSnapshot('Before undoing chat edit');
+      workView.dispatch({ changes: { from: edit.from, to: edit.to, insert: text }, selection: { anchor: edit.from + text.length } });
+      save();
+    } else applyText(text, { from: edit.from, to: edit.to, text: edit.quote, document: workView.state.doc.toString() });
+    edit.to = edit.from + text.length;
+    edit.state = undo ? 'pending' : 'applied';
+  } finally { changingChatEdit = null; }
+  saveChat(); syncChatEditCards(); setChatOpen(true);
+  const ui = chatEditCards.get(edit); (undo ? ui?.apply : ui?.undo)?.focus();
 }
 
 // ── Rail ──
@@ -1146,7 +1518,7 @@ function restoreChat() {
 const rail = document.getElementById('rail');
 const railAnchors = new Map();   // node → () => document position | null
 const railHomes = new Map();     // node → where it lives when there is no rail
-const RAIL_WIDTH = 240, RAIL_GUTTER = 24;
+const RAIL_WIDTH = 300, RAIL_GUTTER = 24;
 let railOn = false;
 
 // The rail lives in the margin the centred text column leaves empty, so it is
@@ -1166,11 +1538,19 @@ function syncRail() {
   if (fits === railOn) return;
   railOn = fits;
   rail.hidden = !fits;
+  const focused = focusedFindingId;
   for (const node of railAnchors.keys()) {
     if (!node.isConnected) continue;
     node.style.top = '';
     node.style.visibility = '';
-    if (fits) rail.append(node); else placeHome(node);
+    if (fits) { node.style.display = ''; rail.append(node); }
+    else {
+      placeHome(node);
+      // Single-card rule holds in the stream too: the focused remark shows,
+      // the rest wait on their marks.
+      const nodeId = Number(node.dataset?.findingId);
+      node.style.display = (focused === null || nodeId === focused) ? '' : 'none';
+    }
   }
   if (!fits) chatScroll(true);   // cards moved into the stream land below the fold
 }
@@ -1229,6 +1609,9 @@ function setChatOpen(open) {
   // findings and their marks are still there, and clicking a mark builds its
   // card again. The composer stays: it is how the writer talks to the draft
   // at all.
+  // The toggle is its own right-aligned row above the stream (see .chat-clear)
+  // — in normal flow, never overlapping cards or the composer, so it takes
+  // a layout row and never scrolls away with a long stream.
   if (open) chatStream.hidden = false;      // measure against a laid-out stream
   chatClear.textContent = open ? '×' : 'Conversation';
   chatClear.setAttribute('aria-label', open ? 'Close the conversation' : 'Show the conversation');
@@ -1236,13 +1619,20 @@ function setChatOpen(open) {
   if (open) { chatClear.hidden = false; chatScroll(true); return; }
   chatStream.hidden = true;
   detach();   // ends an open hover preview with it
+  // Applied options live inside rail cards now. Before the cards go away,
+  // move the kept ones into the stream so their Undo survives the close —
+  // the same guarantee the stream always had.
+  for (const card of findingCards.values()) {
+    const kept = card.querySelector('.chat-variants:has(.variant-card.is-applied)');
+    if (kept) streamAppend(kept);
+  }
   discardFindingCards();
   // Applied options stay in the chat with their Undo; everything undecided goes.
   for (const stale of document.querySelectorAll('.chat-variants')) {
     if (!stale.querySelector('.variant-card.is-applied')) stale.remove();
   }
   // The toggle only makes sense while the stream holds something to show —
-  // otherwise ×/Conversation flips over an empty panel and reads as broken.
+  // otherwise ×/Conversation sits above an empty panel and reads as broken.
   chatClear.hidden = chatStream.children.length === 0;
   layoutRail();
 }
@@ -1254,6 +1644,7 @@ function discardFindingCards() {
     railAnchors.delete(card); railHomes.delete(card); card.remove();
   }
   findingCards.clear();
+  focusedFindingId = null;
 }
 
 function chatAdd(node) {
@@ -1271,30 +1662,52 @@ function streamAppend(node) {
   return node;
 }
 
+// Keep the way back visible even when the conversation is put away.
+// The toast auto-hides: the Undo on the kept variant card itself stays
+// timer-free, so nothing is lost when this goes away.
+let editFeedbackTimer = null;
+const EDIT_FEEDBACK_MS = 6000;
+function showEditFeedback(message, onUndo) {
+  editFeedback.replaceChildren(chatEl('span', '', message));
+  const undo = chatEl('button', 'edit-feedback-undo', 'Undo');
+  undo.type = 'button';
+  const hide = () => { clearTimeout(editFeedbackTimer); editFeedback.hidden = true; };
+  undo.addEventListener('click', () => { hide(); onUndo(); });
+  const close = chatEl('button', 'edit-feedback-close', '×');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Hide editing confirmation');
+  close.addEventListener('click', () => { hide(); workView.focus(); });
+  editFeedback.append(undo, close);
+  editFeedback.hidden = false;
+  clearTimeout(editFeedbackTimer);
+  editFeedbackTimer = setTimeout(() => { editFeedback.hidden = true; }, EDIT_FEEDBACK_MS);
+}
+
 // ── Attached passage ──
 
 // The passage stays where the writer is looking — highlighted in the draft.
 // Copying it into the composer duplicated the sentence they were reading and
 // pushed the answer off screen.
-// Cmd+K and the context menu are requests to instruct, so they hand over the
-// keyboard. Clicking an underline is not: the writer may just as well be
-// putting the caret there to fix the sentence themselves.
+// The composer's invitation names what it will carry: a bare field, or one
+// with a passage attached.
+function basePlaceholder() {
+  if (attached) return activeFinding ? 'Ask about this finding' : 'Ask about this passage, or request a change';
+  return CHAT_PLACEHOLDER;
+}
+
+// Attaching is always an explicit act — the bubble's Add to context, a card's
+// Discuss, Cmd+K on a selection — never a side effect of reading.
+// Clicking a mark opens its remark and arms nothing: the writer may just as
+// well be putting the caret there to fix the sentence themselves.
 function attach(range, finding = null, focusComposer = true) {
   attached = range;
   activeFinding = finding;
-  // Only a passage the writer selected gets a chip. A finding is already named
-  // on its own card beside the line, and the placeholder says what the next
-  // message will do with it — a chip on top of that read as the sentence
-  // having been selected into the composer, which is not what happened.
-  chatChip.classList.toggle('hidden', !!finding);
-  chatChipText.textContent = finding?.pattern ?? 'Selected text';
+  // Context remains visible after the placeholder disappears while typing.
+  chatChip.classList.remove('hidden');
+  chatChipText.textContent = finding ? `Finding: ${finding.pattern}` : 'Selected text';
+  chatChipText.title = chatChipText.textContent;
   workView.dispatch({ effects: setAttachFx.of({ from: range.from, to: range.to, finding: !!finding }) });
-  // What the next message does is decided by what is attached, and the
-  // placeholder is the only place that has to say so. A passage the writer
-  // selected is a rewrite target; a finding is something to ask about, and its
-  // card carries the explicit `Options` button.
-  chatInput.placeholder = finding ? 'Ask about this finding' : 'Describe the change';
-  syncActiveCard();
+  chatInput.placeholder = basePlaceholder();
   if (focusComposer) chatInput.focus();
 }
 
@@ -1304,7 +1717,7 @@ function detach() {
   activeFinding = null;
   chatChip.classList.add('hidden');
   syncActiveCard();
-  chatInput.placeholder = CHAT_PLACEHOLDER;
+  chatInput.placeholder = basePlaceholder();
   workView.dispatch({ effects: setAttachFx.of(null) });
 }
 
@@ -1319,6 +1732,84 @@ function attachedRange() {
   return range;
 }
 
+// ── Mark bubble ──
+//
+//  Clicking a mark or selecting text arms nothing. The bubble beside the click
+//  holds the explicit acts instead: Add to context (names the chip, stays in
+//  the editor) and a rewrite (attaches, then asks the model). One bubble at a
+//  time; scroll, edit, copy, or Escape puts it away.
+const markBubble = document.getElementById('mark-bubble');
+let bubbleMode = null;   // 'finding' | 'style' | 'selection' while open
+
+function hideMarkBubble() {
+  if (markBubble.hidden) return;
+  markBubble.hidden = true;
+  markBubble.replaceChildren();
+  bubbleMode = null;
+}
+
+function placeBubble(x, y) {
+  markBubble.hidden = false;
+  const box = markBubble.getBoundingClientRect();
+  // Above the text, centered on the click — below it only when the top
+  // has no room.
+  const left = Math.max(8, Math.min(x - box.width / 2, window.innerWidth - box.width - 8));
+  let top = y - box.height - 12;
+  if (top < 8) top = y + 14;
+  markBubble.style.left = `${left}px`;
+  markBubble.style.top = `${Math.max(8, top)}px`;
+}
+
+function bubbleButton(label, run) {
+  const button = chatEl('button', 'mark-bubble-seg', label);
+  button.type = 'button';
+  button.addEventListener('click', () => { hideMarkBubble(); run(); workView.focus(); });
+  return button;
+}
+
+function attachLive(finding, range) {
+  attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding, false);
+}
+
+function showFindingBubble(finding, x, y) {
+  bubbleMode = 'finding';
+  const actions = chatEl('div', 'mark-bubble-actions');
+  actions.append(
+    bubbleButton('Suggest rewrites', () => {
+      const range = findingRange(finding.id);
+      if (!range) return;
+      attachLive(finding, range);
+      const card = findingCards.get(finding.id);
+      const offer = card?.querySelector('.chat-offer');
+      if (offer && !offer.disabled) offer.click();
+      else if (card) requestVariants(`Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`, null, card);
+    }),
+    bubbleButton('Add to context', () => {
+      const range = findingRange(finding.id);
+      if (range) attachLive(finding, range);
+    }),
+  );
+  markBubble.replaceChildren(actions);
+  placeBubble(x, y);
+}
+
+function showSelectionBubble(x, y) {
+  const sel = workView.state.selection.main;
+  if (sel.empty) return;
+  // A mark click owns the bubble when the click lands on one; a bare
+  // selection gets the context action alone — the composer below then asks
+  // what to do with it.
+  bubbleMode = 'selection';
+  const actions = chatEl('div', 'mark-bubble-actions');
+  actions.append(bubbleButton('Add to context', () => {
+    const live = workView.state.selection.main;
+    if (live.empty) return;
+    attach({ from: live.from, to: live.to, text: workView.state.sliceDoc(live.from, live.to) }, null, true);
+  }));
+  markBubble.replaceChildren(actions);
+  placeBubble(x, y);
+}
+
 // ── Rewrite variants (cards, 0.2 style) ───────────────────────────────────────
 //
 //  Three options in the chat, not a try-on in the draft. Clicking a card
@@ -1330,7 +1821,6 @@ function attachedRange() {
 //  option for another place (e.g. history compare). Variants here preview on a
 //  plain white sheet with no red/green: hover/focus shows the option where it
 //  will live, the document itself stays untouched until the writer clicks.
-const DELTA_MATERIAL = 5;  // score move below which the delta is not worth colouring
 
 class PlainVariantWidget extends WidgetType {
   constructor(text, block) { super(); this.text = text; this.block = block; }
@@ -1361,6 +1851,31 @@ const variantPlainField = StateField.define({
   }),
 });
 
+// A brief wash over just-applied text, so the eye lands on what changed
+// instead of catching a snap. Any further edit takes over and clears it.
+const setFlashFx = StateEffect.define();
+const flashField = StateField.define({
+  create: () => null,
+  update(value, tr) {
+    for (const effect of tr.effects) if (effect.is(setFlashFx)) return effect.value;
+    if (tr.docChanged) return null;
+    return value;
+  },
+  provide: field => EditorView.decorations.from(field, value => {
+    if (!value || value.from === value.to) return Decoration.none;
+    return Decoration.set([Decoration.mark({ class: 'cm-applied-flash' }).range(value.from, value.to)]);
+  }),
+});
+let flashTimer = null;
+
+// Hover previews get a grace delay: moving between cards crosses an 8px gap,
+// and clearing on mouseleave would snap the text back for one frame before
+// the next card re-applies it. Leaving arms a short timer; any new preview
+// — hover or keyboard focus — cancels it. Explicit exits (click in the
+// draft, Escape handled by callers, new requests, applies) clear at once.
+let unpreviewTimer = null;
+const UNPREVIEW_DELAY = 120;
+
 let plainPreview = null;  // { target } while a hover preview is up
 function showPlainPreview(text, target) {
   plainPreview = { target };
@@ -1374,9 +1889,11 @@ function showPlainPreview(text, target) {
   });
 }
 function clearPlainPreview() {
+  clearTimeout(unpreviewTimer);
   if (!plainPreview) return;
   plainPreview = null;
   try { workView.dispatch({ effects: setPlainVariantFx.of(null) }); } catch {}
+  syncChatEditCards();
 }
 
 function applyText(text, target, wrap = null, card = null) {
@@ -1385,19 +1902,32 @@ function applyText(text, target, wrap = null, card = null) {
     return;
   }
   const range = target;
-  clearPlainPreview();
+  // One transaction: the preview decoration comes off in the same redraw that
+  // lands the new text, so there is no intermediate frame flashing the old
+  // passage back. The flash marks what changed for the eye that follows.
+  plainPreview = null;
   saveSnapshot('Before AI replacement');
   workView.dispatch({
     changes:   { from: range.from, to: range.to, insert: text },
     selection: { anchor: range.from + text.length },
+    effects: [
+      setPlainVariantFx.of(null),
+      setFlashFx.of({ from: range.from, to: range.from + text.length }),
+    ],
   });
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { try { workView.dispatch({ effects: setFlashFx.of(null) }); } catch {} }, 1300);
   workView.focus();
   save();
   detach();
-  // Only the kept option stays in the chat; the rest point at a range that no
-  // longer exists, so they step aside entirely. The finding card stays hidden:
-  // the passage it remarked on is gone. Choosing closes the chat — the kept
-  // card with its Undo survives in the stream history.
+  // First kept option: the writer now knows hover-to-preview and click-to-
+  // apply, so later groups skip the usage hint.
+  try { localStorage.setItem('wa-variant-hint', 'seen'); } catch {}
+  // Only the kept option stays; the rest point at a range that no longer
+  // exists, so they step aside entirely. Inside a finding card the kept
+  // option stays where it was chosen — beside the changed passage — with
+  // its Undo. In the stream the kept card is the confirmation, so the chat
+  // stays open on it instead of closing behind it.
   if (card) card.classList.add('is-applied');
   if (wrap) {
     wrap.classList.add('is-spent');
@@ -1409,10 +1939,72 @@ function applyText(text, target, wrap = null, card = null) {
     const soloHint = wrap.querySelector(':scope > .variant-hint');
     if (soloHint) soloHint.hidden = true;
     attachUndo(card, text, target);
-    setChatOpen(false);
+    const hostCard = wrap.closest('.chat-card');
+    if (hostCard && findingCards.has(Number(hostCard.dataset.findingId))) {
+      // Re-anchor the remark to the new text so it keeps standing against
+      // the passage it just changed, then let the flash confirm. The remark
+      // is resolved: the card lingers just long enough to Undo, then steps
+      // aside by itself (see scheduleAppliedHide).
+      railAnchors.set(hostCard, () => target.from);
+      layoutRail();
+      scheduleAppliedHide(hostCard, Number(hostCard.dataset.findingId));
+    } else {
+      // No host card: the kept option in the stream is the whole
+      // confirmation — keep it on screen with its Undo.
+      setChatOpen(true);
+    }
   }
 }
 
+// A resolved remark steps aside by itself: after an option is applied the
+// card lingers just long enough to Undo, then goes away without a click.
+// The Undo on the kept card stays timer-free while it is on screen — hiding
+// only ever removes the card, never the way back before its time.
+const APPLIED_HIDE_MS = 6000;
+const appliedHideTimers = new Map();   // finding id → timeout
+function scheduleAppliedHide(hostCard, id) {
+  clearTimeout(appliedHideTimers.get(id));
+  appliedHideTimers.set(id, setTimeout(() => {
+    const card = findingCards.get(id);
+    if (!card || !card.isConnected) { appliedHideTimers.delete(id); return; }
+    // Never yank it from under the cursor or keyboard focus — wait it out.
+    if (card.matches(':hover') || card.contains(document.activeElement)) {
+      scheduleAppliedHide(card, id);
+      return;
+    }
+    appliedHideTimers.delete(id);
+    resolveFinding(id);
+  }, APPLIED_HIDE_MS));
+}
+
+// The applied option fixed the passage: drop the remark, its mark and its
+// card, quietly — the flash already confirmed the change, and no toast is
+// owed for doing what was asked.
+function resolveFinding(id) {
+  clearTimeout(appliedHideTimers.get(id));
+  appliedHideTimers.delete(id);
+  if (id === -1) {
+    removeLocalFinding();
+    saveFindings();
+    syncReviewLabel();
+    syncStyleScore();
+    updateFindingNav();
+    layoutRail();
+    return;
+  }
+  reviewFindings = reviewFindings.filter(finding => finding.id !== id);
+  const card = findingCards.get(id);
+  if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); }
+  findingCards.delete(id);
+  try { workView.dispatch({ effects: dropReviewFx.of(id) }); } catch {}
+  if (focusedFindingId === id) { focusedFindingId = null; syncActiveCard(); }
+  saveFindings();
+  syncReviewLabel();
+  syncStyleScore();
+  updateFindingNav();
+  layoutRail();
+  if (chatStream.children.length === 0) setChatOpen(false);
+}
 // The way back lives on the kept card itself, with no timer: it puts back
 // exactly what was replaced and only while it is still there to put back —
 // it is not the editor's undo stack, which by then may belong to something
@@ -1427,16 +2019,35 @@ function attachUndo(card, text, target) {
     undo.type = 'button';
     undo.title = 'Put the passage back as it was';
     undo.addEventListener('click', () => {
+      // Undoing reopens the question — cancel the auto-hide the apply armed.
+      const host = undo.closest('.chat-card');
+      if (host?.dataset.findingId !== undefined && host.dataset.findingId !== '') {
+        clearTimeout(appliedHideTimers.get(Number(host.dataset.findingId)));
+        appliedHideTimers.delete(Number(host.dataset.findingId));
+      }
       const at = Number(undo.dataset.from);
       const { applied, previous } = undo.dataset;
-      if (workView.state.sliceDoc(at, at + applied.length) !== applied) {
+      if (!undo.isConnected || undo.dataset.stale || workView.state.sliceDoc(at, at + applied.length) !== applied) {
         chatAdd(chatEl('div', 'chat-error', 'That passage has changed since. Use the editor’s undo instead.'));
         return;
       }
       workView.dispatch({ changes: { from: at, to: at + applied.length, insert: previous }, selection: { anchor: at + previous.length } });
       workView.focus();
       save();
-      undo.closest('.chat-variants')?.remove();
+      const spentWrap = undo.closest('.chat-variants');
+      const hostCard = undo.closest('.chat-card');
+      spentWrap?.remove();
+      // An undone rail card remarked on text that is back to its original
+      // wording but no longer marked — put it away rather than leave an
+      // empty remark standing beside the line.
+      if (hostCard && hostCard.dataset.findingId && !hostCard.querySelector('.chat-variants')) {
+        const hostId = Number(hostCard.dataset.findingId);
+        railAnchors.delete(hostCard); railHomes.delete(hostCard);
+        findingCards.delete(hostId);
+        hostCard.remove();
+        refocusAfterRemoval(hostId);
+      }
+      layoutRail();
       // The wrap may have been the last thing in the stream — don't leave the
       // toggle over an empty panel.
       if (chatStream.children.length === 0) setChatOpen(false);
@@ -1448,6 +2059,8 @@ function attachUndo(card, text, target) {
   undo.dataset.from = String(target.from);
   undo.dataset.applied = text;
   undo.dataset.previous = target.text;
+  delete undo.dataset.stale;
+  return undo;
 }
 
 // ── Cards ──
@@ -1458,28 +2071,80 @@ function attachUndo(card, text, target) {
 function markFor(id) { return workView.dom.querySelector(`.cm-slop[data-slop-id="${id}"]`); }
 
 function syncActiveCard() {
-  for (const [id, card] of findingCards) card.classList.toggle('is-active', id === activeFinding?.id);
+  const focused = focusedFindingId;
+  for (const [id, card] of findingCards) {
+    const isFocused = id === focused;
+    card.classList.toggle('is-active', isFocused);
+    // Single-card rail: only the focused remark stands beside the draft.
+    // The rest keep their marks in the text — the marks are the navigation —
+    // and take no rail space until clicked. Without a rail the same rule
+    // applies to the stream: one card visible, not a stack.
+    const finding = reviewFindings.find(item => item.id === id);
+    if (finding) {
+      railAnchors.set(card, () => {
+        if (card.hidden) return null;
+        if (focused !== null && id !== focused) return null;
+        return findingRange(id)?.from ?? null;
+      });
+    }
+    if (!railOn && card.isConnected && card.parentElement === chatStream) {
+      card.style.display = (focused === null || isFocused) ? '' : 'none';
+    } else {
+      card.style.display = '';
+    }
+  }
+  updateFindingNav();
+  layoutRail();
+}
+
+// After a focused card goes away (dismissed, undone), stand the nearest
+// remaining open card against the draft instead of leaving a rail of
+// hidden cards behind.
+function refocusAfterRemoval(removedId) {
+  if (focusedFindingId !== removedId) return;
+  const live = reviewFindings.map(finding => ({ finding, range: findingRange(finding.id) })).filter(item => item.range)
+    .sort((a, b) => a.range.from - b.range.from || a.finding.id - b.finding.id);
+  const next = live.find(item => findingCards.has(item.finding.id));
+  focusedFindingId = next ? next.finding.id : null;
+  syncActiveCard();
 }
 
 function findingCard(finding, instruction) {
   const card = chatEl('div', 'chat-card');
+  card.dataset.findingId = String(finding.id);
   card.addEventListener('mouseenter', () => markFor(finding.id)?.classList.add('is-hot'));
   card.addEventListener('mouseleave', () => markFor(finding.id)?.classList.remove('is-hot'));
-  const dismiss = chatEl('button', 'chat-card-dismiss', '×');
+  // Single-card rail: the marks in the draft are the overview, this card is
+  // the focused one. The header names where it stands so the writer never
+  // wonders how many remarks are waiting.
+  const nav = chatEl('div', 'finding-nav');
+  const prev = chatEl('button', 'finding-nav-btn', '‹');
+  prev.type = 'button';
+  prev.title = 'Previous finding (Shift+F8)';
+  prev.setAttribute('aria-label', 'Previous finding');
+  prev.addEventListener('click', () => jumpToNextFinding(-1));
+  const count = chatEl('span', 'finding-nav-count', '');
+  const next = chatEl('button', 'finding-nav-btn', '›');
+  next.type = 'button';
+  next.title = 'Next finding (F8)';
+  next.setAttribute('aria-label', 'Next finding');
+  next.addEventListener('click', () => jumpToNextFinding(1));
+  nav.append(prev, count, next);
+  const dismiss = chatEl('button', 'chat-card-dismiss', 'Keep as is');
   dismiss.type = 'button';
-  dismiss.title = 'Dismiss this finding';
-  dismiss.setAttribute('aria-label', 'Dismiss this finding');
+  dismiss.title = 'Keep this wording and dismiss the finding';
   dismiss.addEventListener('click', () => {
     chatAbort?.abort();  // in-flight variants for a dismissed finding are waste
     clearPlainPreview();   // options generated for a dismissed finding are waste
     dismissFinding(finding.id);
   });
   card.append(
-    dismiss,
+    nav,
     chatEl('strong', '', finding.pattern),
     chatEl('span', '', finding.reason),
     chatEl('small', '', finding.fix),
   );
+  if (finding.id === -1) nav.hidden = true;
 
   // Alternatives are offered, not spent on a click. Reading the remark and
   // fixing the sentence yourself is a complete outcome. There is one scope —
@@ -1492,74 +2157,93 @@ function findingCard(finding, instruction) {
   offer.addEventListener('click', () => {
     const live = findingRange(finding.id);
     if (!live) {
-      if (!card.querySelector('.chat-error')) card.append(chatEl('div', 'chat-error', 'This passage has changed. Run Review again.'));
+      if (!card.querySelector('.chat-error')) card.append(chatEl('div', 'chat-error', 'This passage has changed. Check again.'));
       return;
     }
+    // Options already on screen are the answer — asking again would wipe
+    // them for skeletons and land the same three cards. Retries live on the
+    // group's own refresh icon; a second press while they show does nothing.
+    if (offer.disabled) return;
+    if (card.querySelector('.finding-variants .variant-card:not(.is-loading)')) return;
     // Retries live on the variants group as the refresh icon; the offer itself
     // just waits, dimmed, and comes back if the request fails.
     offer.disabled = true;
     offer.textContent = 'Looking…';
-    if (activeFinding?.id !== finding.id) {
-      const target = { ...live, text: workView.state.sliceDoc(live.from, live.to) };
-      attach(target, finding, false);
-    }
-    requestVariants(instruction, null, card);
+    // Options ask about this remark without touching the composer: no chip,
+    // no placeholder swap. The target travels with the request itself, so
+    // reading stays reading until the writer types something of their own.
+    const target = { ...live, text: workView.state.sliceDoc(live.from, live.to), document: workView.state.doc.toString() };
+    requestVariants(instruction, target, card);
   });
-  card.append(offer);
+  const actions = chatEl('div', 'finding-actions');
+  actions.append(offer, dismiss);
+  const discuss = chatEl('button', 'chat-again', 'Discuss');
+  discuss.type = 'button';
+  discuss.addEventListener('click', () => { const range = findingRange(finding.id); if (range) attachLive(finding, range); chatInput.focus(); });
+  actions.append(discuss);
+  if (finding.id === -1) dismiss.textContent = 'Keep here';
+  // Variants open inside this card — beside the passage they replace — not
+  // in the bottom stream. The stream stays for conversation about the draft.
+  const variantsBox = chatEl('div', 'finding-variants');
+  card.append(actions, variantsBox);
+  updateFindingNav();
   return card;
+}
+
+// Names the focused card's place among the live findings: "2 of 5".
+// Lives on every card so a refocused card already reads correctly.
+function updateFindingNav() {
+  const live = reviewFindings.map(finding => ({ finding, range: findingRange(finding.id) })).filter(item => item.range)
+    .sort((a, b) => a.range.from - b.range.from || a.finding.id - b.finding.id);
+  for (const [id, card] of findingCards) {
+    const count = card.querySelector('.finding-nav-count');
+    if (!count) continue;
+    const index = live.findIndex(item => item.finding.id === id);
+    count.textContent = live.length ? `${index >= 0 ? index + 1 : '–'} of ${live.length}` : '';
+  }
 }
 
 // ── Variant cards ──
 //
-//  0.2 behaviour, visually tightened: a vertical stack in the chat stream.
-//  Each card names its option, shows the draft score it would produce, and
-//  applies on click. Hover or keyboard focus previews the option in place on
-//  a plain white sheet — no coloured diff — so the writer reads it with the
-//  sentences around it. While the options are up, the finding card itself is
-//  hidden (see hideFindingCard): it has said its piece.
+//  A vertical stack of options. Each card names its option and applies on
+//  click. Hover or keyboard focus previews the option in place on a plain
+//  white sheet — no coloured diff — so the writer reads it with the
+//  sentences around it.
 function variantCards(variants, instruction, target, card = null) {
   const doc = workView.state.doc.toString();
-  const measurable = isLatinScript(doc);
-  const base = measurable ? styleScore(doc).score : null;
 
-  // Rank what the model already produced — the score is never fed to the model,
-  // or it would optimise the word list instead of the writing.
-  const scored = variants.map(text => ({
-    text,
-    score: measurable
-      ? styleScore(doc.slice(0, target.from) + text + doc.slice(target.to)).score
-      : null,
-  }));
-  if (measurable) scored.sort((a, b) => a.score - b.score);
+  // Rank what the model already produced by the resulting whole-document
+  // local score — shown nowhere and never fed to the model, or it would
+  // optimise the word list instead of the writing.
+  const ordered = isLatinScript(doc)
+    ? variants
+        .map(text => ({ text, score: styleScore(doc.slice(0, target.from) + text + doc.slice(target.to)).score }))
+        .sort((a, b) => a.score - b.score)
+        .map(item => item.text)
+    : variants.slice();
 
   const wrap = chatEl('div', 'chat-variants');
   wrap.setAttribute('role', 'list');
   wrap.dataset.targetFrom = String(target.from);
-  scored.forEach(({ text, score }, index) => {
+  ordered.forEach((text, index) => {
     const item = chatEl('div', 'variant-card');
     item.setAttribute('role', 'listitem');
     item.tabIndex = 0;
     item.setAttribute('role', 'button');
     item.setAttribute('aria-label', `Apply option ${index + 1}`);
     const label = chatEl('div', 'variant-label', `Option ${index + 1}`);
-    if (score !== null) {
-      // Colour only a material move. On an already-clean draft every variant
-      // nudges the score a point or two, and painting that red reads as
-      // "all options are bad" when nothing is wrong.
-      const move = score - base;
-      const tone = move <= -DELTA_MATERIAL ? ' is-better' : move >= DELTA_MATERIAL ? ' is-worse' : '';
-      const delta = chatEl('span', `variant-delta${tone}`, `${base} → ${score}`);
-      delta.title = 'Local AI-tell score for the whole draft if you pick this variant';
-      label.append(delta);
-    }
     const body = chatEl('div', 'variant-text', text);
     item.append(label, body);
     const previewIt = () => {
       if (wrap.classList.contains('is-spent')) return;
       if (!replacementTarget(workView.state.doc.toString(), target)) return;
+      clearTimeout(unpreviewTimer);
       showPlainPreview(text, target);
     };
-    const unpreview = () => clearPlainPreview();
+    const unpreview = () => {
+      clearTimeout(unpreviewTimer);
+      unpreviewTimer = setTimeout(clearPlainPreview, UNPREVIEW_DELAY);
+    };
     item.addEventListener('mouseenter', previewIt);
     item.addEventListener('mouseleave', unpreview);
     item.addEventListener('focus', previewIt);
@@ -1576,6 +2260,9 @@ function variantCards(variants, instruction, target, card = null) {
   // Three options none of which fit is otherwise a dead end — the passage is
   // still attached, so ask again with the same instruction.
   // /idea has no instruction to repeat, so it gets no button.
+  // The usage hint is shown once: after the first applied option the writer
+  // knows the drill, and the row shrinks to the retry icon alone.
+  const hintSeen = (() => { try { return localStorage.getItem('wa-variant-hint') === 'seen'; } catch { return false; } })();
   if (instruction !== null) {
     const foot = chatEl('div', 'variant-foot');
     const again = chatEl('button', 'chat-again is-icon');
@@ -1589,12 +2276,11 @@ function variantCards(variants, instruction, target, card = null) {
       wrap.remove();
       requestVariants(instruction, target, card);
     });
-    const hint = chatEl('span', 'variant-hint', 'Hover to preview · Click to apply · Esc to dismiss');
-    foot.append(hint, again);
+    if (!hintSeen) foot.append(chatEl('span', 'variant-hint', 'Hover to preview · Click to apply · Esc to dismiss'));
+    foot.append(again);
     wrap.append(foot);
-  } else {
-    const hint = chatEl('div', 'variant-hint', 'Hover to preview · Click to apply · Esc to dismiss');
-    wrap.append(hint);
+  } else if (!hintSeen) {
+    wrap.append(chatEl('div', 'variant-hint', 'Hover to preview · Click to apply · Esc to dismiss'));
   }
   return wrap;
 }
@@ -1614,10 +2300,9 @@ function skeletonCards(count = 3) {
   return wrap;
 }
 
-// Versions live in the chat stream, never in the rail: the options belong to
-// the conversation, not to the margin. While they are up, the finding card
-// itself is hidden — it has said its piece. Its rail anchor skips hidden
-// cards (see openFinding), so hiding takes no space.
+// Options open inside the finding card they belong to — beside the passage
+// they would replace — not in the bottom stream. The stream stays for
+// conversation. hide/restore now only serve the stream fallback path.
 function hideFindingCard(card) {
   if (!card || card.hidden) return;
   card.hidden = true;
@@ -1634,8 +2319,23 @@ function restoreFindingCard(card) {
   layoutRail();
 }
 
+// One live group at a time: when fresh options land, earlier undecided groups
+// step aside — hovering between two stacks for two passages previews nothing
+// coherent, and a click on a stale card only errors. Applied groups stay:
+// their Undo is the way back. On a failed request nothing is touched, so old
+// options plus the error beat an error alone. Groups now live both in the
+// stream (selections, /idea) and inside finding cards, so retire across both.
+function retireStaleVariants(except) {
+  for (const stale of document.querySelectorAll('.chat-variants:not(.is-spent):not(.is-loading)')) {
+    if (stale !== except) stale.remove();
+  }
+  layoutRail();
+}
+
 function showVariants(variants, instruction, target) {
-  chatAdd(variantCards(variants, instruction, target));
+  const wrap = variantCards(variants, instruction, target);
+  retireStaleVariants(wrap);
+  chatAdd(wrap);
   // Keep the passage in view while the writer decides; the attached tint plus
   // hover previews do the rest.
   try { workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: 'center' }) }); } catch {}
@@ -1653,9 +2353,15 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
   if (!await ensureAgent()) return;
   if (!replacementTarget(workView.state.doc.toString(), target)) return;
   clearPlainPreview();
-  // The remark steps aside while its options are on screen.
-  if (card) hideFindingCard(card);
-  const placeholder = chatAdd(skeletonCards());
+  // Finding options open inside their own card. Selections and style markers
+  // have no card and keep the stream path.
+  const inCard = !!(card && card.isConnected && card.querySelector('.finding-variants'));
+  const box = inCard ? card.querySelector('.finding-variants') : null;
+  if (inCard) {
+    box.replaceChildren();
+    retireStaleVariants(null);
+  } else if (card) hideFindingCard(card);
+  const placeholder = inCard ? box.appendChild(skeletonCards()) : chatAdd(skeletonCards());
   chatAbort?.abort();
   const job = startJob();
   chatAbort = job;
@@ -1676,66 +2382,110 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
     if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
     if (!replacementTarget(workView.state.doc.toString(), target)) throw new Error('The draft changed while the rewrites were coming back. Select the passage again.');
     const stick = chatAtBottom();
-    const wrap = variantCards(data.variants, instruction, target);
-    // The chat may have been closed while the answer was in flight. A detached
-    // placeholder means its spot is gone — put the options at the end instead
-    // of losing them silently.
-    if (placeholder.isConnected) { placeholder.replaceWith(wrap); chatScroll(stick); }
-    else { placeholder.remove(); chatAdd(wrap); }
+    const wrap = variantCards(data.variants, instruction, target, card);
+    retireStaleVariants(wrap);
+    if (inCard) {
+      // The answer belongs to the remark beside the passage. The card grows;
+      // the rail re-anchors so it keeps standing against its line. The offer
+      // comes back — it asked and was answered, it must not read as working.
+      if (placeholder.isConnected) placeholder.replaceWith(wrap);
+      else box.append(wrap);
+      const done = card.querySelector('.chat-offer:disabled');
+      if (done) { done.disabled = false; done.textContent = 'Options'; }
+      layoutRail();
+      try { workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: 'center' }) }); } catch {}
+    } else {
+      // The chat may have been closed while the answer was in flight. A detached
+      // placeholder means its spot is gone — put the options at the end instead
+      // of losing them silently.
+      if (placeholder.isConnected) { placeholder.replaceWith(wrap); chatScroll(stick); }
+      else { placeholder.remove(); chatAdd(wrap); }
+    }
   } catch (error) {
-    if (error.name === 'AbortError') { placeholder.remove(); restoreFindingCard(card); return; }
+    if (error.name === 'AbortError') { placeholder.remove(); if (card) restoreFindingCard(card); else layoutRail(); return; }
     console.error('[/rewrite]', error);
     // Nothing came back; the remark is what the card has to say.
     placeholder.remove();
-    restoreFindingCard(card);
-    chatAdd(errorCard(modelError(error), () => requestVariants(instruction, target, card)));
+    if (!inCard) restoreFindingCard(card);
+    const err = errorCard(modelError(error), () => requestVariants(instruction, target, card));
+    if (inCard) { box.append(err); restoreFindingCard(card); }
+    else chatAdd(err);
   } finally { finishJob(job); if (chatAbort === job) chatAbort = null; }
 }
 
 // A finding marks a passage and is answered on that passage. Clicking the mark
-// attaches exactly what the mark covers, so the tint in the draft and the range
-// a rewrite would replace are the same thing. A problem that needs material
-// moved between paragraphs is a conversation, and the composer is already it.
+// opens its card and arms nothing — reading a remark is not a request. The
+// tint in the draft and the range a rewrite would replace are the same span,
+// and a problem that needs material moved between paragraphs is a
+// conversation, for which the bubble offers Add to context.
 const findingCards = new Map();  // finding id → its card, while it is on screen
 
-function openFinding(finding, center = false) {
+// `at` carries the click point for the action bubble; keyboard navigation
+// (F8, jump buttons) passes none and gets the card alone.
+function openFinding(finding, center = false, at = null) {
+  closeScorePopover();
+  if (finding.id !== -1) removeLocalFinding();
   clearPlainPreview();
   const range = findingRange(finding.id);
   if (!range) return;
-  attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding, false);
+  focusedFindingId = finding.id;
   // A direct click is already at the passage, so moving it would break spatial
   // continuity. Keyboard navigation still centres an off-screen finding.
   if (center) workView.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: 'center' }) });
 
   // Clicking the same mark again is navigation, not a new remark: return to the
-  // card that is already in the stream instead of stacking a copy.
-  if (findingCards.get(finding.id)?.isConnected) { chatScroll(true); return; }
+  // card that is already on screen and refocus it.
+  if (findingCards.get(finding.id)?.isConnected) {
+    syncActiveCard();
+    collapseStreamBehind(findingCards.get(finding.id));
+    findingCards.get(finding.id)?.querySelector('.chat-offer')?.focus({ preventScroll: true });
+    chatScroll(true);
+    return;
+  }
 
   const instruction = `Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`;
   const card = findingCard(finding, instruction);
-  // A hidden card (its options are up in the chat) takes no rail space.
-  findingCards.set(finding.id, railAdd(card, () => card.hidden ? null : (findingRange(finding.id)?.from ?? null)));
+  // A hidden card takes no rail space; an unfocused one takes none either —
+  // only the focused remark stands beside the draft (see syncActiveCard).
+  findingCards.set(finding.id, railAdd(card, () => {
+    if (card.hidden) return null;
+    if (focusedFindingId !== null && focusedFindingId !== finding.id) return null;
+    return findingRange(finding.id)?.from ?? null;
+  }));
   // A fresh remark in the stream is a new arrival: open for it. In the rail it
-  // is already visible beside the line, so nothing opens.
+  // is already visible beside the line, so nothing opens — instead the open
+  // conversation gets out of its way (see collapseStreamBehind).
   if (card.parentElement === chatStream) setChatOpen(true);
+  else collapseStreamBehind(card);
   syncActiveCard();
+  card.querySelector('.chat-offer')?.focus({ preventScroll: true });
+}
+
+// A remark open beside the draft owns the writer's attention: the bottom
+// conversation folds away while it stands. This hides only the stream
+// element — no teardown, so cards, attachment and history all stay exactly
+// as they were, and the toggle brings them back untouched.
+function collapseStreamBehind(card) {
+  if (!card || card.parentElement === chatStream) return;
+  if (chatStream.hidden || chatStream.children.length === 0) return;
+  chatStream.hidden = true;
+  chatClear.hidden = false;
+  chatClear.textContent = 'Conversation';
+  chatClear.setAttribute('aria-label', 'Show the conversation');
+  chatClear.title = 'Show the conversation';
 }
 
 // ── Conversation ──
 
 async function chatSend() {
+  // Sealed while the writer's own work runs — Stop first, then ask.
+  if ([...jobs].some(job => !job.background)) return;
   const text = chatInput.value.trim();
   if (!text) return;
   if (!await ensureAgent()) return;
   chatInput.value = '';
   chatResize();
   chatAdd(chatEl('div', 'chat-message is-user', text));
-
-  // A passage the writer selected themselves: the message is the rewrite
-  // instruction, and variants are directly applicable where prose is not.
-  // A finding is attached by clicking a mark — that is a question, not an
-  // order, so it opens a discussion and the card's button asks for rewrites.
-  if (attached && !activeFinding) { requestVariants(text); return; }
 
   chatHistory.push(attached && activeFinding
     ? {
@@ -1745,42 +2495,53 @@ async function chatSend() {
       }
     : { role: 'user', content: text });
   saveChat();
+  streamReply(newReplyBubble());
+}
+
+function newReplyBubble() {
   const reply = chatAdd(chatEl('div', 'chat-message is-agent is-markdown'));
   reply.append(chatEl('span', 'chat-caret'));
+  return reply;
+}
 
+// Split out from chatSend so a failed answer can be asked for again without
+// the writer retyping the question — the turn is already in chatHistory.
+async function streamReply(reply) {
   chatAbort?.abort();
-  const job = startJob();
-  chatAbort = job;
-  let answer = '';
+  const job = startJob(); chatAbort = job;
+  const request = { document: workView.state.doc.toString(), selection: attachedRange(), changes: [] };
+  chatRequests.add(request);
+  let answer = '', result = null;
   try {
     const res = await fetch('/chat', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal:  chatAbort.signal,
-      body:    JSON.stringify({
-        messages: chatHistory.map(({ role, content }) => ({ role, content })),
-        document: workView.state.doc.toString(),
-        selection: attachedRange()?.text,
-        agent:    currentAgent(),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: job.signal,
+      body: JSON.stringify({
+        messages: chatHistory.map(({ role, content, edits }) => ({ role, content: content + (edits?.length ? '\nProposed edits:\n' + JSON.stringify(edits.map(({ label, quote, replacement, state }) => ({ label, quote, replacement, state }))) : '') })),
+        document: request.document, selection: request.selection?.text,
+        selectionRange: request.selection && { from: request.selection.from, to: request.selection.to }, agent: currentAgent(),
       }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Server error ${res.status}`);
-
     for await (const chunk of sseChunks(res)) {
       if (chunk.error) throw new Error(chunk.error);
       const stick = chatAtBottom();
-      answer += chunk.text ?? '';
-      reply.innerHTML = renderMarkdown(answer);
-      chatScroll(stick);
+      if (typeof chunk.answer === 'string') { answer = chunk.answer; result = chunk; }
+      else answer += chunk.text ?? '';
+      reply.innerHTML = renderMarkdown(answer); chatScroll(stick);
     }
-    chatHistory.push({ role: 'assistant', content: answer });
-    saveChat();
+    if (job.signal.aborted || !reply.isConnected) return;
+    // No card is live until [DONE]; revalidate the envelope at the client too.
+    const edits = locateChatEdits(result?.edits || [], request.document, request.selection);
+    for (const edit of edits) for (const changes of request.changes) mapChatEdit(edit, changes);
+    const message = { role: 'assistant', content: answer, edits, editWarning: result?.editWarning };
+    chatHistory.push(message); renderChatAnswer(reply, message); saveChat(); chatScroll(true);
   } catch (error) {
+    if (!reply.isConnected) return;
     if (error.name === 'AbortError') { reply.innerHTML = renderMarkdown(answer ? answer + '\n\n[Stopped — incomplete]' : 'Stopped'); return; }
     console.error('[/chat]', error);
-    reply.title = error.message;
-    reply.innerHTML = renderMarkdown((answer ? answer + '\n\n' : '') + modelError(error).say);
-  } finally { finishJob(job); if (chatAbort === job) chatAbort = null; }
+    if (!answer) reply.replaceWith(errorCard(modelError(error), () => streamReply(newReplyBubble())));
+    else reply.innerHTML = renderMarkdown(answer + '\n\n' + modelError(error).say);
+  } finally { chatRequests.delete(request); finishJob(job); if (chatAbort === job) chatAbort = null; }
 }
 
 async function* sseChunks(res) {
@@ -1815,7 +2576,18 @@ function syncSend() {
   chatSendButton.classList.toggle('is-busy', busy);
   chatSendButton.disabled = !busy && !chatInput.value.trim();
   chatSendButton.setAttribute('aria-label', busy ? 'Stop' : 'Send');
+  // While the writer's own work runs, the field is sealed: typing then would
+  // read as steering a request that already left. The invitation says what
+  // the field is doing instead, and the button is the work now.
+  chatInput.readOnly = busy;
+  chatInput.closest('.chat-composer')?.classList.toggle('is-busy', busy);
+  chatInput.placeholder = busy ? 'Working…' : basePlaceholder();
 }
+
+document.getElementById('chat-rewrite').addEventListener('click', () => {
+  const range = attachedRange();
+  if (range) requestVariants(chatInput.value.trim() || 'Make this passage clearer. Preserve meaning, facts and voice.');
+});
 
 chatSendButton.addEventListener('click', () => {
   // The button stops only what it was showing: work the writer started.
@@ -1824,7 +2596,7 @@ chatSendButton.addEventListener('click', () => {
   chatInput.focus();
 });
 
-chatInput.placeholder = CHAT_PLACEHOLDER;
+syncSend();
 chatInput.addEventListener('input', chatResize);
 
 chatInput.addEventListener('keydown', event => {
@@ -1839,8 +2611,8 @@ chatInput.addEventListener('keydown', event => {
 chatChipClear.addEventListener('click', () => { detach(); chatInput.focus(); });
 
 // Keep focus where it is while the button is pressed: the mousedown would
-// otherwise blur the composer first, the recipes would drop via :focus-within,
-// and a Conversation click would read as "recipes closed, chat never opened".
+// otherwise blur the composer first, and the click would read as leaving the
+// field rather than as opening or closing the conversation.
 chatClear.addEventListener('mousedown', event => event.preventDefault());
 chatClear.addEventListener('click', () => {
   const open = chatStream.hidden;
@@ -1850,6 +2622,10 @@ chatClear.addEventListener('click', () => {
   (open ? chatInput : workView).focus();
 });
 
+// Manual selection attach is explicit: Cmd/Ctrl+K takes the current
+// selection into the composer, or just focuses it when there is none.
+// Clicks never attach — reading arms nothing; the bubble offers it.
+const MANUAL_ATTACH = false;
 // Cmd/Ctrl+K from anywhere: take the current selection into the composer.
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -1916,15 +2692,16 @@ const editorTheme = EditorView.theme({
     display:       'flex',
     alignItems:    'baseline',
     gap:           '10px',
-    margin:        '6px 0 2px',
-    padding:       '8px 12px',
-    // Sits between two lines of the writer's own prose — it has to read as a
-    // panel on top of the draft, not as another paragraph of it.
-    border:        '1px solid var(--border)',
+    margin:        '4px 0 2px',
+    padding:       '6px 10px',
+    // Sits between two lines of the writer's own prose. It is an inset strip
+    // of the draft — not a floating chat card, which is what --overlay plus a
+    // shadow reads as — so it takes the sunken surface and no shadow. The
+    // accent edge is what names it as model-suggested.
+    border:        '1px solid var(--border-subtle)',
     borderLeft:    '2px solid var(--accent)',
     borderRadius:  '0 var(--r-sm) var(--r-sm) 0',
-    background:    'var(--overlay)',
-    boxShadow:     'var(--shadow-md)',
+    background:    'var(--surface-2)',
     color:         'var(--text-2)',
     pointerEvents: 'none',
     userSelect:    'none',
@@ -1952,27 +2729,31 @@ const editorTheme = EditorView.theme({
     boxShadow: '0 0 0 2px var(--attached-tint)',
   },
 
-  // A finding already marks its own span. Layering the selection tint over it
-  // read as the sentence being highlighted rather than a remark being opened —
-  // so here the decoration keeps tracking the live position (that is what lets
-  // an edit end the attachment) and gives up the look entirely.
+  // A finding already carries its own warm band. The attachment still needs a
+  // visible mark of its own — transparent here meant an open finding showed
+  // nothing of the working state — so it draws a blue underline over the band
+  // instead of a second fill. Tracking the live position is unchanged: that is
+  // what lets an edit end the attachment.
   '.cm-attached.cm-attached-finding': {
     background: 'transparent',
-    boxShadow: 'none',
+    borderRadius: '2px',
+    boxShadow: 'inset 0 -2px 0 var(--accent)',
   },
 
-  // A quiet band, not a spell-checker's wavy red. Findings run over whole
-  // clauses here, and a wave under three lines of prose reads as an error the
-  // writer must clear rather than a remark they may weigh.
+  // A quiet amber band, not a spell-checker's wavy red and not a blue
+  // selection. Findings run over whole clauses here, and a wave under three
+  // lines of prose reads as an error the writer must clear rather than a
+  // remark they may weigh. Blue stays reserved for what the writer does:
+  // selection, attachment, suggestion.
   '.cm-slop': {
-    background: 'var(--slop-tint)',
+    background: 'var(--remark-tint)',
     borderRadius: '2px',
-    boxShadow: 'inset 0 -1px 0 var(--slop-line)',
+    boxShadow: 'inset 0 -1px 0 var(--remark-line)',
     cursor: 'pointer',
     transition: 'background .12s ease',
   },
 
-  '.cm-slop:hover': { background: 'var(--slop-tint-hover)' },
+  '.cm-slop:hover': { background: 'var(--remark-tint-hover)' },
 
   // Hover preview of a variant: a plain white sheet over the passage, no
   // colours. The attached tint stays underneath for the passage itself; this
@@ -1992,7 +2773,6 @@ const editorTheme = EditorView.theme({
   // readable, not a watermark.
   '.cm-placeholder': {
     color:      'var(--muted)',
-    opacity:    '0.75',
     lineHeight: '1.7',
   },
 
@@ -2017,8 +2797,7 @@ const workView = new EditorView({
       //
       Prec.high(keymap.of([
         {
-          // Tab: accept ghost suggestion if one is showing;
-          //      otherwise swallow (no tab characters in prose).
+          // Tab accepts a suggestion; otherwise it moves focus normally.
           key: 'Tab',
           run(view) {
             if (ghostAccept(view)) return true;
@@ -2030,9 +2809,19 @@ const workView = new EditorView({
           key: 'Escape',
           run(view) {
             const ghost = view.state.field(ghostField);
-            if (!ghost) return false; // pass through to simplifySelection etc.
+            const pending = suggestTimer !== null || suggestAbort !== null;
+            if (!ghost && !pending) return false;
+            cancelSuggestion();
             ghostClear(view);
-            clearTimeout(suggestTimer);
+            return true;
+          },
+        },
+        {
+          key: 'Mod-Enter',
+          run(view) {
+            cancelSuggestion();
+            ghostClear(view);
+            void suggestFetch(true);
             return true;
           },
         },
@@ -2045,13 +2834,15 @@ const workView = new EditorView({
 
       // Standard text-editing and history keymaps
       keymap.of([...searchKeymap, ...historyKeymap, ...defaultKeymap]),
-      EditorView.contentAttributes.of({ 'aria-label': 'Draft editor' }),
+      EditorView.contentAttributes.of({ 'aria-label': 'Draft editor', 'aria-describedby': 'suggest-shortcut' }),
 
       // Ghost text state + decoration provider
       ghostField,
       reviewField,
+      styleMarkerField,
       attachField,
       variantPlainField,
+      flashField,
 
       // Read-only compartment — toggled during /idea streaming
       readonlyComp.of(EditorState.readOnly.of(true)),
@@ -2063,11 +2854,7 @@ const workView = new EditorView({
       // panel instead of under it.
       EditorView.scrollMargins.of(() => ({ bottom: chatHeight })),
 
-      // The empty draft is the only place an explanation is read: it is where
-      // the writer is already looking and the only moment nothing is at stake.
-      placeholder(
-        'Start writing, or open a file.'
-      ),
+      placeholder('Start writing'),
 
       // Visual theme
       editorTheme,
@@ -2075,20 +2862,38 @@ const workView = new EditorView({
       // Both gestures attach the passage to the composer instead of opening a
       // window — one place for context, one place for answers.
       EditorView.domEventHandlers({
+        compositionstart(_event, view) { cancelSuggestion(); ghostClear(view); return false; },
+        compositionend() { suggestSchedule(); return false; },
         click(event, view) {
+          // A real selection wins over the mark underneath it: selecting is
+          // acting, clicking is reading. The selection bubble already stands
+          // from mouseup; the mark keeps its caret placement only.
+          if (!view.state.selection.main.empty) return false;
+          const at = { x: event.clientX, y: event.clientY };
           const mark = event.target.closest?.('.cm-slop');
-          if (!mark) return false;
+          if (!mark) {
+            const local = event.target.closest?.('.cm-style-marker');
+            const marker = local && view.state.field(styleMarkerField).find(item => item.from === Number(local.dataset.styleFrom));
+            // Reading the reason arms nothing — the bubble holds Add to
+            // context and Rewrite for when the writer decides.
+            if (marker) selectStyleMarker(marker);
+            return false;
+          }
           const finding = reviewFindings.find(item => item.id === Number(mark.dataset.slopId));
           if (!finding) return false;
           // Do not swallow the click: the caret still lands where the writer
           // clicked, so an underlined sentence stays as editable as any other.
-          openFinding(finding);
+          // The card opens for reading; the bubble offers context and rewrites.
+          openFinding(finding, false, at);
           return false;
         },
         // Reaching for the text dismisses a hover preview; the cards stay —
         // choosing is a click on a card, not a click in the draft.
         mousedown() { clearPlainPreview(); return false; },
         contextmenu(event, view) {
+          // Always the native menu: selections attach through the bubble or
+          // Cmd/Ctrl+K instead, so right-click keeps copy and paste.
+          if (!MANUAL_ATTACH) return false;
           const sel = view.state.selection.main;
           if (sel.empty) return false; // no selection — show native menu
           event.preventDefault();
@@ -2097,27 +2902,56 @@ const workView = new EditorView({
         },
       }),
 
-      // Save on every edit + schedule a suggestion
+      EditorView.updateListener.of(suggestionUpdate),
+
+      // Save on every edit.
       // Anything that moves the text moves the cards beside it.
       EditorView.updateListener.of(update => {
-        if (update.docChanged || update.geometryChanged || update.viewportChanged) layoutRail();
+        if (update.docChanged || update.geometryChanged || update.viewportChanged) {
+          layoutRail();
+          // The bubble points at document coordinates: any edit or scroll
+          // leaves it pointing at the wrong place, so it goes.
+          hideMarkBubble();
+        } else if (bubbleMode === 'selection' && update.selectionSet && update.state.selection.main.empty) {
+          hideMarkBubble();
+        }
       }),
 
       EditorView.updateListener.of(update => {
         if (update.docChanged) {
           editVersion++;
-          setReviewStatus(reviewFindings.length ? 'Review is out of date' : '');
+          activeStyleFrom = null;
+          if (reviewState !== 'idle') { reviewState = 'stale'; reviewNotice = ''; }
+          for (const request of chatRequests) request.changes.push(update.changes);
+          for (const message of chatHistory) for (const edit of message.edits || []) {
+            if (edit !== changingChatEdit) mapChatEdit(edit, update.changes);
+          }
+          if (localFinding) mapChatEdit(localFinding, update.changes);
+          syncChatEditCards();
+          if (!loadingDocument) { saveChat(); saveKeptStyle(); saveFindings(); }
+          // Undo follows edits before the replacement, but never overwrites
+          // subsequent work inside it, even if identical wording occurs nearby.
+          for (const undo of chatStream.querySelectorAll('.variant-undo-row button')) {
+            const from = Number(undo.dataset.from), to = from + undo.dataset.applied.length;
+            update.changes.iterChangedRanges((a, b) => {
+              if (a < to && b > from) undo.dataset.stale = 'true';
+            });
+            undo.dataset.from = String(update.changes.mapPos(from, 1));
+          }
+          if (update.transactions.some(tr => tr.isUserEvent('undo') || tr.isUserEvent('redo'))) editFeedback.hidden = true;
+          // No "out of date" notice here: findings are live-anchored — edits
+          // outside their ranges only shift the marks, edits inside drop
+          // them — so there is nothing stale to announce on every keystroke.
           // Typing inside the attached passage is the writer fixing it
           // themselves — drop the attachment rather than let a rewrite land on
           // top of the edit. Deferred: a dispatch inside an update is illegal.
           if (attached && update.state.field(attachField).size === 0) {
-            queueMicrotask(() => { chatAbort?.abort(); detach(); });
+            queueMicrotask(() => { detach(); });
           }
           // A hover preview is a decoration over the old range; any edit drops it.
           if (plainPreview) queueMicrotask(clearPlainPreview);
           if (reviewFindings.length) { syncReviewLabel(); saveFindings(); }
           if (!loadingDocument) save();
-          suggestSchedule();
           autoReviewSchedule();
           syncStyleScore();
         }
@@ -2152,9 +2986,9 @@ function exportText(text, name = 'draft.md') {
   link.href = url; link.download = name; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function dialog(title) {
+function dialog(title, { size = 'lg' } = {}) {
   const trigger = document.activeElement;
-  const modal = chatEl('dialog', 'settings-dialog document-dialog');
+  const modal = chatEl('dialog', `settings-dialog document-dialog dialog-${size}`);
   const heading = chatEl('h2', '', title);
   heading.id = 'document-dialog-' + crypto.randomUUID();
   modal.setAttribute('aria-labelledby', heading.id);
@@ -2171,16 +3005,45 @@ function dialog(title) {
   modal.showModal();
   return modal;
 }
+// A two-button question in the same visual language as every other dialog —
+// the replacement for window.confirm, which cannot be styled, focused, or
+// dismissed with Escape consistently. Resolves true on the action, false
+// otherwise (including × and Escape, via the close event's return value).
+function confirmDialog({ title, body, okLabel = 'Confirm', danger = false }) {
+  return new Promise(resolve => {
+    const modal = dialog(title, { size: 'sm' });
+    modal.append(chatEl('p', 'confirm-body', body));
+    const actions = chatEl('div', 'confirm-actions');
+    const cancel = chatEl('button', '', 'Cancel');
+    cancel.type = 'button';
+    const ok = chatEl('button', 'is-primary', okLabel);
+    ok.type = 'button';
+    if (danger) ok.dataset.danger = 'true';
+    actions.append(cancel, ok);
+    modal.append(actions);
+    let done = false;
+    const finish = value => { done = true; modal.close(); resolve(value); };
+    cancel.addEventListener('click', () => finish(false));
+    ok.addEventListener('click', () => finish(true));
+    modal.addEventListener('close', () => { if (!done) resolve(false); }, { once: true });
+    (danger ? ok : cancel).focus();
+  });
+}
 function loadFromDisk(text) {
   loadingDocument = true;
+  reviewState = 'idle'; reviewNotice = ''; keptStyle = []; removeLocalFinding();
+  chatEditCards.clear();
+  scoreDetails.hidePopover();
+  editFeedback.hidden = true;
   for (const job of jobs) job.abort();
-  suggestAbort?.abort();
+  cancelSuggestion();
   saveSnapshot('Before replacing document');
   detach();
   workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: text } });
   clearReview();
   chatHistory = []; chatStream.replaceChildren(); findingCards.clear();
   docStorage.removeItem('wa-chat');
+  docStorage.removeItem('wa-kept-wording');
   docStorage.removeItem('dismissed');
   setChatOpen(false);   // the stream was just emptied — don't leave × over nothing
   loadingDocument = false;
@@ -2188,15 +3051,16 @@ function loadFromDisk(text) {
 function saveToDisk() {
   clearTimeout(diskTimer);
   if (savePaused || loadingDocument) return;
-  saveStatus.textContent = 'Unsaved changes';
+  // Routine saves are silent: autosave is expected to work, and a Saved /
+  // Unsaved flicker on every pause reports nothing the writer can act on.
+  // The header speaks only when attention is needed (error, conflict).
   diskTimer = setTimeout(flushSave, 800);
 }
 async function flushSave() {
   if (saving || savePaused || loadingDocument) return;
   const text = workView.state.doc.toString();
-  if (text === diskText && diskRevision !== 'missing') { saveStatus.textContent = 'Saved'; return; }
+  if (text === diskText && diskRevision !== 'missing') return;
   saving = true;
-  saveStatus.textContent = 'Saving…';
   try {
     const response = await fetch('/draft', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -2206,13 +3070,22 @@ async function flushSave() {
     if (response.status === 409) { promptDiskDrift(data.current); return; }
     if (!response.ok) throw new Error(data.error || 'Save failed');
     diskText = text; diskRevision = data.revision;
-    saveStatus.textContent = 'Saved';
+    // A recovered save clears a previous error line, then goes quiet again.
+    saveStatus.textContent = '';
+    saveStatus.title = '';
   } catch (error) {
     savePaused = true;
-    saveStatus.textContent = 'Not saved: ' + error.message + ' — use Export or retry';
-    const retry = chatEl('button', 'chat-again', 'Retry saving');
-    retry.addEventListener('click', () => { retry.remove(); savePaused = false; saveToDisk(); });
-    chatAdd(retry);
+    cancelSuggestion();
+    ghostClear(workView);
+    // The payload belongs in the tooltip; the header keeps the fact, and the
+    // card in the stream carries the sentence and the way out.
+    saveStatus.textContent = 'Not saved — autosave paused';
+    saveStatus.title = error.message;
+    chatAdd(errorCard(
+      { say: 'The draft could not be saved to disk.', act: 'retry', detail: error.message },
+      () => { savePaused = false; saveToDisk(); },
+      'Retry saving',
+    ));
   } finally {
     saving = false;
     if (!savePaused && workView.state.doc.toString() !== diskText) saveToDisk();
@@ -2225,12 +3098,17 @@ function save() {
 let diskPrompt = null;
 function promptDiskDrift(current) {
   savePaused = true;
+  cancelSuggestion();
+  ghostClear(workView);
   clearTimeout(diskTimer);
   saveStatus.textContent = 'Conflict — autosave paused';
+  // One conflict, one modal: a 409 racing focus-checks must not stack.
+  if (diskPrompt?.open) return;
   diskPrompt?.close();
   const modal = dialog('Two versions of this document');
   diskPrompt = modal;
-  modal.append(chatEl('p', '', 'Autosave is paused. Both copies remain available until you choose. A disk backup is kept before overwriting.'));
+  modal.addEventListener('close', () => { if (diskPrompt === modal) diskPrompt = null; });
+  modal.append(chatEl('p', 'conflict-lead', 'Autosave is paused. Both copies remain available until you choose. A disk backup is kept before overwriting.'));
   const compare = document.createElement('details');
   compare.append(chatEl('summary', '', 'Compare browser and disk'),
     chatEl('h3', '', 'Browser'), chatEl('pre', 'passage-preview', workView.state.doc.toString()),
@@ -2242,7 +3120,9 @@ function promptDiskDrift(current) {
     diskText = current.text; diskRevision = current.revision;
     savePaused = false; save(); modal.close();
   });
-  const keep = chatEl('button', '', 'Keep browser copy');
+  // The offered answer, not the only one: while Litura runs, the browser copy
+  // is the authoritative one, and it is the copy the writer was just typing.
+  const keep = chatEl('button', 'is-primary', 'Keep browser copy');
   keep.addEventListener('click', () => {
     saveSnapshot('Browser copy at conflict');
     diskText = current.text; diskRevision = current.revision;
@@ -2250,19 +3130,27 @@ function promptDiskDrift(current) {
   });
   const both = chatEl('button', '', 'Export browser copy');
   both.addEventListener('click', () => exportText(workView.state.doc.toString(), 'recovered-browser-draft.md'));
-  modal.append(load, keep, both);
-  const reopen = chatEl('button', 'chat-again', 'Resolve file conflict');
-  reopen.addEventListener('click', async () => {
-    try { promptDiskDrift(await api('/draft')); reopen.remove(); } catch (error) { saveStatus.textContent = error.message; }
-  });
-  chatAdd(reopen);
+  const actions = chatEl('div', 'conflict-actions');
+  actions.append(load, keep, both);
+  modal.append(actions);
+  // The modal is where the choice happens; the card is only the way back to
+  // it once it is dismissed — not a second demand for the same decision.
+  if (!saidInStream('This draft also changed on disk. Autosave stays paused until you choose a copy.')) {
+    chatAdd(errorCard(
+      { say: 'This draft also changed on disk. Autosave stays paused until you choose a copy.', act: 'retry' },
+      async () => {
+        if (modal.isConnected && !modal.open) modal.showModal();
+        else promptDiskDrift(await api('/draft'));
+      },
+      'Show versions',
+    ));
+  }
 }
 async function initializeDocument() {
   try {
     const current = await api('/draft');
     documentKey = 'litura:' + current.id + ':';
-    document.getElementById('document-name').textContent = current.path.split(/[\\/]/).pop();
-    document.getElementById('document-name').title = current.path;
+    documentName = current.path.split(/[\\/]/).pop();
     diskText = current.text; diskRevision = current.revision;
     const cached = docStorage.getItem('wa-working');
     workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: cached ?? current.text } });
@@ -2271,14 +3159,19 @@ async function initializeDocument() {
     // The text that was already here is not something the writer just
     // finished. Automatic review is on by default, and opening a draft must
     // not spend a model call on it — auditing the whole document is what
-    // `Review draft` is for. A paragraph the writer touches gets a new key
+    // `Check for slop` is for. A paragraph the writer touches gets a new key
     // and is checked then.
     for (const paragraph of reviewParagraphs(workView.state.doc.toString())) checkedSentences.add(paragraph.key);
     syncReviewLabel();
     savePaused = false;
-    restoreFindings(); restoreChat();
+    try {
+      const kept = JSON.parse(docStorage.getItem('wa-kept-wording') || 'null');
+      if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
+    } catch {}
+    workView.dispatch({ effects: refreshStyleFx.of(null) });
+    restoreFindings(); restoreChat(); syncStyleScore();
     if (cached !== null && cached !== current.text) promptDiskDrift(current);
-    else saveStatus.textContent = 'Saved';
+    else { saveStatus.textContent = ''; saveStatus.title = ''; }
     const legacy = localStorage.getItem('wa-working');
     if (legacy !== null && legacy !== current.text && !docStorage.getItem('legacy-offered')) {
       const recover = chatEl('button', 'chat-again', 'Export draft from the previous Litura version');
@@ -2286,10 +3179,13 @@ async function initializeDocument() {
       chatAdd(recover);
     }
   } catch (error) {
-    saveStatus.textContent = 'Cannot open draft: ' + error.message;
-    const retry = chatEl('button', 'chat-again', 'Retry opening document');
-    retry.addEventListener('click', () => { retry.remove(); initializeDocument(); });
-    chatAdd(retry);
+    saveStatus.textContent = 'Cannot open draft';
+    saveStatus.title = error.message;
+    chatAdd(errorCard(
+      { say: 'Litura could not open the draft.', act: 'retry', detail: error.message },
+      initializeDocument,
+      'Retry opening document',
+    ));
   }
 }
 initializeDocument();
@@ -2301,27 +3197,38 @@ async function checkDiskDrift() {
   } catch (error) { saveStatus.textContent = 'Cannot check disk: ' + error.message; }
 }
 window.addEventListener('focus', checkDiskDrift);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkDiskDrift(); refreshUpdate(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { cancelSuggestion(); ghostClear(workView); }
+  else { checkDiskDrift(); refreshUpdate(); }
+});
 window.addEventListener('beforeunload', event => {
   if (!loadingDocument && (saving || workView.state.doc.toString() !== diskText)) { event.preventDefault(); event.returnValue = ''; }
 });
-document.getElementById('file-new').addEventListener('click', () => {
-  if (workView.state.doc.length) { loadFromDisk(''); save(); }
+document.getElementById('file-new').addEventListener('click', async () => {
+  if (workView.state.doc.length) {
+    const ok = await confirmDialog({
+      title: 'Start a new document',
+      body: 'The current text will be kept in History.',
+      okLabel: 'Start new',
+    });
+    if (!ok) { workView.focus(); return; }
+    loadFromDisk(''); save();
+  }
   workView.focus();
 });
 document.getElementById('file-export').addEventListener('click', () => {
-  const modal = dialog('Save as new file');
+  const modal = dialog('Save as new file', { size: 'sm' });
   const form = chatEl('form', 'save-as-form');
   const label = chatEl('label', '', 'File name');
   const input = document.createElement('input');
   input.required = true;
-  input.value = document.getElementById('document-name').textContent;
+  input.value = documentName;
   label.append(input);
   const actions = chatEl('div', 'save-as-actions');
   const cancel = chatEl('button', '', 'Cancel');
   cancel.type = 'button';
   cancel.addEventListener('click', () => modal.close());
-  const submit = chatEl('button', '', 'Save');
+  const submit = chatEl('button', 'is-primary', 'Save');
   submit.type = 'submit';
   actions.append(cancel, submit);
   form.append(label, actions);
@@ -2340,10 +3247,18 @@ document.addEventListener('keydown', event => {
 });
 async function importFile(file) {
   if (!file || loadingDocument) return;
-  if (file.size > 1024 * 1024 || !/\.(md|markdown|txt)$/i.test(file.name)) { alert('Open a Markdown or text file under 1 MB.'); return; }
+  if (file.size > 1024 * 1024 || !/\.(md|markdown|txt)$/i.test(file.name)) {
+    chatAdd(chatEl('div', 'chat-error', 'Open a Markdown or text file under 1 MB.'));
+    return;
+  }
   try {
     const text = await file.text();
-    if (!confirm(`Import ${file.name} into this workspace draft? The current text will be kept in History.`)) return;
+    const ok = await confirmDialog({
+      title: `Import ${file.name}`,
+      body: 'The file replaces this workspace draft. The current text will be kept in History.',
+      okLabel: 'Import',
+    });
+    if (!ok) return;
     loadFromDisk(text); save();
   } catch (error) { saveStatus.textContent = 'Import failed: ' + error.message; }
 }
@@ -2368,8 +3283,57 @@ editorWrap.addEventListener('drop', event => { event.preventDefault(); importFil
 document.getElementById('file-history').addEventListener('click', async () => {
   const modal = dialog('Document history');
   const current = workView.state.doc.toString();
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'history-search';
+  search.placeholder = 'Search versions';
+  search.setAttribute('aria-label', 'Search versions');
+  search.autocomplete = 'off';
+  search.spellcheck = false;
   const list = chatEl('div', 'history-list');
-  modal.append(list);
+  modal.append(search, list);
+  let versions = [];
+  function renderHistory() {
+    const query = search.value.trim().toLowerCase();
+    const shown = versions.filter(item => !query
+      || (item.label || 'Saved to disk').toLowerCase().includes(query)
+      || item.text.toLowerCase().includes(query));
+    list.replaceChildren();
+    for (const item of shown) {
+      const row = chatEl('div', 'history-item');
+      const words = item.text.match(/\S+/g)?.length ?? 0;
+      row.append(chatEl('div', 'history-when',
+        `${new Date(item.at).toLocaleString()} · ${item.label || 'Saved to disk'} · ${words} ${words === 1 ? 'word' : 'words'}`));
+      row.append(chatEl('div', 'history-excerpt',
+        item.text.trim().replace(/\s+/g, ' ').slice(0, 120) || 'Empty document'));
+      if (item.text === current) {
+        row.append(chatEl('div', 'history-current', 'Same as the text you have now'));
+      } else {
+        // Full text fills in on first open: thirty versions must not build
+        // thirty <pre> nodes before the writer reads even one excerpt.
+        const full = document.createElement('details');
+        const preview = chatEl('pre', 'passage-preview', '');
+        full.append(chatEl('summary', '', 'Full text'), preview);
+        full.addEventListener('toggle', () => {
+          if (full.open && !preview.textContent) preview.textContent = item.text;
+        }, { once: true });
+        const restore = chatEl('button', '', 'Restore');
+        restore.addEventListener('click', async () => {
+          const ok = await confirmDialog({
+            title: 'Restore this version',
+            body: 'The current text is kept in History.',
+            okLabel: 'Restore',
+          });
+          if (ok) { loadFromDisk(item.text); save(); modal.close(); }
+        });
+        row.append(full, restore);
+      }
+      list.append(row);
+    }
+    if (!versions.length) list.append(chatEl('p', '', 'No previous versions yet. One is kept before every save, import, and AI replacement.'));
+    else if (!shown.length) list.append(chatEl('p', '', 'Nothing matches this search.'));
+  }
+  search.addEventListener('input', renderHistory);
   try {
     const { snapshots } = await api('/draft/history');
     const local = JSON.parse(docStorage.getItem('snapshots') || '[]');
@@ -2380,28 +3344,8 @@ document.getElementById('file-history').addEventListener('click', async () => {
         if (text !== current) local.push({ text, at: new Date().toISOString(), label: 'Copy from another tab' });
       }
     }
-    const versions = [...local, ...snapshots].sort((a, b) => b.at.localeCompare(a.at));
-    for (const item of versions) {
-      const row = chatEl('div', 'history-item');
-      const words = item.text.match(/\S+/g)?.length ?? 0;
-      row.append(chatEl('div', 'history-when',
-        `${new Date(item.at).toLocaleString()} · ${item.label || 'Saved to disk'} · ${words} ${words === 1 ? 'word' : 'words'}`));
-      row.append(chatEl('div', 'history-excerpt',
-        item.text.trim().replace(/\s+/g, ' ').slice(0, 120) || 'Empty document'));
-      if (item.text === current) {
-        row.append(chatEl('div', 'history-current', 'Same as the text you have now'));
-      } else {
-        const full = document.createElement('details');
-        full.append(chatEl('summary', '', 'Full text'), chatEl('pre', 'passage-preview', item.text));
-        const restore = chatEl('button', '', 'Restore');
-        restore.addEventListener('click', () => {
-          if (confirm('Restore this version? The current text is kept in History.')) { loadFromDisk(item.text); save(); modal.close(); }
-        });
-        row.append(full, restore);
-      }
-      list.append(row);
-    }
-    if (!versions.length) list.append(chatEl('p', '', 'No previous versions yet. One is kept before every save, import, and AI replacement.'));
+    versions = [...local, ...snapshots].sort((a, b) => b.at.localeCompare(a.at));
+    renderHistory();
     modal.append(chatEl('small', 'history-note',
       'Last 20 disk versions and 10 browser checkpoints. Disk copies sit beside the draft in .litura-history and are never deleted automatically.'));
   } catch (error) { list.append(chatEl('p', 'chat-error', error.message)); }
