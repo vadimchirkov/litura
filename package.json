@@ -48,6 +48,7 @@
     "desktop:prepare": "npm run build && npm run build:server && node scripts/fetch-node.mjs",
     "desktop": "tauri dev",
     "desktop:build": "tauri build",
+    "tauri": "tauri",
     "smoke:desktop": "node scripts/smoke-desktop.mjs",
     "check": "node --check index.js && node --check pi.js && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js && node tests/suggestions.mjs && node safetycheck.js",
     "test:browser": "node tests/browser-fixture.mjs",
