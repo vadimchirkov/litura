@@ -500,10 +500,19 @@ async function api(path, options = {}) {
 
 async function refreshAgent() {
   agentInfo = await api('/api/agent/status');
-  const normalized = normalizeSelection(agentSelection) ?? normalizeSelection(agentInfo.defaultSelection);
-  if (normalized) {
-    agentSelection = normalized;
+  const savedNormalized = normalizeSelection(agentSelection);
+  if (savedNormalized) {
+    // Saved model still exists in current catalog — keep it.
+    agentSelection = savedNormalized;
     localStorage.setItem('wa-agent', JSON.stringify(agentSelection));
+  }
+  // If saved model not in current catalog, do NOT overwrite with default.
+  // Leave the stale selection in localStorage so the user sees it in
+  // settings and can re-pick. The defaultSelection is only used when
+  // there is no saved selection at all.
+  else if (!agentSelection && agentInfo.defaultSelection) {
+    agentSelection = normalizeSelection(agentInfo.defaultSelection);
+    if (agentSelection) localStorage.setItem('wa-agent', JSON.stringify(agentSelection));
   }
   return agentInfo;
 }
@@ -2830,7 +2839,10 @@ const editorTheme = EditorView.theme({
     padding:       '1px 6px',
     borderRadius:  'var(--r-xs)',
     background:    'var(--surface-3)',
-    color:         'var(--muted)',
+    // --text-2, not --muted: this chip sits on --surface-3, where --muted is
+    // 3.83:1 and misses AA at 11px. One step down from --text is still the
+    // quietest ink that passes.
+    color:         'var(--text-2)',
     fontFamily:    'var(--ui-font)',
     fontSize:      '11px',
     letterSpacing: '.02em',
