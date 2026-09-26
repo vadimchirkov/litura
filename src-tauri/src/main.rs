@@ -33,7 +33,13 @@ fn folder_file(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn saved_folder(app: &AppHandle) -> Option<PathBuf> {
     let path = PathBuf::from(std::fs::read_to_string(folder_file(app).ok()?).ok()?.trim());
-    path.is_dir().then_some(path)
+    // A remembered folder is reused only while it stays readable: macOS can
+    // revoke Documents consent after the fact, and serving an unreadable
+    // folder is a startup of errors. Unreadable means ask again.
+    if !path.is_dir() || std::fs::read_dir(&path).is_err() {
+        return None;
+    }
+    Some(path)
 }
 
 fn save_folder(app: &AppHandle, folder: &Path) {
@@ -78,6 +84,7 @@ async fn start_server(app: &AppHandle, folder: &Path) -> Result<String, String> 
 
     let env = HashMap::<String, String>::from([
         ("LITURA_SIDECAR".into(), "1".into()),
+        ("LITURA_OFFLINE_MODELS".into(), "1".into()),
         // Port 0: the operating system hands out a free one, so a second copy
         // of Litura — or anything else on 3456 — is not a startup failure.
         ("PORT".into(), "0".into()),

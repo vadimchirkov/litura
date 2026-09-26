@@ -21,7 +21,7 @@ import {
 } from '@codemirror/commands';
 import { findingContext, isLatinScript, locateFindings, styleMarkers, styleScore } from '../review.js';
 import { renderMarkdown } from '../markdown.js';
-import { replacementTarget, newerVersion } from '../editing.js';
+import { replacementTarget, newerVersion, resolveDrift } from '../editing.js';
 import { locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
 import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
@@ -100,6 +100,10 @@ let diskText = null;
 let diskTimer = null;
 let saving = false;
 let savePaused = true;
+// A disk conflict pauses disk writes only: the draft, the suggestions and
+// the assistant keep working on the local copy. savePaused above is the
+// heavier brake — save errors and loading — which still gates everything.
+let diskHold = false;
 let loadingDocument = true;
 let editVersion = 0;
 // The header carries no save-status line any more. What it said was never
@@ -1280,7 +1284,7 @@ let suggestTimer = null;
 let suggestAbort = null;
 let suggestVersion = 0;
 
-const SUGGEST_DELAY = 900;  // ms after last keystroke
+const SUGGEST_DELAY = 200;   // ms after last keystroke — feels instant, still debounces bursts
 const SUGGEST_MIN   = 15;   // minimum doc length before suggesting
 
 // Suggest only where the writer is actually writing forward: caret collapsed
@@ -1381,7 +1385,18 @@ async function suggestFetch(manual = false) {
     // it once in the status line; the next keystroke schedules another try.
     if (!res.ok) {
       // The provider's own status is in the body; the 500 is only our wrapper.
-      const problem = modelError(new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`));
+      let errorBody = '{}';
+      try { errorBody = await res.text(); } catch {}
+      let errorMsg = `HTTP ${res.status}`;
+      try {
+        const parsed = JSON.parse(errorBody);
+        // Unwrap Google-style error objects: {"error":{"message":"...","code":429}}
+        if (parsed.error?.message) errorMsg = parsed.error.message;
+        else if (parsed.error?.error?.message) errorMsg = parsed.error.error.message;
+        else if (parsed.message) errorMsg = parsed.message;
+        else if (parsed.error) errorMsg = typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error);
+      } catch {}
+      const problem = modelError(new Error(errorMsg));
       if (isCurrent() && !saidInStream(problem.say)) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
       return;
     }
@@ -1395,7 +1410,15 @@ async function suggestFetch(manual = false) {
     else if (manual) setReviewStatus('No continuation to suggest.', undefined, 'suggest');
   } catch (error) {
     if (error.name === 'AbortError') return;
-    const problem = modelError(error);
+    let errorMsg = error.message;
+    // Unwrap nested JSON error strings from server responses
+    try {
+      const parsed = JSON.parse(errorMsg);
+      if (parsed.error?.message) errorMsg = parsed.error.message;
+      else if (parsed.error?.error?.message) errorMsg = parsed.error.error.message;
+      else if (parsed.message) errorMsg = parsed.message;
+    } catch {}
+    const problem = modelError(new Error(errorMsg));
     if (isCurrent() && !saidInStream(problem.say)) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
   } finally {
     finishJob(job);
@@ -1502,7 +1525,7 @@ const reduceMotion = () =>
 // Discrete jumps glide; token-by-token follow stays instant — smooth scrolling
 // lags behind a live stream and stutters.
 function chatScroll(stick, smooth = false) {
-  void stick;
+  if (!stick) return;
   const top = chatStream.scrollHeight;
   if (smooth && !reduceMotion()) {
     try { chatStream.scrollTo({ top, behavior: 'smooth' }); return; } catch {}
@@ -1536,7 +1559,7 @@ function restoreChat() {
   if (!Array.isArray(messages)) return;
   chatHistory = messages.filter(message => message && ['user', 'assistant'].includes(message.role) && typeof message.content === 'string').slice(-20);
   for (const message of chatHistory) {
-    if (message.role === 'user') chatAdd(chatEl('div', 'chat-message is-user', message.display ?? message.content));
+    if (message.role === 'user') streamAppend(chatEl('div', 'chat-message is-user', message.display ?? message.content));
     else {
       message.edits = Array.isArray(message.edits) ? message.edits.filter(edit => edit && typeof edit.quote === 'string' && typeof edit.replacement === 'string' && typeof edit.label === 'string').slice(0, 8) : [];
       for (const edit of message.edits) {
@@ -1544,23 +1567,17 @@ function restoreChat() {
           if (edit.state !== 'unlocated') edit.state = 'stale';
         }
       }
-      renderChatAnswer(chatAdd(chatEl('div', 'chat-message is-agent is-markdown')), message);
+      renderChatAnswer(streamAppend(chatEl('div', 'chat-message is-agent is-markdown')), message);
     }
   }
+  // Closed by default: history is kept and reopenable via Conversation,
+  // genuinely new arrivals still open it via chatAdd.
+  setChatOpen(false);
 }
 function renderChatAnswer(reply, message) {
   reply.innerHTML = renderMarkdown(message.content);
   for (const edit of message.edits || []) reply.append(chatEditCard(edit));
   if (message.editWarning) reply.append(chatEl('p', 'chat-error', message.editWarning));
-  if (!message.edits?.length) {
-    const prepare = chatEl('button', 'chat-again', 'Prepare rewrite');
-    prepare.type = 'button';
-    prepare.addEventListener('click', () => {
-      chatInput.value = `Prepare a concrete rewrite based on this advice:\n${message.content}`;
-      chatSend();
-    });
-    reply.append(prepare);
-  }
 }
 function chatEditCard(edit) {
   const card = chatEl('section', 'chat-edit-card');
@@ -1763,7 +1780,12 @@ function discardFindingCards() {
 
 function chatAdd(node) {
   setChatOpen(true);
-  return streamAppend(node);
+  chatStream.append(node);
+  // A new turn is worth showing: force-scroll, unlike streaming updates
+  // which follow only when the reader is already at the bottom.
+  chatScroll(true);
+  chatClear.hidden = false;
+  return node;
 }
 
 // Append without opening: rail→stream migration of cards that are already on
@@ -1862,14 +1884,23 @@ function hideMarkBubble() {
   bubbleMode = null;
 }
 
-function placeBubble(x, y) {
+function placeBubble(x, y, { below = false } = {}) {
   markBubble.hidden = false;
   const box = markBubble.getBoundingClientRect();
-  // Above the text, centered on the click — below it only when the top
-  // has no room.
   const left = Math.max(8, Math.min(x - box.width / 2, window.innerWidth - box.width - 8));
-  let top = y - box.height - 12;
-  if (top < 8) top = y + 14;
+  let top;
+  if (below) {
+    // Below the line with a clear gap: the cursor line stays fully readable,
+    // the bubble never sits on the word it refers to. Falls back above only
+    // when the viewport bottom has no room.
+    top = y + 20;
+    if (top + box.height > window.innerHeight - 8) top = y - box.height - 12;
+  } else {
+    // Above the text, just above its line — below it only when the top
+    // has no room.
+    top = y - box.height - 4;
+    if (top < 8) top = y + 14;
+  }
   markBubble.style.left = `${left}px`;
   markBubble.style.top = `${Math.max(8, top)}px`;
 }
@@ -1936,7 +1967,16 @@ function showContinueBubble(x, y) {
     void suggestFetch(true);
   }));
   markBubble.replaceChildren(actions);
-  placeBubble(x, y);
+  // Anchor to the text caret, not the mouse: the click may land anywhere on
+  // the empty tail of the line, while writing continues at the caret. The
+  // bubble stands right above the caret line. Falls back to the click point
+  // when caret coordinates are unavailable.
+  let cx = x, cy = y;
+  try {
+    const coords = workView.coordsAtPos(workView.state.selection.main.head);
+    if (coords) { cx = coords.left; cy = coords.top; }
+  } catch {}
+  placeBubble(cx, cy);
 }
 
 // A dictionary miss offers direct replacements — no model call, no card, the
@@ -2941,9 +2981,10 @@ const workView = new EditorView({
       // Word wrap (essential for prose)
       EditorView.lineWrapping,
 
-      // Reserve the covered strip so CodeMirror scrolls the caret above the
-      // panel instead of under it.
-      EditorView.scrollMargins.of(() => ({ bottom: chatHeight })),
+      // Reserve the covered strips so CodeMirror scrolls the caret clear of
+      // both: the floating panel below, and the 48px header above — a jumped-to
+      // line never parks flush under it.
+      EditorView.scrollMargins.of(() => ({ top: 64, bottom: chatHeight })),
 
       placeholder('Start writing'),
 
@@ -3156,14 +3197,14 @@ function loadFromDisk(text) {
 }
 function saveToDisk() {
   clearTimeout(diskTimer);
-  if (savePaused || loadingDocument) return;
+  if (savePaused || loadingDocument || diskHold) return;
   // Routine saves are silent: autosave is expected to work, and a Saved /
   // Unsaved flicker on every pause reports nothing the writer can act on.
   // The header speaks only when attention is needed (error, conflict).
   diskTimer = setTimeout(flushSave, 800);
 }
 async function flushSave() {
-  if (saving || savePaused || loadingDocument) return;
+  if (saving || savePaused || loadingDocument || diskHold) return;
   const text = workView.state.doc.toString();
   if (text === diskText && diskRevision !== 'missing') return;
   saving = true;
@@ -3173,9 +3214,9 @@ async function flushSave() {
       body: JSON.stringify({ text, revision: diskRevision }),
     });
     const data = await response.json();
-    if (response.status === 409) { promptDiskDrift(data.current); return; }
+    if (response.status === 409) { handleFreshDisk(data.current); return; }
     if (!response.ok) throw new Error(data.error || 'Save failed');
-    diskText = text; diskRevision = data.revision;
+    noteDiskBaseline(text, data.revision);
     // A recovered save clears a previous error line, then goes quiet again.
     saveStatus.textContent = '';
     saveStatus.title = '';
@@ -3201,63 +3242,112 @@ function save() {
   docStorage.setItem('wa-working', workView.state.doc.toString());
   saveToDisk();
 }
-let diskPrompt = null;
-function promptDiskDrift(current) {
-  savePaused = true;
-  cancelSuggestion();
-  ghostClear(workView);
-  clearTimeout(diskTimer);
-  saveStatus.textContent = 'Conflict — autosave paused';
-  // One conflict, one modal: a 409 racing focus-checks must not stack.
-  if (diskPrompt?.open) return;
-  diskPrompt?.close();
-  const modal = dialog('Two versions of this document');
-  diskPrompt = modal;
-  modal.addEventListener('close', () => { if (diskPrompt === modal) diskPrompt = null; });
-  modal.append(chatEl('p', 'conflict-lead', 'Autosave is paused. Both copies remain available until you choose. A disk backup is kept before overwriting.'));
-  const compare = document.createElement('details');
-  compare.append(chatEl('summary', '', 'Compare browser and disk'),
-    chatEl('h3', '', 'Browser'), chatEl('pre', 'passage-preview', workView.state.doc.toString()),
-    chatEl('h3', '', 'Disk'), chatEl('pre', 'passage-preview', current.text));
-  modal.append(compare);
-  const load = chatEl('button', '', 'Use disk copy');
-  load.addEventListener('click', () => {
-    loadFromDisk(current.text);
-    diskText = current.text; diskRevision = current.revision;
-    savePaused = false; save(); modal.close();
-  });
-  // The offered answer, not the only one: while Litura runs, the browser copy
-  // is the authoritative one, and it is the copy the writer was just typing.
-  const keep = chatEl('button', 'is-primary', 'Keep browser copy');
-  keep.addEventListener('click', () => {
-    saveSnapshot('Browser copy at conflict');
-    diskText = current.text; diskRevision = current.revision;
-    savePaused = false; save(); modal.close();
-  });
-  const both = chatEl('button', '', 'Export browser copy');
-  both.addEventListener('click', () => exportText(workView.state.doc.toString(), 'recovered-browser-draft.md'));
-  const actions = chatEl('div', 'conflict-actions');
-  actions.append(load, keep, both);
-  modal.append(actions);
-  // The modal is where the choice happens; the card is only the way back to
-  // it once it is dismissed — not a second demand for the same decision.
-  if (!saidInStream('This draft also changed on disk. Autosave stays paused until you choose a copy.')) {
-    chatAdd(errorCard(
-      { say: 'This draft also changed on disk. Autosave stays paused until you choose a copy.', act: 'retry' },
-      async () => {
-        if (modal.isConnected && !modal.open) modal.showModal();
-        else promptDiskDrift(await api('/draft'));
-      },
-      'Show versions',
-    ));
+// ─── Disk drift ──────────────────────────────────────────────────────────────
+//
+//  No modal, ever: a file changing under the editor is routine (another
+//  editor, a second tab, a git pull), and a modal makes it an emergency.
+//  The verdict comes from resolveDrift — silent in the two cases that need
+//  no decision, and a slim banner above the draft in the one that does.
+//  While the banner stands only disk writes wait; typing, suggestions and
+//  the assistant keep working on the local copy.
+const driftBanner = document.getElementById('drift-banner');
+const driftDiffBody = document.getElementById('drift-diff-body');
+let driftCurrent = null;   // fresh { text, revision } awaiting a choice
+
+// The last disk text we confirmed, durable across restarts. Without it a
+// reopen with unsaved work looks identical to an external edit — that
+// confusion is what the old launch modal punished.
+function noteDiskBaseline(text, revision) {
+  diskText = text; diskRevision = revision;
+  docStorage.setItem('wa-disk', JSON.stringify({ text, revision }));
+}
+function lastDiskBaseline() {
+  const base = safeJson(docStorage.getItem('wa-disk'), null);
+  return base && typeof base.text === 'string' ? base : null;
+}
+function handleFreshDisk(current) {
+  if (!current || typeof current.text !== 'string') return;
+  const verdict = resolveDrift(workView.state.doc.toString(), current.text, lastDiskBaseline()?.text);
+  if (verdict === 'in-sync') { noteDiskBaseline(current.text, current.revision); hideDriftBanner(); return; }
+  if (verdict === 'fast-forward') { adoptDiskText(current, true); return; }
+  showDriftBanner(current);
+}
+// Take the disk copy without touching chat, findings or focus: the writer
+// changed nothing, so there is nothing of theirs to disturb. Announced with
+// a toast when it happens behind their back, silently at startup.
+function adoptDiskText(current, announce = false) {
+  workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: current.text } });
+  noteDiskBaseline(current.text, current.revision);
+  diskHold = false; hideDriftBanner(); save();
+  if (announce) {
+    editFeedback.replaceChildren(chatEl('span', '', 'Reloaded from disk — it changed outside Litura.'));
+    editFeedback.hidden = false;
+    clearTimeout(editFeedbackTimer);
+    editFeedbackTimer = setTimeout(() => { editFeedback.hidden = true; }, EDIT_FEEDBACK_MS);
   }
 }
+function showDriftBanner(current) {
+  driftCurrent = current;
+  diskHold = true;
+  saveStatus.textContent = 'Paused — file changed on disk';
+  saveStatus.title = 'Resolve above the draft: load the disk copy or keep writing.';
+  renderDriftDiff();
+  driftBanner.hidden = false;
+}
+function hideDriftBanner() {
+  driftCurrent = null;
+  driftBanner.hidden = true;
+  document.getElementById('drift-diff')?.removeAttribute('open');
+}
+function renderDriftDiff() {
+  driftDiffBody.replaceChildren();
+  if (!driftCurrent) return;
+  const local = workView.state.doc.toString();
+  const ops = wordDiff(driftCurrent.text, local);
+  let shown = 0;
+  for (const op of ops) {
+    let text = op.text;
+    // Long unchanged runs collapse: the decision needs the changes, not the
+    // whole document reprinted around them.
+    if (op.type === 'keep' && text.length > 400) text = text.slice(0, 200) + ' ⋯ ' + text.slice(-200);
+    if (shown + text.length > 30000) {
+      driftDiffBody.append(chatEl('p', 'drift-diff-more', '… further differences truncated'));
+      break;
+    }
+    shown += text.length;
+    if (op.type === 'keep') driftDiffBody.append(document.createTextNode(text));
+    else {
+      const mark = document.createElement(op.type === 'del' ? 'del' : 'ins');
+      mark.className = op.type === 'del' ? 'drift-del' : 'drift-ins';
+      mark.textContent = text;
+      driftDiffBody.append(mark);
+    }
+  }
+  const legend = chatEl('p', 'drift-legend', 'Struck text lives only on disk · highlighted text only in your copy');
+  driftDiffBody.prepend(legend);
+}
+document.getElementById('drift-load').addEventListener('click', () => {
+  if (driftCurrent) adoptDiskText(driftCurrent);
+  workView.focus();
+});
+document.getElementById('drift-keep').addEventListener('click', () => {
+  if (!driftCurrent) return;
+  // Adopt the fresh revision and keep typing: the next save overwrites the
+  // disk copy. Overwriting loses nothing — the server snapshots the previous
+  // disk text into .litura-history before every write, and the browser keeps
+  // its own checkpoint in History.
+  noteDiskBaseline(driftCurrent.text, driftCurrent.revision);
+  diskHold = false; hideDriftBanner(); save(); workView.focus();
+});
 async function initializeDocument() {
   try {
     const current = await api('/draft');
     documentKey = 'litura:' + current.id + ':';
     documentName = current.path.split(/[\\/]/).pop();
-    diskText = current.text; diskRevision = current.revision;
+    // Captured before the baseline below is rewritten: it tells a reopen
+    // with unsaved work apart from a file that moved while we were away.
+    const driftBase = lastDiskBaseline();
+    noteDiskBaseline(current.text, current.revision);
     const cached = docStorage.getItem('wa-working');
     workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: cached ?? current.text } });
     loadingDocument = false;
@@ -3276,7 +3366,13 @@ async function initializeDocument() {
     } catch {}
     workView.dispatch({ effects: refreshStyleFx.of(null) });
     restoreFindings(); restoreChat(); syncStyleScore(); renderFileList();
-    if (cached !== null && cached !== current.text) promptDiskDrift(current);
+    // A reopen with unsaved work is not a conflict when the disk stood
+    // still — only a disk that moved while we were away earns the banner.
+    if (cached !== null) {
+      const verdict = resolveDrift(workView.state.doc.toString(), current.text, driftBase?.text);
+      if (verdict === 'fast-forward') adoptDiskText(current);
+      else if (verdict === 'diverged') showDriftBanner(current);
+    }
     else { saveStatus.textContent = ''; saveStatus.title = ''; }
     const legacy = localStorage.getItem('wa-working');
     if (legacy !== null && legacy !== current.text && !docStorage.getItem('legacy-offered')) {
@@ -3296,13 +3392,13 @@ async function initializeDocument() {
 }
 initializeDocument();
 async function checkDiskDrift() {
-  if (loadingDocument || saving || diskPrompt?.open) return;
+  if (loadingDocument || saving) return;
   try {
     const current = await api('/draft');
-    if (current.revision !== diskRevision) promptDiskDrift(current);
+    if (current.revision !== diskRevision) handleFreshDisk(current);
   } catch (error) { saveStatus.textContent = 'Cannot check disk: ' + error.message; }
 }
-window.addEventListener('focus', () => { checkDiskDrift(); if (!sidebar.hidden) refreshFileList(); });
+window.addEventListener('focus', () => { checkDiskDrift(); if (!sidebar.classList.contains('is-closed')) refreshFileList(); });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { cancelSuggestion(); ghostClear(workView); }
   else { checkDiskDrift(); refreshUpdate(); }
@@ -3322,30 +3418,17 @@ document.getElementById('file-new').addEventListener('click', async () => {
   }
   workView.focus();
 });
-document.getElementById('file-export').addEventListener('click', () => {
-  const modal = dialog('Save as new file', { size: 'sm' });
-  const form = chatEl('form', 'save-as-form');
-  const label = chatEl('label', '', 'File name');
-  const input = document.createElement('input');
-  input.required = true;
-  input.value = documentName;
-  label.append(input);
-  const actions = chatEl('div', 'save-as-actions');
-  const cancel = chatEl('button', '', 'Cancel');
-  cancel.type = 'button';
-  cancel.addEventListener('click', () => modal.close());
-  const submit = chatEl('button', 'is-primary', 'Save');
-  submit.type = 'submit';
-  actions.append(cancel, submit);
-  form.append(label, actions);
-  form.addEventListener('submit', event => {
-    event.preventDefault();
-    const name = input.value.trim();
-    exportText(workView.state.doc.toString(), /\.[a-z0-9]+$/i.test(name) ? name : `${name}.md`);
-    modal.close();
-  });
-  modal.append(form);
-  input.focus(); input.select();
+document.getElementById('file-export').addEventListener('click', async () => {
+  const handle = await showSaveFilePicker({
+    suggestedName: documentName,
+    types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.markdown'], 'text/plain': ['.txt'] } }],
+  }).catch(() => null);
+  if (!handle) return;
+  const writable = await handle.createWritable();
+  await writable.write(workView.state.doc.toString());
+  await writable.close();
+  refreshFileList();
+  workView.focus();
 });
 document.addEventListener('keydown', event => {
   if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return;
@@ -3376,9 +3459,11 @@ async function importFile(file) {
 //  in History), so the single-draft CAS never learns about a second writer.
 const sidebar = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
+const sidebarToggleSide = document.getElementById('sidebar-toggle-side');
 const fileList = document.getElementById('file-list');
 const fileFilter = document.getElementById('file-filter');
 let sidebarFiles = [];
+let sidebarToggleTimer = null;
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
@@ -3396,8 +3481,27 @@ function timeAgo(iso) {
   return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 function setSidebar(open, persist = true) {
-  sidebar.hidden = !open;
+  // Width-animated, not display-toggled: the pane and composer glide with
+  // it. inert keeps the collapsed panel out of tab order and screen readers.
+  sidebar.classList.toggle('is-closed', !open);
+  sidebar.inert = !open;
+  // Two static buttons, one per head: each stays where it is, so nothing
+  // travels while the panel glides. Both hide for the glide itself — neither
+  // the leaving nor the arriving button should be caught mid-travel — then
+  // only the one in the visible head comes back. Matches the .25s width
+  // transition in CSS; instant when motion is reduced.
+  sidebarToggle.hidden = true;
+  sidebarToggleSide.hidden = true;
   sidebarToggle.setAttribute('aria-expanded', String(open));
+  sidebarToggleSide.setAttribute('aria-expanded', String(open));
+  clearTimeout(sidebarToggleTimer);
+  const revealToggle = () => { sidebarToggle.hidden = open; sidebarToggleSide.hidden = !open; };
+  if (reduceMotion()) revealToggle();
+  else sidebarToggleTimer = setTimeout(revealToggle, 260);
+  // The composer is viewport-centred (position: fixed), while the draft
+  // re-centres inside the narrowed pane — without this it sits 124px off
+  // the text it belongs to whenever the panel is open.
+  document.documentElement.dataset.sidebar = open ? 'open' : 'closed';
   if (persist) { try { localStorage.setItem('wa-sidebar', open ? 'open' : 'closed'); } catch {} }
   if (open) refreshFileList();
 }
@@ -3453,12 +3557,20 @@ async function openWorkspaceFile(name) {
   // current text into History before replacing it. Clicking the file that
   // is already open does nothing at all.
   if (name === documentName && text === workView.state.doc.toString()) { workView.focus(); return; }
-  loadFromDisk(text); save(); refreshFileList();
+  loadFromDisk(text);
+  // The choice owns the highlight: documentName is otherwise set once at
+  // startup, leaving the mark stuck on the draft while another file's text
+  // is open. Render first from the cached list so the click answers
+  // instantly; the refresh below only corrects age and excerpt.
+  documentName = name;
+  renderFileList();
+  save(); refreshFileList();
 }
-sidebarToggle.addEventListener('click', () => { setSidebar(sidebar.hidden); workView.focus(); });
-document.getElementById('file-refresh').addEventListener('click', refreshFileList);
+const toggleSidebar = () => { setSidebar(sidebar.classList.contains('is-closed')); workView.focus(); };
+sidebarToggle.addEventListener('click', toggleSidebar);
+sidebarToggleSide.addEventListener('click', toggleSidebar);
 fileFilter.addEventListener('input', renderFileList);
-setSidebar((() => { try { return localStorage.getItem('wa-sidebar') !== 'closed'; } catch { return true; } })(), false);
+setSidebar((() => { try { return localStorage.getItem('wa-sidebar') === 'open'; } catch { return false; } })(), false);
 
 const fileInput = document.getElementById('file-input');
 document.getElementById('file-open').addEventListener('click', () => fileInput.click());
