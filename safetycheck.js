@@ -133,14 +133,18 @@ try {
 //  them by basename. A disposable working directory keeps the listing exact;
 //  traversal, wrong extensions, and missing files must all fail.
 const filesTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-files-'));
-fs.writeFileSync(path.join(filesTemp, 'notes.md'), '# notes');
-fs.writeFileSync(path.join(filesTemp, 'plain.txt'), 'plain');
+fs.writeFileSync(path.join(filesTemp, 'outside.md'), 'not next to the draft');
 fs.writeFileSync(path.join(filesTemp, 'photo.png'), 'not an image');
-fs.writeFileSync(path.join(filesTemp, '.hidden.md'), 'hidden');
-fs.writeFileSync(path.join(filesTemp, 'draft.md'), 'workspace draft');
+fs.mkdirSync(path.join(filesTemp, 'sub'));
+fs.writeFileSync(path.join(filesTemp, 'sub', 'inner.md'), '# inner');
+fs.writeFileSync(path.join(filesTemp, 'sub', 'plain.txt'), 'plain');
+fs.writeFileSync(path.join(filesTemp, 'sub', 'photo.png'), 'not an image');
+fs.writeFileSync(path.join(filesTemp, 'sub', '.hidden.md'), 'hidden');
+// The draft lives in a subfolder of the working directory: the listing must
+// follow the draft's folder, not the process cwd.
 const filesChild = spawn(process.execPath, [path.join(import.meta.dirname, 'index.js')], {
   cwd: filesTemp,
-  env: { ...process.env, PORT: '0', LITURA_NO_OPEN: '1' },
+  env: { ...process.env, PORT: '0', LITURA_NO_OPEN: '1', DRAFT_FILE: path.join(filesTemp, 'sub', 'draft.md') },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let filesOutput = '';
@@ -161,17 +165,23 @@ try {
     signal: AbortSignal.timeout(5000),
   });
   const listing = await (await filesRequest('/files', 'GET')).json();
-  assert.deepEqual(listing.files.map(file => file.name), ['draft.md', 'notes.md', 'plain.txt']);
+  assert.deepEqual(listing.files.map(file => file.name), ['inner.md', 'plain.txt']);
   assert(listing.files.every(file => Number.isInteger(file.size) && typeof file.mtime === 'string'));
-  assert.equal((await (await filesRequest('/file?name=notes.md', 'GET')).json()).text, '# notes');
+  assert.equal((await (await filesRequest('/file?name=inner.md', 'GET')).json()).text, '# inner');
+  // On disk but outside the draft's folder: invisible and unreadable.
+  assert.equal((await filesRequest('/file?name=outside.md', 'GET')).status, 404);
   assert.equal((await filesRequest('/file?name=photo.png', 'GET')).status, 400);
   assert.equal((await filesRequest('/file?name=missing.md', 'GET')).status, 404);
   assert.equal((await filesRequest('/file', 'GET')).status, 400);
   assert.equal((await filesRequest('/file?name=../secret.md', 'GET')).status, 400);
   assert.equal((await filesRequest('/file?name=/etc/hosts', 'GET')).status, 400);
-  assert.equal((await filesRequest('/file?name=notes.md', 'POST', {})).status, 404);
+  assert.equal((await filesRequest('/file?name=inner.md', 'POST', {})).status, 404);
   assert.equal((await filesRequest('/files', 'GET', {}, { Origin: 'https://evil.example' })).status, 403);
-  console.log('Workspace file checks passed: listing scope, read validation, traversal rejection.');
+  // Saving the draft creates it inside the same folder, and it joins the list.
+  const draftState = await (await filesRequest('/draft', 'GET')).json();
+  assert.equal((await filesRequest('/draft', 'PUT', { text: 'draft body', revision: draftState.revision })).status, 200);
+  assert.deepEqual((await (await filesRequest('/files', 'GET')).json()).files.map(file => file.name), ['draft.md', 'inner.md', 'plain.txt']);
+  console.log('Workspace file checks passed: draft-folder scope, read validation, traversal rejection.');
 } finally {
   filesChild.kill('SIGTERM');
   if (filesChild.exitCode === null) await once(filesChild, 'exit');

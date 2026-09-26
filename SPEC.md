@@ -43,7 +43,7 @@ The current product has one working-document pane and a file sidebar. There is n
 
 One row, and nothing in it spends a model call. Everything about the file lives in the sidebar behind the sidebar toggle, and the local score sits at the far end. The header is the frame the draft is read in — it carries no file name and no status line of its own.
 
-- Sidebar toggle opening the file sidebar: the list of Markdown and text files next to the draft, a filter, and `New`, `Open a file…`, `Save as new…`, `History`. Opening a listed file replaces the workspace draft through the same confirm-then-keep-history path as importing.
+- Sidebar toggle opening the file sidebar: the list of Markdown and text files next to the draft, a filter, and `New`, `Open a file…`, `Save as new…`, `History`. Opening a listed file replaces the workspace draft at once — the click is the intent, and the previous text is kept in History.
 - Save trouble — a save error, or a paused autosave after a conflict — is reported in the chat stream, where the writer is already reading. Routine saves are silent.
 - Local style signals, labelled `Style` with a count of marked passages, when the draft is predominantly Latin script. Hidden otherwise.
 - Settings button.

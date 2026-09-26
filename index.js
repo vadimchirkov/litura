@@ -111,16 +111,19 @@ const STYLE_FILE = process.env.STYLE_FILE
 // ─── Workspace files ───────────────────────────────────────────────────────
 // The sidebar lists the Markdown and text files sitting next to the draft,
 // so the writer can pull one into the workspace without leaving the page.
+// The anchor is the draft's own folder, not the process working directory:
+// DRAFT_FILE may point elsewhere, and the listing must follow the draft.
 // Listing and reading only: writing stays with the draft CAS. Names are
-// basenames with an approved extension, resolved inside the working
-// directory — anything else is a 400, never a filesystem walk.
+// basenames with an approved extension, resolved inside that folder —
+// anything else is a 400, never a filesystem walk.
 const WORKSPACE_EXTENSIONS = new Set(['.md', '.markdown', '.txt']);
+const FILES_DIR = path.dirname(path.resolve(DRAFT_FILE));
 function workspaceFile(name) {
   if (typeof name !== 'string' || !name || name.includes('\0')) return null;
   if (path.basename(name) !== name) return null;
   if (!WORKSPACE_EXTENSIONS.has(path.extname(name).toLowerCase())) return null;
-  const resolved = path.join(CWD, name);
-  if (path.resolve(CWD, name) !== resolved) return null;
+  const resolved = path.join(FILES_DIR, name);
+  if (path.resolve(FILES_DIR, name) !== resolved) return null;
   return resolved;
 }
 
@@ -338,14 +341,14 @@ async function handleRequest(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/files') {
     let entries;
-    try { entries = fs.readdirSync(CWD, { withFileTypes: true }); }
+    try { entries = fs.readdirSync(FILES_DIR, { withFileTypes: true }); }
     catch (error) { sendJson(res, 500, { error: error.message }); return; }
     const files = [];
     for (const entry of entries) {
       if (!entry.isFile() || entry.name.startsWith('.')) continue;
       if (!WORKSPACE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
       try {
-        const stats = fs.statSync(path.join(CWD, entry.name));
+        const stats = fs.statSync(path.join(FILES_DIR, entry.name));
         files.push({ name: entry.name, size: stats.size, mtime: stats.mtime.toISOString() });
       } catch { /* raced deletion — skip */ }
     }

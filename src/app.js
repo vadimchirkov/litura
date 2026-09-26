@@ -3372,8 +3372,8 @@ async function importFile(file) {
 //
 //  The header toggle owns the sidebar; every file action lives inside it.
 //  Rows name the workspace Markdown and text files — opening one replaces
-//  the draft through the same confirm-then-keep-history path as importing,
-//  so the single-draft CAS never learns about a second writer.
+//  the draft outright (the click is the intent; the previous text is kept
+//  in History), so the single-draft CAS never learns about a second writer.
 const sidebar = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
 const fileList = document.getElementById('file-list');
@@ -3427,12 +3427,10 @@ async function openWorkspaceFile(name) {
   let text;
   try { ({ text } = await api(`/file?name=${encodeURIComponent(name)}`)); }
   catch (error) { chatAdd(chatEl('div', 'chat-error', `Could not open ${name}: ${error.message}`)); return; }
-  const ok = await confirmDialog({
-    title: `Open ${name}`,
-    body: 'The file replaces this workspace draft. The current text will be kept in History.',
-    okLabel: 'Open',
-  });
-  if (!ok) { workView.focus(); return; }
+  // No confirm: the click is the intent, and loadFromDisk snapshots the
+  // current text into History before replacing it. Clicking the file that
+  // is already open does nothing at all.
+  if (name === documentName && text === workView.state.doc.toString()) { workView.focus(); return; }
   loadFromDisk(text); save(); refreshFileList();
 }
 sidebarToggle.addEventListener('click', () => { setSidebar(sidebar.hidden); workView.focus(); });
