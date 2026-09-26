@@ -35,10 +35,11 @@
 
 [hidden] { display: none !important; }
 
-/* The logo is the menu: one control for open, export and history, so the
-   header keeps a single row and the document keeps the page. The file name
-   beside it is a label, not a second control for the same menu. */
-.logo-button {
+/* Icon buttons (sidebar toggle) and Phosphor icon slots. The .ph span is
+   filled by JS from src/icons.js, so the markup names the icon instead of
+   carrying its paths. Duotone icons use fill="currentColor" and follow the
+   surrounding text color in both themes. */
+.icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -49,35 +50,140 @@
   border: 0;
   border-radius: 8px;
   background: none;
+  color: var(--text);
   cursor: pointer;
 }
-.logo-button svg { display: block; width: 22px; height: 22px; color: var(--text); }
-.logo-button:hover { background: var(--surface-3); }
-#document-menu {
-  position: fixed;
-  margin: 0;
-  padding: 6px;
-  min-width: 200px;
+.icon-button:hover { background: var(--surface-3); }
+.icon-button-sm { width: 28px; height: 28px; border-radius: 7px; color: var(--text-2); }
+.ph { display: inline-flex; align-items: center; justify-content: center; }
+.ph svg { display: block; width: 20px; height: 20px; }
+.icon-button-sm .ph svg { width: 17px; height: 17px; }
+
+/* ── File sidebar ────────────────────────────────────────────
+   Workspace files live here: the list of Markdown and text files next to
+   the draft, a filter, and New / Open / Save as / History. Below 640px it
+   floats over the draft instead of squeezing it. */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 248px;
+  height: 100vh;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+.sidebar[hidden] { display: none; }
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 8px 0 16px;
+  flex-shrink: 0;
+}
+.sidebar-title { font-size: 13px; font-weight: 600; color: var(--text-2); }
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 12px 8px;
+  padding: 0 9px;
+  min-height: 32px;
   border: 1px solid var(--border);
   border-radius: var(--r-field);
-  background: var(--overlay);
-  box-shadow: var(--shadow-md);
-  color: var(--text);
+  background: var(--surface-2);
+  color: var(--muted);
+  flex-shrink: 0;
 }
-#document-menu button {
-  display: block;
+.sidebar-search .ph svg { width: 15px; height: 15px; }
+.sidebar-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 6px 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.sidebar-search input::placeholder { color: var(--muted); }
+.file-list {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.file-list button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   width: 100%;
   min-height: 32px;
-  padding: 6px 10px;
-  text-align: left;
+  padding: 5px 9px;
   border: 0;
   border-radius: var(--r-sm);
   background: none;
   color: var(--text);
   font: inherit;
+  font-size: 13px;
+  text-align: left;
   cursor: pointer;
 }
-#document-menu button:hover { background: var(--surface-3); }
+.file-list button:hover { background: var(--surface-3); }
+.file-list button[aria-current="true"] { background: var(--surface-3); font-weight: 600; }
+.file-list .ph { flex-shrink: 0; color: var(--text-2); }
+.file-list .ph svg { width: 17px; height: 17px; }
+.file-list .file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-list .file-size { flex-shrink: 0; font-size: 11px; color: var(--muted); }
+.file-list-empty { padding: 12px; font-size: 12.5px; color: var(--muted); }
+.sidebar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sidebar-actions button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-actions button:hover { background: var(--surface-3); }
+.sidebar-actions .ph { flex-shrink: 0; color: var(--text-2); }
+.sidebar-actions .ph svg { width: 17px; height: 17px; }
+@media (max-width: 640px) {
+  .sidebar {
+    position: fixed;
+    z-index: 120;
+    top: 0;
+    left: 0;
+    box-shadow: var(--shadow-lg);
+  }
+}
 
 /* Review actions live in the assistant panel, in a row that belongs to the
    composer: hidden until the writer reaches for the field, so the resting
@@ -524,7 +630,7 @@ html, body {
 
 .header-actions { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 .settings-open { margin-left: 0; }
-.settings-open svg { width: 17px; height: 17px; }
+.settings-open .ph svg { width: 17px; height: 17px; }
 
 .icon-btn:hover,
 .settings-open:hover {
@@ -1180,7 +1286,9 @@ html, body {
 
 /* Working: the input gets a writing cursor while the button becomes Stop. */
 .chat-send { position: relative; }
-.chat-send.is-busy .chat-send-arrow { display: none; }
+.chat-send .ph { display: inline-flex; }
+.chat-send .ph svg { width: 17px; height: 17px; }
+.chat-send.is-busy .ph { display: none; }
 .chat-send.is-busy::after {
   content: '';
   position: absolute;

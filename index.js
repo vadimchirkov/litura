@@ -108,6 +108,22 @@ const STYLE_FILE = process.env.STYLE_FILE
   || [path.join(CWD, 'style.md'), path.join(ROOT, 'style.md')].find(p => fs.existsSync(p))
   || path.join(CWD, 'style.md');
 
+// ─── Workspace files ───────────────────────────────────────────────────────
+// The sidebar lists the Markdown and text files sitting next to the draft,
+// so the writer can pull one into the workspace without leaving the page.
+// Listing and reading only: writing stays with the draft CAS. Names are
+// basenames with an approved extension, resolved inside the working
+// directory — anything else is a 400, never a filesystem walk.
+const WORKSPACE_EXTENSIONS = new Set(['.md', '.markdown', '.txt']);
+function workspaceFile(name) {
+  if (typeof name !== 'string' || !name || name.includes('\0')) return null;
+  if (path.basename(name) !== name) return null;
+  if (!WORKSPACE_EXTENSIONS.has(path.extname(name).toLowerCase())) return null;
+  const resolved = path.join(CWD, name);
+  if (path.resolve(CWD, name) !== resolved) return null;
+  return resolved;
+}
+
 // ─── Style guide ───────────────────────────────────────────────────────────
 let styleWarnedOnce = false;
 
@@ -319,6 +335,38 @@ async function handleRequest(req, res) {
     }
   }
   if (req.method === 'GET' && url.pathname === '/draft/history') return sendJson(res, 200, { snapshots: draftStore.history() });
+
+  if (req.method === 'GET' && url.pathname === '/files') {
+    let entries;
+    try { entries = fs.readdirSync(CWD, { withFileTypes: true }); }
+    catch (error) { sendJson(res, 500, { error: error.message }); return; }
+    const files = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name.startsWith('.')) continue;
+      if (!WORKSPACE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+      try {
+        const stats = fs.statSync(path.join(CWD, entry.name));
+        files.push({ name: entry.name, size: stats.size, mtime: stats.mtime.toISOString() });
+      } catch { /* raced deletion — skip */ }
+    }
+    files.sort((a, b) => a.name.localeCompare(b.name));
+    sendJson(res, 200, { files });
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/file') {
+    const file = workspaceFile(url.searchParams.get('name'));
+    if (!file) { sendJson(res, 400, { error: 'Open a Markdown or text file by name.' }); return; }
+    let text;
+    try { text = fs.readFileSync(file, 'utf8'); }
+    catch (error) {
+      const missing = error.code === 'ENOENT';
+      sendJson(res, missing ? 404 : 500, { error: missing ? 'File no longer exists.' : error.message });
+      return;
+    }
+    if (Buffer.byteLength(text) > MAX_DOCUMENT_BYTES) { sendJson(res, 413, { error: 'File exceeds the 1 MB editing limit.' }); return; }
+    sendJson(res, 200, { name: path.basename(file), text });
+    return;
+  }
 
   // ── Static
   if (req.method === 'GET') {

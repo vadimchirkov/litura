@@ -18,32 +18,32 @@ The product does not claim to determine whether text was written by AI. Its revi
 ## 2. Interface
 
 ```text
-+---------------------------------------------------------------+
-| [logo]                        Style 3  settings |
-+---------------------------------------------------------------+
-|                                                               |
-|          WORKING DOCUMENT             | finding card        |
-|                                       |                     |
-|          CodeMirror editor            | finding card        |
-|          (never moves for a card)     |                     |
-|      highlighted review findings      | [< 2 of 3 >] card   |
-|                                                               |
-|          chat messages and replies                            |
-|          [Review draft] reviewing...                          |
-|          +-----------------------------------------+           |
-|          | attached-passage chip                  |           |
-|          | Ask anything...                        |           |
-|          +-----------------------------------------+           |
-+---------------------------------------------------------------+
++--------+------------------------------------------------------+
+| Files  | [sidebar]                Style 3  settings |
+| list   +------------------------------------------------------+
+| New    |                                                      |
+| Open…  |          WORKING DOCUMENT             | finding card |
+| Save…  |                                       |              |
+| History|          CodeMirror editor            | finding card |
+|        |          (never moves for a card)     |              |
+|        |      highlighted review findings      | [< 2 of 3 >] card |
+|        |                                                      |
+|        |          chat messages and replies                   |
+|        |          [Review draft] reviewing...                 |
+|        |          +-----------------------------------------+  |
+|        |          | attached-passage chip                  |  |
+|        |          | Ask anything...                        |  |
+|        |          +-----------------------------------------+  |
++--------+------------------------------------------------------+
 ```
 
-The current product has one working-document pane. There is no separate context pane, file browser, or document list.
+The current product has one working-document pane and a file sidebar. There is no separate context pane.
 
 ### Header
 
-One row, and nothing in it spends a model call. Everything about the file is behind the logo, and the local score sits at the far end. The header is the frame the draft is read in — it carries no file name and no status line of its own.
+One row, and nothing in it spends a model call. Everything about the file lives in the sidebar behind the sidebar toggle, and the local score sits at the far end. The header is the frame the draft is read in — it carries no file name and no status line of its own.
 
-- Logo button opening the document menu: `Open a file…`, `Export a copy`, `History`.
+- Sidebar toggle opening the file sidebar: the list of Markdown and text files next to the draft, a filter, and `New`, `Open a file…`, `Save as new…`, `History`. Opening a listed file replaces the workspace draft through the same confirm-then-keep-history path as importing.
 - Save trouble — a save error, or a paused autosave after a conflict — is reported in the chat stream, where the writer is already reading. Routine saves are silent.
 - Local style signals, labelled `Style` with a count of marked passages, when the draft is predominantly Latin script. Hidden otherwise.
 - Settings button.
@@ -343,6 +343,8 @@ All bodies and non-streaming responses are JSON unless noted.
 | `GET` | `/draft` | `{ text, path, id, exists, revision }`; a missing file has empty text and revision `missing` |
 | `PUT` | `/draft` | Save `{ text, revision }`; returns `{ saved: true, text, path, id, exists, revision }`, or `409` with `{ error, current }` when the revision differs |
 | `GET` | `/draft/history` | `{ snapshots }`, latest 20 disk backups with `text`, `at` and `revision` |
+| `GET` | `/files` | `{ files }`: Markdown and text files next to the draft, each with `name`, `size` and `mtime`, sorted by name |
+| `GET` | `/file?name=` | `{ name, text }` for one workspace file by basename; `400` for anything that is not a plain Markdown or text name, `404` when it is gone, `413` past 1 MB |
 | `GET` | `/api/version` | `{ name, current }`; with `?check=1` also `latest` from the npm registry, or `error` if it is unreachable |
 | `GET` | `/api/agent/status` | Providers, models, auth status, and default selection |
 | `POST` | `/api/agent/credentials` | Save a provider API key through Pi |

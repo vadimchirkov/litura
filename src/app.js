@@ -25,6 +25,11 @@ import { replacementTarget, newerVersion } from '../editing.js';
 import { locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
 import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
+import { hydrateIcons, icon } from './icons.js';
+
+// Static markup names Phosphor icons with <span class="ph" data-icon="…">;
+// this fills them from the single map in icons.js.
+hydrateIcons();
 
 // Naming a shortcut with the wrong modifier is worse than not naming it.
 
@@ -3270,7 +3275,7 @@ async function initializeDocument() {
       if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
     } catch {}
     workView.dispatch({ effects: refreshStyleFx.of(null) });
-    restoreFindings(); restoreChat(); syncStyleScore();
+    restoreFindings(); restoreChat(); syncStyleScore(); renderFileList();
     if (cached !== null && cached !== current.text) promptDiskDrift(current);
     else { saveStatus.textContent = ''; saveStatus.title = ''; }
     const legacy = localStorage.getItem('wa-working');
@@ -3297,7 +3302,7 @@ async function checkDiskDrift() {
     if (current.revision !== diskRevision) promptDiskDrift(current);
   } catch (error) { saveStatus.textContent = 'Cannot check disk: ' + error.message; }
 }
-window.addEventListener('focus', checkDiskDrift);
+window.addEventListener('focus', () => { checkDiskDrift(); if (!sidebar.hidden) refreshFileList(); });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { cancelSuggestion(); ghostClear(workView); }
   else { checkDiskDrift(); refreshUpdate(); }
@@ -3360,19 +3365,80 @@ async function importFile(file) {
       okLabel: 'Import',
     });
     if (!ok) return;
-    loadFromDisk(text); save();
+    loadFromDisk(text); save(); refreshFileList();
   } catch (error) { saveStatus.textContent = 'Import failed: ' + error.message; }
 }
-// Document menu. The popover gives light dismiss, Escape and the top layer;
-// only the anchoring and "close after choosing" are left to do.
-const documentMenu = document.getElementById('document-menu');
-const documentMenuButton = document.getElementById('document-menu-button');
-documentMenuButton.addEventListener('click', () => {
-  const box = documentMenuButton.getBoundingClientRect();
-  documentMenu.style.left = `${box.left}px`;
-  documentMenu.style.top = `${box.bottom + 6}px`;
-});
-documentMenu.addEventListener('click', event => { if (event.target.closest('button')) documentMenu.hidePopover(); });
+// ─── File sidebar ────────────────────────────────────────────────────────────
+//
+//  The header toggle owns the sidebar; every file action lives inside it.
+//  Rows name the workspace Markdown and text files — opening one replaces
+//  the draft through the same confirm-then-keep-history path as importing,
+//  so the single-draft CAS never learns about a second writer.
+const sidebar = document.getElementById('sidebar');
+const sidebarToggle = document.getElementById('sidebar-toggle');
+const fileList = document.getElementById('file-list');
+const fileFilter = document.getElementById('file-filter');
+let sidebarFiles = [];
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+function setSidebar(open, persist = true) {
+  sidebar.hidden = !open;
+  sidebarToggle.setAttribute('aria-expanded', String(open));
+  if (persist) { try { localStorage.setItem('wa-sidebar', open ? 'open' : 'closed'); } catch {} }
+  if (open) refreshFileList();
+}
+function renderFileList() {
+  const query = fileFilter.value.trim().toLowerCase();
+  const shown = sidebarFiles.filter(file => !query || file.name.toLowerCase().includes(query));
+  fileList.replaceChildren();
+  if (!sidebarFiles.length) {
+    fileList.append(chatEl('li', 'file-list-empty', 'No Markdown or text files here yet.'));
+    return;
+  }
+  if (!shown.length) {
+    fileList.append(chatEl('li', 'file-list-empty', 'Nothing matches this filter.'));
+    return;
+  }
+  for (const file of shown) {
+    const item = document.createElement('li');
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.title = `${file.name} · ${formatFileSize(file.size)}`;
+    if (file.name === documentName) row.setAttribute('aria-current', 'true');
+    row.innerHTML = `<span class="ph" aria-hidden="true">${icon('file-text')}</span><span class="file-name"></span><span class="file-size"></span>`;
+    row.querySelector('.file-name').textContent = file.name;
+    row.querySelector('.file-size').textContent = formatFileSize(file.size);
+    row.addEventListener('click', () => openWorkspaceFile(file.name));
+    item.append(row);
+    fileList.append(item);
+  }
+}
+async function refreshFileList() {
+  try {
+    const { files } = await api('/files');
+    sidebarFiles = Array.isArray(files) ? files : [];
+  } catch { sidebarFiles = []; }
+  renderFileList();
+}
+async function openWorkspaceFile(name) {
+  let text;
+  try { ({ text } = await api(`/file?name=${encodeURIComponent(name)}`)); }
+  catch (error) { chatAdd(chatEl('div', 'chat-error', `Could not open ${name}: ${error.message}`)); return; }
+  const ok = await confirmDialog({
+    title: `Open ${name}`,
+    body: 'The file replaces this workspace draft. The current text will be kept in History.',
+    okLabel: 'Open',
+  });
+  if (!ok) { workView.focus(); return; }
+  loadFromDisk(text); save(); refreshFileList();
+}
+sidebarToggle.addEventListener('click', () => { setSidebar(sidebar.hidden); workView.focus(); });
+document.getElementById('file-refresh').addEventListener('click', refreshFileList);
+fileFilter.addEventListener('input', renderFileList);
+setSidebar((() => { try { return localStorage.getItem('wa-sidebar') !== 'closed'; } catch { return true; } })(), false);
 
 const fileInput = document.getElementById('file-input');
 document.getElementById('file-open').addEventListener('click', () => fileInput.click());

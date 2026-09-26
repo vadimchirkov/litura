@@ -127,6 +127,57 @@ try {
   fs.rmSync(temp, { recursive: true, force: true }); // Only this test's mkdtemp directory.
 }
 
+// ─── Workspace files ───────────────────────────────────────────────────────
+//
+//  The sidebar lists the Markdown and text files next to the draft and opens
+//  them by basename. A disposable working directory keeps the listing exact;
+//  traversal, wrong extensions, and missing files must all fail.
+const filesTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-files-'));
+fs.writeFileSync(path.join(filesTemp, 'notes.md'), '# notes');
+fs.writeFileSync(path.join(filesTemp, 'plain.txt'), 'plain');
+fs.writeFileSync(path.join(filesTemp, 'photo.png'), 'not an image');
+fs.writeFileSync(path.join(filesTemp, '.hidden.md'), 'hidden');
+fs.writeFileSync(path.join(filesTemp, 'draft.md'), 'workspace draft');
+const filesChild = spawn(process.execPath, [path.join(import.meta.dirname, 'index.js')], {
+  cwd: filesTemp,
+  env: { ...process.env, PORT: '0', LITURA_NO_OPEN: '1' },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+let filesOutput = '';
+filesChild.stderr.on('data', chunk => { filesOutput += chunk; });
+try {
+  const filesUrl = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Server did not start: ' + filesOutput)), 20_000);
+    filesChild.stdout.on('data', chunk => {
+      filesOutput += chunk;
+      const match = filesOutput.match(/Litura → (http:\/\/127\.0\.0\.1:\d+)/);
+      if (match) { clearTimeout(timer); resolve(match[1]); }
+    });
+    filesChild.once('exit', code => { clearTimeout(timer); reject(new Error(`Server exited ${code}: ${filesOutput}`)); });
+  });
+  const filesRequest = (route, method = 'POST', body = {}, headers = {}) => fetch(filesUrl + route, {
+    method, headers: { 'Content-Type': 'application/json', ...headers },
+    ...(method === 'GET' || method === 'HEAD' ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(5000),
+  });
+  const listing = await (await filesRequest('/files', 'GET')).json();
+  assert.deepEqual(listing.files.map(file => file.name), ['draft.md', 'notes.md', 'plain.txt']);
+  assert(listing.files.every(file => Number.isInteger(file.size) && typeof file.mtime === 'string'));
+  assert.equal((await (await filesRequest('/file?name=notes.md', 'GET')).json()).text, '# notes');
+  assert.equal((await filesRequest('/file?name=photo.png', 'GET')).status, 400);
+  assert.equal((await filesRequest('/file?name=missing.md', 'GET')).status, 404);
+  assert.equal((await filesRequest('/file', 'GET')).status, 400);
+  assert.equal((await filesRequest('/file?name=../secret.md', 'GET')).status, 400);
+  assert.equal((await filesRequest('/file?name=/etc/hosts', 'GET')).status, 400);
+  assert.equal((await filesRequest('/file?name=notes.md', 'POST', {})).status, 404);
+  assert.equal((await filesRequest('/files', 'GET', {}, { Origin: 'https://evil.example' })).status, 403);
+  console.log('Workspace file checks passed: listing scope, read validation, traversal rejection.');
+} finally {
+  filesChild.kill('SIGTERM');
+  if (filesChild.exitCode === null) await once(filesChild, 'exit');
+  fs.rmSync(filesTemp, { recursive: true, force: true });
+}
+
 // ─── The contract the desktop shell holds us to ────────────────────────────
 //
 //  The Rust shell waits for one line to learn the port, and exits its server
