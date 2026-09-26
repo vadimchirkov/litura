@@ -23,7 +23,7 @@ import { findingContext, isLatinScript, locateFindings, styleMarkers, styleScore
 import { renderMarkdown } from '../markdown.js';
 import { replacementTarget, newerVersion } from '../editing.js';
 import { locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
-import { loadSpellDictionary, spellingMarkers } from '../spellcheck.js';
+import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
 
 // Naming a shortcut with the wrong modifier is worse than not naming it.
@@ -204,6 +204,14 @@ const docStorage = {
   removeItem(key) { try { if (documentKey) localStorage.removeItem(documentKey + key); } catch {} },
 };
 const jobs = new Set();
+// JSON in storage can be stale, truncated, or hand-edited. A corrupt value
+// must read as its fallback, never throw at the call site.
+function safeJson(value, fallback) {
+  try {
+    const parsed = JSON.parse(value ?? '');
+    return parsed ?? fallback;
+  } catch { return fallback; }
+}
 // Background work is the writer's text being checked while they type; it is
 // not something they pressed send for. Only what they started turns the send
 // button into a stop button.
@@ -293,6 +301,24 @@ function combobox(trigger) {
   const count = popover.querySelector('.combo-count');
   const state = { options: [], value: '', render, trigger };
   combos.set(trigger, state);
+  // Wire the listbox pattern: the search owns the popup and names the active
+  // row, so a screen reader follows ArrowUp/Down/Home/End as well as typing.
+  const listId = `${popover.id}-list`;
+  list.id = listId;
+  search.setAttribute('role', 'combobox');
+  search.setAttribute('aria-controls', listId);
+  search.setAttribute('aria-expanded', 'false');
+
+  function setActive(item) {
+    for (const child of list.children) child.classList.remove('is-active');
+    if (item) {
+      item.classList.add('is-active');
+      item.scrollIntoView({ block: 'nearest' });
+      search.setAttribute('aria-activedescendant', item.id);
+    } else {
+      search.removeAttribute('aria-activedescendant');
+    }
+  }
 
   function render() {
     const query = search.value.trim().toLowerCase();
@@ -300,9 +326,10 @@ function combobox(trigger) {
       || option.label.toLowerCase().includes(query)
       || option.value.toLowerCase().includes(query));
     const shown = matched.slice(0, COMBO_LIMIT);
-    list.replaceChildren(...shown.map(option => {
+    list.replaceChildren(...shown.map((option, index) => {
       const item = chatEl('button', 'combo-item', '');
       item.type = 'button';
+      item.id = `${listId}-${index}`;
       item.dataset.value = option.value;
       item.setAttribute('role', 'option');
       item.setAttribute('aria-selected', String(option.value === state.value));
@@ -310,6 +337,7 @@ function combobox(trigger) {
       return item;
     }));
     empty.hidden = matched.length > 0;
+    search.removeAttribute('aria-activedescendant');  // rows were just rebuilt
     if (count) count.textContent = !state.options.length ? ''
       : matched.length > shown.length ? `Showing ${shown.length} of ${matched.length}` : '';
   }
@@ -333,13 +361,14 @@ function combobox(trigger) {
     if (event.newState === 'open') reposition(true);
   });
   popover.addEventListener('toggle', event => {
-    if (event.newState !== 'open') return;
+    search.setAttribute('aria-expanded', String(event.newState === 'open'));
+    if (event.newState !== 'open') { search.removeAttribute('aria-activedescendant'); return; }
     search.value = '';   // the search starts empty, never at the current answer
     render();
     // Open where the writer already is: the current choice, not the top of a
     // list of six hundred. Enter with nothing typed then changes nothing.
     const current = list.querySelector('[aria-selected="true"]');
-    current?.classList.add('is-active');
+    setActive(current);
     current?.scrollIntoView({ block: 'center' });
     search.focus();
   });
@@ -351,13 +380,15 @@ function combobox(trigger) {
       (list.querySelector('.is-active') ?? items[0])?.click();
       return;
     }
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    event.preventDefault();
     const at = items.findIndex(item => item.classList.contains('is-active'));
-    const next = items[Math.min(Math.max(at + (event.key === 'ArrowDown' ? 1 : -1), 0), items.length - 1)];
-    for (const item of items) item.classList.remove('is-active');
-    next?.classList.add('is-active');
-    next?.scrollIntoView({ block: 'nearest' });
+    let next;
+    if (event.key === 'ArrowDown') next = items[Math.min(at + 1, items.length - 1)] ?? items[0];
+    else if (event.key === 'ArrowUp') next = items[Math.max(at - 1, 0)] ?? items[0];
+    else if (event.key === 'Home') next = items[0];
+    else if (event.key === 'End') next = items[items.length - 1];
+    else return;
+    event.preventDefault();
+    setActive(next ?? null);
   });
   list.addEventListener('click', event => {
     const item = event.target.closest('[data-value]');
@@ -448,7 +479,12 @@ function renderCredentials() {
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
-  const data = await response.json().catch(() => ({}));
+  // Read text first: a non-JSON error page (proxy, gateway) must still leave
+  // something to report instead of dying in res.json() with a SyntaxError.
+  const raw = await response.text().catch(() => '');
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; }
+  catch { data = { error: raw.slice(0, 200) || `HTTP ${response.status}` }; }
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
@@ -882,7 +918,7 @@ function dismissFinding(id) {
   const finding = reviewFindings.find(item => item.id === id);
   const document = workView.state.doc.toString();
   const range = findingRange(id);
-  const dismissed = JSON.parse(docStorage.getItem('dismissed') || '[]');
+  const dismissed = safeJson(docStorage.getItem('dismissed'), []);
   const decision = finding && { code: finding.code, quote: finding.quote, context: findingContext(document, { ...finding, ...range }) };
   if (decision) dismissed.push(decision);
   docStorage.setItem('dismissed', JSON.stringify(dismissed.slice(-100)));
@@ -900,7 +936,7 @@ function dismissFinding(id) {
   syncReviewLabel();
   workView.focus();
   if (decision) showEditFeedback('Kept as is', () => {
-    const saved = JSON.parse(docStorage.getItem('dismissed') || '[]');
+    const saved = safeJson(docStorage.getItem('dismissed'), []);
     docStorage.setItem('dismissed', JSON.stringify(saved.filter(item => JSON.stringify(item) !== JSON.stringify(decision))));
     if (workView.state.doc.toString() === document) { mergeFindings([finding]); syncReviewLabel(); }
     else setReviewStatus('Dismissal undone. Check again to cover the changed text.');
@@ -940,7 +976,7 @@ function clearReview() {
 // the request may have been in flight while the writer kept typing.
 function mergeFindings(rawFindings) {
   const document = workView.state.doc.toString();
-  const dismissed = JSON.parse(docStorage.getItem('dismissed') || '[]');
+  const dismissed = safeJson(docStorage.getItem('dismissed'), []);
   const filtered = (rawFindings || []).filter(finding =>
     !reviewFindings.some(item => findingRange(item.id) && item.code === finding.code && item.quote === finding.quote));
   const located = locateFindings(document, filtered)
@@ -1913,6 +1949,7 @@ function showSpellBubble(marker, x, y) {
   }
   actions.append(bubbleButton('Ignore', () => {
     spellChecker?.add(marker.quote);
+    noteSpellingAdded(marker.quote);
     workView.dispatch({ effects: refreshSpellFx.of(null) });
   }));
   markBubble.replaceChildren(actions);
@@ -3023,7 +3060,7 @@ const workView = new EditorView({
 loadSpellDictionary().then(spell => {
   spellChecker = spell;
   workView.dispatch({ effects: refreshSpellFx.of(null) });
-}).catch(() => {});
+}).catch(error => console.warn('[spell] dictionary unavailable —', error.message));
 
 // ─── Persist ───────────────────────────────────────────────────────────────────
 
@@ -3039,7 +3076,8 @@ new ResizeObserver(() => {
 // Workspace identity comes from the server path, never from the port or a
 // global browser draft. Conflicts pause writes until explicitly resolved.
 function saveSnapshot(label) {
-  const snapshots = JSON.parse(docStorage.getItem('snapshots') || '[]');
+  const snapshots = safeJson(docStorage.getItem('snapshots'), []);
+  if (!Array.isArray(snapshots)) return;
   snapshots.unshift({ text: workView.state.doc.toString(), at: new Date().toISOString(), label });
   docStorage.setItem('snapshots', JSON.stringify(snapshots.slice(0, 10)));
 }
@@ -3399,13 +3437,14 @@ document.getElementById('file-history').addEventListener('click', async () => {
   search.addEventListener('input', renderHistory);
   try {
     const { snapshots } = await api('/draft/history');
-    const local = JSON.parse(docStorage.getItem('snapshots') || '[]');
+    const local = safeJson(docStorage.getItem('snapshots'), []);
+    if (!Array.isArray(local)) throw new Error('Local history is corrupt');
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key.startsWith(documentKey + 'wa-working:') && !key.endsWith(':' + tabId)) {
-        const text = localStorage.getItem(key);
-        if (text !== current) local.push({ text, at: new Date().toISOString(), label: 'Copy from another tab' });
-      }
+      if (!key || !key.startsWith(documentKey + 'wa-working:') || key.endsWith(':' + tabId)) continue;
+      let text = null;
+      try { text = localStorage.getItem(key); } catch {}
+      if (typeof text === 'string' && text !== current) local.push({ text, at: new Date().toISOString(), label: 'Copy from another tab' });
     }
     versions = [...local, ...snapshots].sort((a, b) => b.at.localeCompare(a.at));
     renderHistory();

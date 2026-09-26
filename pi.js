@@ -25,7 +25,16 @@ const runtime = () => runtimePromise ??= ModelRuntime.create({ allowModelNetwork
   .catch(error => {
     // No network, or a provider that will not answer: the snapshot still works.
     console.warn('[pi] model catalog refresh failed, using the bundled list —', error.message);
+    // The in-flight assignment already happened; clear it so a later call
+    // retries instead of reusing this rejection.
+    runtimePromise = undefined;
     return ModelRuntime.create({ allowModelNetwork: false });
+  })
+  .catch(error => {
+    // Even the offline snapshot can fail. Never park a rejected promise in the
+    // cache — the next call must try again.
+    runtimePromise = undefined;
+    throw error;
   });
 
 const requestedThinking = () => THINKING_LEVELS.includes(process.env.PI_THINKING_LEVEL)

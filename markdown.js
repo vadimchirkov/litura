@@ -12,10 +12,9 @@ const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&
 const escapeHtml = text => text.replace(/[&<>"']/g, char => ESCAPES[char]);
 
 // NUL cannot appear in model output and survives escaping, so a stashed code
-// block never collides with ordinary prose like "I have 3 apples".
-const MARK = '\u0000';
-const PLACEHOLDER = new RegExp(`${MARK}(\\d+)${MARK}`, 'g');
-const IS_PLACEHOLDER = new RegExp(`^${MARK}\\d+${MARK}$`);
+// block never collides with ordinary prose like "I have 3 apples". If a model
+// ever does emit one, fall back to a private-use character that is absent.
+const MARKS = ['\u0000', '\uE000', '\uE001', '\uE002'];
 
 function inline(text) {
   return text
@@ -29,9 +28,9 @@ function inline(text) {
     .replace(/(^|[^_\w])_([^_\n]+)_(?![\w_])/g, '$1<em>$2</em>');
 }
 
-function block(text) {
+function block(text, isPlaceholder) {
   if (!text) return '';
-  if (IS_PLACEHOLDER.test(text)) return text;  // a fenced block stands alone
+  if (isPlaceholder.test(text)) return text;  // a fenced block stands alone
 
   const lines = text.split('\n');
   if (lines.every(line => /^\s*[-*+]\s+/.test(line))) {
@@ -47,17 +46,21 @@ function block(text) {
 }
 
 export function renderMarkdown(source) {
+  const raw = String(source ?? '');
+  const mark = MARKS.find(candidate => !raw.includes(candidate)) ?? MARKS[0];
   const stash = [];
-  const keep = html => `${MARK}${stash.push(html) - 1}${MARK}`;
+  const keep = html => `${mark}${stash.push(html) - 1}${mark}`;
+  const isPlaceholder = new RegExp(`^${mark}\\d+${mark}$`);
+  const placeholder = new RegExp(`${mark}(\\d+)${mark}`, 'g');
 
   // Lift code out before anything else, so emphasis rules never run inside it.
-  const text = escapeHtml(String(source ?? ''))
+  const text = escapeHtml(raw)
     .replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, body) => keep(`<pre><code>${body.replace(/\n$/, '')}</code></pre>`))
     .replace(/`([^`\n]+)`/g, (_, body) => keep(`<code>${body}</code>`));
 
   return text
     .split(/\n{2,}/)
-    .map(part => block(part.trim()))
+    .map(part => block(part.trim(), isPlaceholder))
     .join('')
-    .replace(PLACEHOLDER, (_, index) => stash[Number(index)]);
+    .replace(placeholder, (_, index) => stash[Number(index)]);
 }

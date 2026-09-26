@@ -6,7 +6,14 @@ npm-debug.log*
 /draft.md.litura-history
 /.claude
 /dist
+# Generated bundles: rebuilt by `npm run build` (frontend) and
+# `npm run build:artifact` (Lens demo). Sources stay tracked.
+/public/app.js
+/artifact/litura-lens.html
 /src-tauri/target
 # The Node runtime the desktop build ships: 120 MB, fetched by
 # scripts/fetch-node.mjs and checksummed against the release.
 /src-tauri/binaries
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

@@ -3,24 +3,28 @@
   src: url('/fonts/iAWriterDuoS-Regular.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
+  font-display: swap;
 }
 @font-face {
   font-family: 'iA Writer Duo';
   src: url('/fonts/iAWriterDuoS-Italic.woff2') format('woff2');
   font-weight: 400;
   font-style: italic;
+  font-display: swap;
 }
 @font-face {
   font-family: 'iA Writer Duo';
   src: url('/fonts/iAWriterDuoS-Bold.woff2') format('woff2');
   font-weight: 700;
   font-style: normal;
+  font-display: swap;
 }
 @font-face {
   font-family: 'iA Writer Duo';
   src: url('/fonts/iAWriterDuoS-BoldItalic.woff2') format('woff2');
   font-weight: 700;
   font-style: italic;
+  font-display: swap;
 }
 
 *, *::before, *::after {
@@ -409,47 +413,13 @@ html, body {
   background: var(--surface);
 }
 
-/* The rail floats in the margin the centred text column already leaves empty,
-   so a card appearing never moves a word. It is shown only when that margin
-   is wide enough to hold it; otherwise the focused card lives in the panel.
-   Single-card rule: only the focused remark stands here — the marks in the
-   draft are the overview — so one card gets the full width and the options
-   open inside it, beside the passage they would replace. Only the card
-   takes clicks — the margin below it still belongs to the editor. */
 /* The rail is retired: remarks stack in the chat stream at every width.
-   Belt and suspenders — the element stays hidden even if something unhides
-   it — until the panel and its styles are deleted outright. */
+   The element stays hidden even if something unhides it. */
 #rail { display: none !important; }
-.rail {
-  position: absolute;
-  top: 48px;
-  bottom: 0;
-  width: 300px;
-  padding-top: 28px;
-  overflow: hidden;
-  pointer-events: none;   /* left is set to the text column's right edge */
-}
-#rail > * {
-  position: absolute;
-  left: 0;
-  right: 0;
-  margin: 0;
-  pointer-events: auto;
-  transition: top .12s var(--ease);
-}
-
-/* Margin notes are read at a glance beside the line, so the card is quiet
-   until it is the one being worked on: name, why, then what to do. */
-#rail .chat-card { gap: 3px; padding: 10px 12px; font-size: 13px; max-height: calc(100vh - 220px); overflow-y: auto; }
-#rail .chat-card strong { color: var(--text); font-size: 13px; font-weight: 500; }
-#rail .chat-card span { color: var(--text-2); }
-#rail .chat-card small { color: var(--text-2); }
-#rail .chat-card small::before { content: '→ '; color: var(--muted); }
 
 /* Hovering a card lights the mark it belongs to. What is attached is already
    named in the composer chip, so the open card only needs a firmer edge to
    stand out among its neighbours — no color, just weight. */
-#rail .chat-card.is-active { border-color: var(--border-strong); }
 .cm-slop.is-hot { background: var(--remark-tint-hover); }
 
 /* Mark bubble: a compact segmented toolbar where the writer clicked — two
@@ -488,8 +458,6 @@ html, body {
 .mark-bubble-seg + .mark-bubble-seg { border-left: 1px solid var(--border); border-radius: 0 var(--r-pill) var(--r-pill) 0; }
 .mark-bubble-seg:first-child { border-radius: var(--r-pill) 0 0 var(--r-pill); }
 .mark-bubble-seg:only-child { border-radius: var(--r-pill); }
-
-#rail .chat-offer { margin-top: 7px; padding: 3px 10px; font-size: 12px; }
 
 /* Options live inside the remark they belong to. */
 .finding-variants { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
@@ -1109,7 +1077,7 @@ html, body {
 
 .chat-card-dismiss:hover { color: var(--text); background: var(--surface-2); }
 .finding-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-.finding-actions .chat-offer, #rail .finding-actions .chat-offer { margin-top: 0; min-height: 32px; }
+.finding-actions .chat-offer { margin-top: 0; min-height: 32px; }
 
 /* Offered, not spent: the rewrite request starts here, not on the underline */
 .chat-offer {
@@ -1447,11 +1415,6 @@ html, body {
    the applied text. It stays good until the passage changes under it. */
 .variant-undo-row { display: flex; margin-top: 8px; }
 .variant-undo-row .chat-again { align-self: flex-start; }
-
-/* Rail: same cards, tighter — they are margin notes, not the conversation. */
-#rail .chat-variants { gap: 6px; }
-#rail .variant-card { padding: 9px 12px 10px; font-size: 13px; }
-#rail .variant-hint { font-size: 11px; }
 
 /* Loading skeletons: same shape as the cards coming, so nothing jumps. */
 .skeleton {

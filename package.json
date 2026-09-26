@@ -45,6 +45,7 @@
     "start": "node index.js",
     "build": "esbuild src/app.js --bundle --outfile=public/app.js --format=iife",
     "build:server": "node scripts/build-server.mjs",
+    "build:artifact": "node scripts/build-artifact.mjs",
     "desktop:prepare": "npm run build && npm run build:server && node scripts/fetch-node.mjs",
     "desktop": "tauri dev",
     "desktop:build": "tauri build",
@@ -58,14 +59,14 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.84.2",
-    "@earendil-works/pi-coding-agent": "0.84.2"
+    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-coding-agent": "^0.87.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.9.1",
+    "@tauri-apps/cli": "^2.11.5",
     "codemirror": "^6.0.1",
     "dictionary-en": "^4.0.0",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "nspell": "^2.1.5"
   }
 }

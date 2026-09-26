@@ -92,7 +92,7 @@
          control brings it back, and the turns are still there. Own row above
          the stream — never overlapping cards or the composer. -->
     <button type="button" class="chat-clear" id="chat-clear" hidden aria-label="Close conversation" title="Close — the conversation is kept">×</button>
-    <div class="chat-stream" id="chat-stream"></div>
+    <div class="chat-stream" id="chat-stream" role="log" aria-label="Conversation"></div>
     <!-- Actions that spend a model call sit with the assistant, not in the
          header: the draft's frame stays the draft's. This row is part of the
          composer — it appears when the writer reaches for the field — and
@@ -122,7 +122,7 @@
 
   <!-- Mark bubble: explicit actions for a clicked mark or a selection.
         Reading arms nothing — attaching and rewriting live here. -->
-  <div id="mark-bubble" class="mark-bubble" hidden></div>
+  <div id="mark-bubble" class="mark-bubble" role="toolbar" aria-label="Passage actions" hidden></div>
 
   <!-- Editing confirmation toast. Lives at body level — not inside #chat, whose
        transform would capture fixed positioning — bottom-left, where neither

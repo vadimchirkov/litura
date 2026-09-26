@@ -25,6 +25,11 @@ assert.throws(() => store.write('overwrite', first.revision), error => error.sta
 const second = store.write('confirmed replacement', store.read().revision);
 assert(store.history().some(item => item.text === 'external edit'));
 assert(store.history().some(item => item.text === ''));
+// Corrupt snapshots must not hide the intact ones.
+fs.writeFileSync(path.join(temp, 'draft.md.litura-history', '1-abc.json'), 'not json');
+fs.writeFileSync(path.join(temp, 'draft.md.litura-history', '2-def.json'), JSON.stringify({ nope: true }));
+assert(store.history().every(item => typeof item.text === 'string' && typeof item.at === 'string' && typeof item.revision === 'string'));
+assert(store.history().some(item => item.text === 'external edit'));
 assert.notEqual(documentStore(path.join(temp, 'other.md')).read().id, second.id);
 const alias = path.join(temp, 'alias.md');
 fs.symlinkSync(filename, alias);

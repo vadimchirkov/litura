@@ -86,6 +86,14 @@ const TELL_PHRASES = [
 
 export const WORD_RE = /\p{L}[\p{L}\p{N}'’-]*/gu;
 
+// Precompiled global variants: styleMarkers/styleMetrics run on every keystroke,
+// so the patterns must not be rebuilt with `new RegExp` on each call.
+const TELL_PHRASE_RES = TELL_PHRASES.map(([pattern, reason, fix]) => ({
+  re: new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`),
+  reason,
+  fix,
+}));
+
 // The word lists are English. On a Cyrillic or other non-Latin draft they would
 // report zero tells, so callers must not gate on a score that cannot see them.
 export function isLatinScript(text) {
@@ -98,8 +106,8 @@ export function isLatinScript(text) {
 // own any tell words inside them, so one expression gets one underline.
 export function styleMarkers(text) {
   if (!isLatinScript(text)) return [];
-  const phrases = TELL_PHRASES.flatMap(([pattern, reason, fix]) =>
-    [...text.matchAll(new RegExp(pattern.source, pattern.flags + 'g'))]
+  const phrases = TELL_PHRASE_RES.flatMap(({ re, reason, fix }) =>
+    [...text.matchAll(re)]
       .map(match => ({ from: match.index, to: match.index + match[0].length, quote: match[0], reason, fix })));
   const words = [...text.matchAll(WORD_RE)]
     .filter(match => TELL_WORDS_STRONG.includes(match[0].toLowerCase()) || TELL_WORDS_WEAK.includes(match[0].toLowerCase()))
@@ -167,9 +175,9 @@ export function styleMetrics(text) {
 
   const strongHits = words.filter(word => TELL_WORDS_STRONG.includes(word));
   const weakHits = words.filter(word => TELL_WORDS_WEAK.includes(word));
-  // The matched text itself, not the pattern — a score the writer cannot trace
-  // back to words in their own draft is just a number to argue with.
-  const phraseHits = TELL_PHRASES.map(([pattern]) => text.match(pattern)?.[0]).filter(Boolean);
+  // Every occurrence, not just the first per pattern: a repeated tell reads
+  // worse than a single one, and the header count must match the marks.
+  const phraseHits = TELL_PHRASE_RES.flatMap(({ re }) => [...text.matchAll(re)].map(match => match[0]));
   const strong = strongHits.length;
   const weak = weakHits.length;
   const phrases = phraseHits.length;
@@ -273,9 +281,35 @@ export function trimOverlap(prefix, suggestion) {
 
 // Sentences that are finished, with offsets. A trailing fragment with no
 // terminal punctuation is still being typed and is deliberately left out.
-// ponytail: naive split, "т.д." and "Dr." break it — swap in Intl.Segmenter
-// if false splits ever cost a real review.
+//
+// Intl.Segmenter knows abbreviations the naive split does not ("т.д." stays
+// whole); what it still splits ("Dr.") it splits the same way the old regex
+// did, so this is strictly closer to real sentences. Offsets point at the
+// first non-space character of each sentence.
+let segmenter;
+function sentenceSegmenter() {
+  if (segmenter !== undefined) return segmenter;
+  try {
+    segmenter = typeof Intl !== 'undefined' && Intl.Segmenter
+      ? new Intl.Segmenter(undefined, { granularity: 'sentence' })
+      : null;
+  } catch { segmenter = null; }
+  return segmenter;
+}
+
 export function completedSentences(document) {
+  const seg = sentenceSegmenter();
+  if (seg) {
+    const out = [];
+    for (const { segment, index } of seg.segment(document)) {
+      if (!/[.!?…]["'»”’)\]]*\s*$/.test(segment)) continue;
+      const text = segment.trim();
+      if (!text) continue;
+      const from = index + segment.indexOf(text);
+      out.push({ text, from, to: from + text.length });
+    }
+    return out;
+  }
   return [...document.matchAll(/[^.!?…\n]*[.!?…]+["'»”’)\]]*/g)]
     .map(match => ({ text: match[0].trim(), from: match.index, to: match.index + match[0].length }))
     .filter(sentence => sentence.text.length > 0);

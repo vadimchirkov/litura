@@ -5,7 +5,7 @@ import nspell from 'nspell';
 import { clampThinkingLevel } from '@earendil-works/pi-ai';
 import { getAgentStatus } from './pi.js';
 import { renderMarkdown } from './markdown.js';
-import { spellingMarkers } from './spellcheck.js';
+import { spellingMarkers, noteSpellingAdded } from './spellcheck.js';
 import {
   completedSentences, findingContext, isLatinScript, locateFindings, markSelection, mergeReviewFindings,
   parseReviewResponse, parseVariants, selectionSlot, styleMarkers, styleMetrics, styleScore, trimOverlap,
@@ -94,6 +94,11 @@ assert.equal(
   '<p>&lt;img src=x onerror=alert(1)&gt;</p>',
 );
 assert.equal(renderMarkdown('[x](javascript:alert(1))'), '<p>[x](javascript:alert(1))</p>');
+assert(!renderMarkdown('[x](data:text/html,hi)').includes('<a '));
+assert(!renderMarkdown('<svg onload=alert(1)>').includes('<svg'));
+assert(!renderMarkdown('[x](vbscript:msgbox(1))').includes('<a '));
+// A NUL in model output must not collide with the code-block placeholder.
+assert(renderMarkdown('a `code\u0000x` b').includes('<code>code\u0000x</code>'));
 assert(renderMarkdown('[docs](https://a.dev)').includes('<a href="https://a.dev"'));
 
 assert.equal(renderMarkdown('**bold** and *thin*'), '<p><strong>bold</strong> and <em>thin</em></p>');
@@ -149,6 +154,12 @@ assert.deepEqual(styleMetrics('Rent had doubled since 2019.').hits, []);
 
 // Every mark navigates to its exact occurrence, including UTF-16 offsets and
 // repeated phrases. Nested dictionary words do not double-mark a phrase.
+// A repeated tell counts twice: the score must match the marks.
+assert.equal(styleMetrics('Studies show that teams ship faster. Studies show that morale rises.').tells, 2);
+assert.deepEqual(
+  styleMarkers('Studies show that teams ship faster. Studies show that morale rises.').map(marker => marker.quote),
+  ['Studies show', 'Studies show'],
+);
 {
   const text = '✍️ A testament to ROBUST tools. A testament to robust tools.';
   const markers = styleMarkers(text);
@@ -190,6 +201,10 @@ assert.equal(isLatinScript('Пекарня закрылась в марте'), f
   assert.deepEqual(spellingMarkers('Clean prose with no errors here.', spell), []);
   assert.deepEqual(spellingMarkers('Пекарня закрылась в марте', spell), []);
   assert.deepEqual(spellingMarkers('any text', null), []);
+  // Ignore teaches the dictionary; the cached verdict must follow, not linger.
+  spell.add('sentnce');
+  noteSpellingAdded('sentnce');
+  assert.deepEqual(spellingMarkers('This sentnce has a typo.', spell), []);
 }
 
 // A restated tail is cut; an ordinary continuation is left alone.
@@ -230,7 +245,12 @@ assert.deepEqual(
   completedSentences('One done. Two done! Three unfinished').map(s => s.text),
   ['One done.', 'Two done!'],
 );
-assert.equal(completedSentences('One done. Two done!')[1].from, 9);
+assert.equal(completedSentences('One done. Two done!')[1].from, 10);
+// Abbreviations stay whole: the naive split broke "т.д." into a sentence.
+assert.deepEqual(
+  completedSentences('Купил хлеб т.д. и молоко. Пошел домой.').map(s => s.text),
+  ['Купил хлеб т.д. и молоко.', 'Пошел домой.'],
+);
 
 const status = await getAgentStatus();
 assert(Array.isArray(status.providers));

@@ -24,8 +24,16 @@ export function documentStore(filename) {
     let files;
     try { files = fs.readdirSync(historyDir); }
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-    return files.filter(name => /^\d+-[a-f0-9-]+\.json$/.test(name)).sort().reverse().slice(0, 20)
-      .map(name => JSON.parse(fs.readFileSync(path.join(historyDir, name), 'utf8')));
+    const items = [];
+    for (const name of files.filter(name => /^\d+-[a-f0-9-]+\.json$/.test(name)).sort().reverse().slice(0, 20)) {
+      try {
+        const item = JSON.parse(fs.readFileSync(path.join(historyDir, name), 'utf8'));
+        if (item && typeof item.text === 'string' && typeof item.at === 'string' && typeof item.revision === 'string') items.push(item);
+      } catch {
+        // One corrupt snapshot must not hide the rest of the history.
+      }
+    }
+    return items;
   }
   function write(text, revision) {
     if (typeof text !== 'string' || typeof revision !== 'string') throw Object.assign(new Error('text and revision are required strings'), { status: 400 });

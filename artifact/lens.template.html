@@ -1,0 +1,358 @@
+<!-- Generated into litura-lens.html by scripts/build-artifact.mjs. Edit this, not the output. -->
+<div id="lens">
+  <style>
+    #lens {
+      --bg: #f7f5f0; --surface-2: #f0ede5; --surface-3: #e6e2d8;
+      --border: #0000001a; --border-subtle: #0000000d;
+      --text: #0d0d0d; --text-2: #5d5d5d; --muted: #707070;
+      --accent: #316ecf; --danger: #911e1b; --ok: #367f3e;
+      --remark: #9a5b00;
+      --remark-tint: color-mix(in srgb, var(--remark) 10%, transparent);
+      --remark-line: color-mix(in srgb, var(--remark) 45%, transparent);
+      --font: ui-monospace, Menlo, Monaco, 'Courier New', monospace;
+      --ui-font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      display: flex; flex-direction: column; height: 100vh;
+      background: var(--bg); color: var(--text); font-family: var(--ui-font);
+    }
+    #lens * { box-sizing: border-box; margin: 0; }
+    #lens header {
+      display: flex; align-items: center; gap: 14px;
+      padding: 10px 16px; border-bottom: 1px solid var(--border-subtle);
+    }
+    .name { font-weight: 600; letter-spacing: .01em; }
+    .name span { color: var(--muted); font-weight: 400; }
+    .stat { color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+    .score { display: inline-flex; align-items: baseline; gap: 5px; }
+    .score b { font-size: 15px; font-weight: 600; }
+    .spacer { flex: 1; }
+    button {
+      min-height: 30px; padding: 5px 12px; border: 1px solid var(--border);
+      border-radius: 999px; background: var(--surface-2); color: var(--text);
+      font: inherit; font-size: 13px; cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--surface-3); }
+    button:disabled { opacity: .5; cursor: default; }
+    button.primary { background: var(--text); color: var(--bg); border-color: transparent; }
+    button.primary:hover:not(:disabled) { background: #333; }
+
+    main { display: flex; flex: 1; min-height: 0; }
+    .sheet { position: relative; flex: 1; min-width: 0; }
+    #marks, #draft {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      padding: 28px 32px; border: 0; outline: none; resize: none;
+      font-family: var(--font); font-size: 15px; line-height: 1.75;
+      white-space: pre-wrap; overflow-wrap: break-word; overflow-y: auto;
+    }
+    #marks { pointer-events: none; color: transparent; }
+    #draft { background: transparent; color: var(--text); caret-color: var(--text); }
+    #marks mark {
+      color: transparent; background: none;
+      border-bottom: 1.5px dotted var(--remark-line);
+    }
+    #marks mark.finding { background: var(--remark-tint); border-bottom: 1.5px solid var(--remark); border-radius: 2px; }
+    #marks mark.current { background: color-mix(in srgb, var(--remark) 22%, transparent); }
+
+    aside {
+      width: 340px; flex-shrink: 0; padding: 14px; overflow-y: auto;
+      border-left: 1px solid var(--border-subtle);
+    }
+    .note { color: var(--muted); font-size: 12.5px; line-height: 1.5; padding: 4px 2px 10px; }
+    .card {
+      padding: 11px 12px; margin-bottom: 8px;
+      border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+      cursor: pointer;
+    }
+    .card.current { border-color: var(--remark); }
+    .card .pattern { font-size: 12px; font-weight: 600; color: var(--remark); text-transform: lowercase; }
+    .card .quote { font-family: var(--font); font-size: 12.5px; margin: 5px 0; color: var(--text); }
+    .card .reason, .card .fix { font-size: 12.5px; line-height: 1.45; color: var(--text-2); }
+    .card .fix { color: var(--muted); margin-top: 3px; }
+    .card .row { display: flex; gap: 6px; margin-top: 9px; }
+    .card .row button { min-height: 26px; padding: 3px 10px; font-size: 12px; }
+    .variant {
+      display: block; width: 100%; text-align: left; margin-top: 6px; padding: 8px 10px;
+      border-radius: 8px; background: #fff; border-color: var(--border-subtle);
+      font-family: var(--font); font-size: 12.5px; line-height: 1.5; white-space: normal;
+    }
+    .variant:hover { border-color: var(--ok); }
+    /* An artifact often opens in a side panel, not a window. Below a usable
+       two-column width the panel goes under the sheet instead of crushing it. */
+    @media (max-width: 720px) {
+      main { flex-direction: column; }
+      .sheet { flex: 1 1 55%; min-height: 240px; }
+      aside { width: auto; border-left: 0; border-top: 1px solid var(--border-subtle); }
+      #marks, #draft { padding: 18px 20px; }
+    }
+    #status { padding: 6px 2px; font-size: 12.5px; color: var(--muted); min-height: 22px; }
+    #status.error { color: var(--danger); }
+    .hits { padding: 2px 2px 12px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .hits code { font-family: var(--font); background: var(--surface-3); padding: 1px 4px; border-radius: 3px; }
+  </style>
+
+  <header>
+    <div class="name">Litura <span>Lens</span></div>
+    <div class="stat" id="words">0 words</div>
+    <div class="stat score" id="score-box" title="0 reads clean, 100 is every axis maxed"><b id="score">0</b> style score</div>
+    <div class="spacer"></div>
+    <button id="review" class="primary">Review</button>
+  </header>
+
+  <main>
+    <div class="sheet">
+      <div id="marks" aria-hidden="true"></div>
+      <textarea id="draft" spellcheck="false"></textarea>
+    </div>
+    <aside>
+      <div class="note" id="note"></div>
+      <div id="status"></div>
+      <div class="hits" id="hits"></div>
+      <div id="cards"></div>
+    </aside>
+  </main>
+</div>
+
+<script>
+/*__CORE__*/
+
+// ── Demo shell ───────────────────────────────────────────────────────────────
+//
+//  Everything above this line is Litura's own scoring and review prompt,
+//  inlined verbatim. Below is the artifact-sized wrapper around it: a textarea
+//  instead of CodeMirror, window.claude.complete instead of a model server, and
+//  no persistence at all — the artifact sandbox has no storage and no disk.
+
+// Copied from index.js, which is Node-bound and cannot be inlined.
+const NO_SLOP =
+  'Never produce throat-clearing, vague attribution ("experts agree", "studies show"), empty puffery, ' +
+  'faux insight, generic filler, "not just X, but Y" contrasts, robotic parallel rhythm, ' +
+  'dramatic one-word fragments, stacked hedging, or decorative emphasis. Prefer concrete, specific wording over general claims. ' +
+  'Do not give tools or abstractions human understanding or intent. Never invent evidence, sources, numbers or quotations. Preserve factual uncertainty. ';
+
+const SAMPLE = `In today's fast-paced world, every organisation must leverage data to stay competitive.
+
+Studies show that companies who delve into their metrics achieve groundbreaking results. The dashboard understands what matters to each team and surfaces it seamlessly. This is a testament to the transformative power of modern analytics. It is important to note that adoption remains crucial. Experts agree that the interplay between tooling and culture is multifaceted. Teams should therefore invest in robust platforms that foster a vibrant data culture.
+
+At the end of the day, the real question is not just whether you have data, but whether you use it.`;
+
+const $ = id => document.getElementById(id);
+const draft = $('draft'), marks = $('marks'), cards = $('cards'), status = $('status');
+
+let findings = [];      // model findings, located: { code, quote, pattern, reason, fix, from, to }
+let current = -1;       // index into findings, for F8 stepping
+let busy = false;
+
+const hasModel = typeof window !== 'undefined' && typeof window.claude?.complete === 'function';
+$('note').textContent = hasModel
+  ? 'Paste a draft. Local signals update as you type and cost nothing; Review asks the model for named structure and prose findings. Nothing is stored — this text lives in the tab.'
+  : 'Model calls need the Claude artifact runtime, so Review is off here. Local signals below work anywhere.';
+$('review').disabled = !hasModel;
+
+const escape = text => text.replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+
+// One underline per span. Model findings win any overlap: a named finding says
+// more than "this word can sound generic".
+function paint(text) {
+  const ranges = [...findings.map((f, i) => ({ ...f, cls: i === current ? 'finding current' : 'finding' })),
+                  ...styleMarkers(text)
+                    .filter(m => !findings.some(f => m.from < f.to && m.to > f.from))
+                    .map(m => ({ ...m, cls: '' }))]
+    .sort((a, b) => a.from - b.from);
+  let html = '', at = 0;
+  for (const range of ranges) {
+    if (range.from < at) continue;
+    html += escape(text.slice(at, range.from)) + `<mark class="${range.cls}">${escape(text.slice(range.from, range.to))}</mark>`;
+    at = range.to;
+  }
+  // The trailing newline a textarea keeps needs something after it, or the
+  // backdrop comes up one line short of the caret.
+  marks.innerHTML = html + escape(text.slice(at)) + '\n';
+}
+
+function render() {
+  const text = draft.value;
+  const result = styleScore(text);
+  $('words').textContent = `${result.words} ${result.words === 1 ? 'word' : 'words'}`;
+  $('score').textContent = result.score;
+  $('score-box').title = result.structural
+    ? '0 reads clean, 100 is every axis maxed'
+    : 'Short passage — lexical signals only, structure needs 40+ words';
+  $('hits').innerHTML = result.hits.length
+    ? 'Local tells: ' + result.hits.map(hit => `<code>${escape(hit)}</code>`).join(' ')
+    : (isLatinScript(text) ? '' : 'Local word lists are English — this draft scores on structure only.');
+  paint(text);
+  renderCards();
+}
+
+function renderCards() {
+  cards.innerHTML = '';
+  findings.forEach((finding, index) => {
+    const card = document.createElement('div');
+    card.className = index === current ? 'card current' : 'card';
+    card.innerHTML = `
+      <div class="pattern">${escape(finding.pattern)}</div>
+      <div class="quote">“${escape(finding.quote)}”</div>
+      <div class="reason">${escape(finding.reason)}</div>
+      <div class="fix">${escape(finding.fix)}</div>
+      <div class="row"></div>`;
+    const row = card.querySelector('.row');
+    const options = document.createElement('button');
+    options.textContent = 'Options';
+    options.disabled = !hasModel;
+    options.onclick = event => { event.stopPropagation(); offerVariants(finding, card, options); };
+    const dismiss = document.createElement('button');
+    dismiss.textContent = 'Dismiss';
+    dismiss.onclick = event => {
+      event.stopPropagation();
+      findings = findings.filter(other => other !== finding);
+      current = -1;
+      render();
+    };
+    row.append(options, dismiss);
+    card.onclick = () => { current = index; focusFinding(finding); render(); };
+    cards.append(card);
+  });
+}
+
+function focusFinding(finding) {
+  draft.focus();
+  draft.setSelectionRange(finding.from, finding.to);
+  // setSelectionRange does not scroll a textarea; the backdrop tracks it.
+  const ratio = finding.from / Math.max(1, draft.value.length);
+  draft.scrollTop = Math.max(0, ratio * draft.scrollHeight - draft.clientHeight / 2);
+  marks.scrollTop = draft.scrollTop;
+}
+
+function say(message, isError = false) {
+  status.textContent = message;
+  status.className = isError ? 'error' : '';
+}
+
+// window.claude.complete takes one string: no system role, no streaming, no
+// abort, no model or thinking-level choice. Both prompts go in one turn.
+const complete = (system, user) => window.claude.complete(`${system}\n\n---\n\n${user}`);
+
+// ── Review ───────────────────────────────────────────────────────────────────
+//
+//  The real app runs two passes — global structure, then local prose — and
+//  merges them. Two sequential calls here, for the same reason: one prompt
+//  holding every level reports the same break at three of them.
+//
+async function review() {
+  const document_ = draft.value.trim();
+  if (!document_ || busy) return;
+  busy = true;
+  $('review').disabled = true;
+  findings = [];
+  current = -1;
+  render();
+
+  const user = buildReviewUser({ document: document_ });
+  const groups = [];
+  const failed = [];
+  for (const phase of ['global', 'local']) {
+    say(`Reviewing — ${phase} pass…`);
+    const system = buildReviewTask({ targeted: false, phase });
+    const allowed = reviewCodesForPass(false, phase);
+    // A malformed answer should cost a second call, not show a parser error.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const parsed = parseReviewResponse(await complete(system, user));
+        validateReviewFindings(parsed, allowed, document_);
+        groups.push(parsed);
+        break;
+      } catch (error) {
+        if (attempt === 2) failed.push(`${phase}: ${error.message}`);
+      }
+    }
+  }
+
+  findings = locateFindings(draft.value, mergeReviewFindings(groups));
+  busy = false;
+  $('review').disabled = !hasModel;
+  say(failed.length ? failed.join(' · ') : `${findings.length || 'No'} finding${findings.length === 1 ? '' : 's'}.`, failed.length > 0);
+  render();
+}
+
+// ── Replace in place ─────────────────────────────────────────────────────────
+async function offerVariants(finding, card, button) {
+  button.disabled = true;
+  button.textContent = 'Asking…';
+  const document_ = draft.value;
+  const system =
+    'You are a writing assistant. Generate exactly 3 different replacements for the SELECTED TEXT ' +
+    'and nothing else. Each variant must be distinct in phrasing and approach. ' +
+    'The document is context: it shows where the selection sits and must not be rewritten, ' +
+    `summarised, or included in your output. The selection is marked ${SELECT_OPEN}like this${SELECT_CLOSE} inside it. ` +
+    `Each variant is substituted for the marked span alone — it fills the ${SELECT_SLOT} gap in the sentence shown below it: ` +
+    'never restate, absorb, or repeat any words outside the markers, and keep roughly the length of the selection. ' +
+    'Follow the instruction — it names the specific problem this replacement has to fix. ' +
+    NO_SLOP +
+    'Never invent sources, numbers, dates, quotes, evidence, or stronger certainty. If evidence is missing, preserve uncertainty or ask for a source. ' +
+    'Return ONLY a JSON array with exactly 3 strings: ["variant1","variant2","variant3"]. ' +
+    'No markdown fences, no commentary, no explanation — just the raw JSON array.';
+  const slot = selectionSlot(document_, finding.quote, finding.from);
+  const user = [
+    `SELECTED TEXT — replace exactly this, nothing more:\n${finding.quote}`,
+    `INSTRUCTION:\n${finding.fix}`,
+    slot ? `EACH VARIANT FILLS ${SELECT_SLOT} AND MUST READ CORRECTLY IN PLACE:\n${slot}` : '',
+    `DOCUMENT (context only — do not rewrite it):\n${markSelection(document_, finding.quote, finding.from)}`,
+  ].filter(Boolean).join('\n\n---\n\n');
+
+  try {
+    const variants = parseVariants(await complete(system, user));
+    const limit = variantLimit(finding.quote);
+    button.textContent = 'Try again';
+    button.disabled = false;
+    card.querySelectorAll('.variant').forEach(node => node.remove());
+    for (const variant of variants) {
+      const option = document.createElement('button');
+      option.className = 'variant';
+      // A variant several times the length of the selection is the
+      // whole-document rewrite failure, not a stylistic choice.
+      option.textContent = variant.length > limit ? variant.slice(0, limit) + '…' : variant;
+      option.onclick = event => { event.stopPropagation(); apply(finding, variant); };
+      card.append(option);
+    }
+  } catch (error) {
+    button.textContent = 'Options';
+    button.disabled = false;
+    say(error.message, true);
+  }
+}
+
+function apply(finding, variant) {
+  const text = draft.value;
+  if (text.slice(finding.from, finding.to) !== finding.quote) { say('The draft moved under this finding.', true); return; }
+  draft.value = text.slice(0, finding.from) + variant + text.slice(finding.to);
+  // Every other finding just shifted. Re-anchoring by quote is what the app
+  // does after any edit, and it drops findings the rewrite swallowed.
+  findings = locateFindings(draft.value, findings.filter(other => other !== finding));
+  current = -1;
+  say('Replaced.');
+  render();
+}
+
+// ── Wiring ───────────────────────────────────────────────────────────────────
+let timer;
+draft.addEventListener('input', () => {
+  clearTimeout(timer);
+  timer = setTimeout(() => { findings = locateFindings(draft.value, findings); render(); }, 200);
+});
+draft.addEventListener('scroll', () => { marks.scrollTop = draft.scrollTop; marks.scrollLeft = draft.scrollLeft; });
+$('review').onclick = review;
+
+// F8 steps findings, as in the app. The textarea owns the caret, so the step
+// moves the selection rather than a highlight.
+document.addEventListener('keydown', event => {
+  if (event.key !== 'F8' || !findings.length) return;
+  event.preventDefault();
+  current = current < 0
+    ? (event.shiftKey ? findings.length - 1 : 0)
+    : (current + (event.shiftKey ? -1 : 1) + findings.length) % findings.length;
+  focusFinding(findings[current]);
+  render();
+});
+
+draft.value = SAMPLE;
+render();
+</script>
