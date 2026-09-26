@@ -25,9 +25,9 @@ import { replacementTarget, newerVersion } from '../editing.js';
 import { locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
 import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
-import { hydrateIcons, icon } from './icons.js';
+import { hydrateIcons } from './icons.js';
 
-// Static markup names Phosphor icons with <span class="ph" data-icon="…">;
+// Static markup names Tabler icons with <span class="ph" data-icon="…">;
 // this fills them from the single map in icons.js.
 hydrateIcons();
 
@@ -3384,6 +3384,17 @@ function formatFileSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+// Card timestamp: short relative age, falling back to a date past a month.
+function timeAgo(iso) {
+  const at = new Date(iso).getTime();
+  if (!at) return '';
+  const seconds = Math.max(0, (Date.now() - at) / 1000);
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 30 * 86400) return `${Math.floor(seconds / 86400)}d ago`;
+  return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
 function setSidebar(open, persist = true) {
   sidebar.hidden = !open;
   sidebarToggle.setAttribute('aria-expanded', String(open));
@@ -3406,11 +3417,22 @@ function renderFileList() {
     const item = document.createElement('li');
     const row = document.createElement('button');
     row.type = 'button';
+    row.className = 'file-card';
+    // The card shows name, age and excerpt; the size stays in the tooltip.
     row.title = `${file.name} · ${formatFileSize(file.size)}`;
     if (file.name === documentName) row.setAttribute('aria-current', 'true');
-    row.innerHTML = `<span class="ph" aria-hidden="true">${icon('file-text')}</span><span class="file-name"></span><span class="file-size"></span>`;
-    row.querySelector('.file-name').textContent = file.name;
-    row.querySelector('.file-size').textContent = formatFileSize(file.size);
+    const top = chatEl('span', 'file-card-top');
+    const name = chatEl('span', 'file-name', '');
+    name.textContent = file.name;
+    const meta = chatEl('span', 'file-meta', '');
+    meta.textContent = timeAgo(file.mtime);
+    top.append(name, meta);
+    row.append(top);
+    if (file.excerpt) {
+      const excerpt = chatEl('span', 'file-excerpt', '');
+      excerpt.textContent = file.excerpt;
+      row.append(excerpt);
+    }
     row.addEventListener('click', () => openWorkspaceFile(file.name));
     item.append(row);
     fileList.append(item);

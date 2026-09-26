@@ -1,11 +1,11 @@
-Phosphor Icons — https://github.com/phosphor-icons/homepage#phosphor-icons
-Copyright (c) Phosphor Icons, MIT License.
-Source files: https://github.com/phosphor-icons/core (assets/duotone),
-packaged as @phosphor-icons/core on npm. Vendored 2026-09-26, version 2.1.1.
+Tabler Icons — https://github.com/tabler/tabler-icons
+Copyright (c) Tabler Icons, MIT License.
+Source files: https://github.com/tabler/tabler-icons (icons/outline),
+packaged as @tabler/icons on npm. Vendored 2026-09-26, version 3.48.0.
 
 MIT License
 
-Copyright (c) 2020 Phosphor Icons
+Copyright (c) 2020-2026 Tabler Icons
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
