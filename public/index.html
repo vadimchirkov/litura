@@ -10,6 +10,17 @@
        window buttons float over this header, which has to leave them room —
        inline, so the header is never painted at the browser's padding first. -->
   <script>if (new URLSearchParams(location.search).has('shell')) document.documentElement.classList.add('shell-desktop');</script>
+  <!-- Pre-paint sidebar state: the persisted open/closed value must be on the
+       root before first paint, or the width transition replays the collapse
+       as a visible blink on every reload. setSidebar() re-asserts the same
+       values after, so no transition fires.
+
+       The same test as setSidebar()'s, and it has to be the same test: this
+       one used to read "anything but closed means open", which disagreed with
+       the app's "only open means open" for a first visit with nothing stored.
+       Nothing flashed only because this script is synchronous and runs first;
+       the two answers still have to match. -->
+  <script>try { document.documentElement.dataset.sidebar = localStorage.getItem('wa-sidebar') === 'open' ? 'open' : 'closed'; } catch {}</script>
 </head>
 <body>
   <div class="app" id="app">
@@ -20,10 +31,10 @@
       The header keeps one control — the toggle below.
     -->
     <aside class="sidebar" id="sidebar" aria-label="Workspace files">
-      <div class="sidebar-head">
-        <span class="sidebar-title">Files</span>
-        <button type="button" id="file-refresh" class="icon-button icon-button-sm" title="Refresh file list" aria-label="Refresh file list">
-          <span class="ph" data-icon="arrows-clockwise" aria-hidden="true"></span>
+      <div class="sidebar-inner">
+      <div class="sidebar-head" id="sidebar-head">
+        <button type="button" id="sidebar-toggle-side" class="icon-button sidebar-toggle" aria-controls="sidebar" aria-expanded="true" title="Files" aria-label="Toggle file sidebar">
+          <span class="ph" data-icon="sidebar" aria-hidden="true"></span>
         </button>
       </div>
       <div class="sidebar-search">
@@ -31,14 +42,23 @@
         <input id="file-filter" type="search" placeholder="Filter files" aria-label="Filter files" autocomplete="off" spellcheck="false">
       </div>
       <ul class="file-list" id="file-list"></ul>
-      <div class="sidebar-actions">
+      <div class="sidebar-actions" aria-label="File actions">
+        <div class="sidebar-label" aria-hidden="true">Actions</div>
         <button type="button" id="file-new"><span class="ph" data-icon="file-plus" aria-hidden="true"></span>New</button>
         <button type="button" id="file-open"><span class="ph" data-icon="upload-simple" aria-hidden="true"></span>Open a file…</button>
         <input id="file-input" type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
         <button type="button" id="file-export"><span class="ph" data-icon="download-simple" aria-hidden="true"></span>Save as new…</button>
         <button type="button" id="file-history"><span class="ph" data-icon="clock-counter-clockwise" aria-hidden="true"></span>History</button>
       </div>
+      </div>
     </aside>
+
+    <!-- Only ever seen below 640px, where the sidebar floats over the draft
+         instead of squeezing it. Its whole job is to be the click-outside and
+         the light-dismiss: the panel has no other way out from there. It is a
+         sibling, not a child — a fixed element inside the animating aside
+         would escape the clip and cover the window while the panel is closed. -->
+    <div class="sidebar-scrim" id="sidebar-scrim" aria-hidden="true"></div>
 
     <!--
       The working pane uses CodeMirror 6 instead of a textarea.
@@ -51,8 +71,8 @@
            file lives there, so the header shows no label for it. Everything
            about the review lives next to the Review button; status text sits
            where the action that produced it is. -->
-      <div class="pane-header">
-        <button type="button" id="sidebar-toggle" class="icon-button" aria-controls="sidebar" aria-expanded="true" title="Files" aria-label="Toggle file sidebar">
+      <div class="pane-header" id="pane-header">
+        <button type="button" id="sidebar-toggle" class="icon-button sidebar-toggle" aria-controls="sidebar" aria-expanded="true" title="Files" aria-label="Toggle file sidebar">
           <span class="ph" data-icon="sidebar" aria-hidden="true"></span>
         </button>
         <!-- Only shown when a newer version exists. Clicking it copies the
@@ -84,6 +104,26 @@
             <span class="ph" data-icon="gear" aria-hidden="true"></span>
           </button>
         </div>
+      </div>
+      <!-- Drift banner: the file changed on disk while the draft has unsent
+           edits of its own. A bar, not a modal — the draft stays editable and
+           only disk writes wait. Load disk takes the file; Keep mine keeps
+           typing and overwrites on the next save (a disk backup is kept).
+
+           The live region is the sentence, not the bar: a status role wraps
+           everything inside it, and what is inside here is two buttons and a
+           disclosure. Announcing the container would read the controls out
+           along with the news. -->
+      <div class="drift-banner" id="drift-banner" hidden>
+        <span class="drift-text" role="status">This file changed on disk.</span>
+        <div class="drift-actions">
+          <button type="button" id="drift-load" class="review-action">Load disk</button>
+          <button type="button" id="drift-keep" class="review-action is-primary">Keep mine</button>
+        </div>
+        <details class="drift-diff" id="drift-diff">
+          <summary>What changed</summary>
+          <div class="drift-diff-body" id="drift-diff-body"></div>
+        </details>
       </div>
       <div id="editor-wrapper"></div>
       <!-- Remarks about a place in the text stand next to that place. Below
@@ -136,9 +176,8 @@
         Reading arms nothing — attaching and rewriting live here. -->
   <div id="mark-bubble" class="mark-bubble" role="toolbar" aria-label="Passage actions" hidden></div>
 
-  <!-- Editing confirmation toast. Lives at body level — not inside #chat, whose
-       transform would capture fixed positioning — bottom-left, where neither
-       the centred draft nor the right-side rail usually are. -->
+  <!-- The one notice (notify() in app.js). Lives at body level — not inside #chat, whose
+       transform would capture fixed positioning — centred just above it. -->
   <div id="edit-feedback" class="edit-feedback" role="status" hidden></div>
 
   <dialog id="settings-dialog" class="settings-dialog">

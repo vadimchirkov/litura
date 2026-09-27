@@ -44,7 +44,7 @@ The current product has one working-document pane and a file sidebar. There is n
 One row, and nothing in it spends a model call. Everything about the file lives in the sidebar behind the sidebar toggle, and the local score sits at the far end. The header is the frame the draft is read in — it carries no file name and no status line of its own.
 
 - Sidebar toggle opening the file sidebar: the list of Markdown and text files next to the draft, a filter, and `New`, `Open a file…`, `Save as new…`, `History`. Opening a listed file replaces the workspace draft at once — the click is the intent, and the previous text is kept in History.
-- Save trouble — a save error, or a paused autosave after a conflict — is reported in the chat stream, where the writer is already reading. Routine saves are silent.
+- Save trouble — a save error, or disk writes waiting on an unresolved divergence — is named where the writer is already reading. Routine saves are silent.
 - Local style signals, labelled `Style` with a count of marked passages, when the draft is predominantly Latin script. Hidden otherwise.
 - Settings button.
 
@@ -163,6 +163,8 @@ Editing inside the attached passage ends the attachment and cancels an in-flight
 
 Clicking any finding shows its card and offers a bubble with `Add to context` and `Suggest rewrites`. It makes no model request: the card carries a single `Options` control, and reading the remark and fixing the sentence by hand is a complete outcome. Clicking the same mark again returns to its card rather than repeating the remark.
 
+The bubble is placed inside the writing pane and below the header, never over the sidebar or the fixed header band: a toolbar a chrome layer covers is a toolbar that looks present and swallows the click meant for it. It is anchored to the words it was raised on: a scroll, the panel opening under it or a window resize carries it along with them, and it hides while they are scrolled out of the pane. Only an edit, which may remove those words, takes it away.
+
 There is one replacement scope, and it is the quoted passage. The tint in the draft and the range a rewrite would replace are the same span, so a finding never silently rewrites more than it marked, and the card asks for nothing before it can be used. A structural finding names a problem with the paragraph around its quote; its rewrite still replaces the quote, and the whole document goes to the model as context. A change that has to move material between paragraphs is a conversation: typing in the composer with a finding attached opens one.
 
 For an ordinary selection, the next composer message becomes the rewrite instruction.
@@ -189,7 +191,7 @@ The conversation survives a reload. A message sent with a finding attached carri
 
 ### 3.6 Continuation suggestions
 
-After 900 milliseconds without typing, a suggestion may be requested when:
+After 200 milliseconds without typing, a suggestion may be requested when:
 
 - the document contains at least 15 non-whitespace characters;
 - the selection is collapsed;
@@ -199,7 +201,7 @@ After 900 milliseconds without typing, a suggestion may be requested when:
 
 Only typing (including composition) starts this timer. Paste, deletion, Undo, Redo, loading a document and accepting an AI edit cancel pending suggestions without requesting another one.
 
-A failed continuation says so in the status line; the next successful request clears its error. The model may return an empty continuation when the thought is finished or continuing would invent facts or the author's intent. Non-empty output is a single line of at most 15 words; one word or punctuation alone is allowed. The provider returns `NONE`, `TEXT: …` for new words or punctuation, or `WORD: …` for missing letters, so prose quotation marks do not need JSON escaping. The HTTP response still uses `{ suggestion: string }`. Invalid output is reported as an error and never inserted. Spacing is applied at the insertion boundary; repeated tails are removed only at word boundaries. A valid continuation appears in a block below the current line, is announced to assistive technology, and does not enter the document until accepted.
+A failed continuation says so in the notice; the next successful request clears its error. The model may return an empty continuation when the thought is finished or continuing would invent facts or the author's intent. Non-empty output is a single line of at most 15 words; one word or punctuation alone is allowed. The provider returns `NONE`, `TEXT: …` for new words or punctuation, or `WORD: …` for missing letters, so prose quotation marks do not need JSON escaping. The HTTP response still uses `{ suggestion: string }`. Invalid output is reported as an error and never inserted. Spacing is applied at the insertion boundary; repeated tails are removed only at word boundaries. A valid continuation appears in a block below the current line, is announced to assistive technology, and does not enter the document until accepted.
 
 - `Tab`: insert the suggestion at its original cursor position.
 - `Escape`: dismiss it and cancel pending work, even before an answer arrives.
@@ -229,7 +231,7 @@ The settings dialog:
 
 All settings take effect immediately; there is no Save button.
 
-When no model is selected, the review, rewrite, chat, and manual-continuation actions re-check Pi status once, then report the missing setup in the composer and open this dialog instead of failing silently. Automatic review and continuation suggestions stay silent and make no request.
+When no model is selected, the review, rewrite, chat, and manual-continuation actions re-check Pi status once, then report the missing setup in the notice and open this dialog instead of failing silently. Automatic review and continuation suggestions stay silent and make no request.
 
 ## 4. State and privacy
 
@@ -256,13 +258,15 @@ Each edit updates the browser working copy and schedules a disk save after 800 m
 
 At startup, the editor waits for the server to identify and read the draft. It restores this tab's working copy when available, otherwise the document's shared browser copy, otherwise the disk text. An empty browser copy is distinct from a missing one. Legacy unscoped browser text is offered for export, not silently imported into another workspace.
 
-If browser and disk differ at startup, or the disk revision changes when the window regains focus or visibility, Litura pauses autosave. The conflict dialog shows both copies and offers `Use disk copy`, `Keep browser copy`, or `Export browser copy`. Closing the dialog does not resume saving. Choosing a copy resumes revision-checked saving; another external change can cause a new conflict. Nothing is merged automatically.
+If browser and disk differ at startup, or the disk revision changes when the window regains focus or visibility, Litura never opens a modal. When the browser copy is untouched since the last confirmed save it takes the disk copy silently; when only one side moved there is nothing to decide. Only two genuinely diverged copies raise a slim banner above the draft — `Load disk`, `Keep mine`, and a `What changed` word diff — while the draft stays editable and only disk writes wait. Choosing a copy resumes revision-checked saving; another external change can raise the banner again. Nothing is merged automatically.
 
 Save errors remain visible and pause autosave until the writer retries. A failed request does not advance the recorded disk revision. The browser warns before leaving while a save is in flight or the working text differs from the last confirmed disk copy.
 
 Findings are restored only when their stored document text exactly matches the loaded draft, then their quotes are re-anchored. Chat restores messages, not finding cards or rewrite previews. Replacing the document clears findings, dismissed findings and chat, and keeps a browser checkpoint of the previous text. Keeping an AI replacement also creates a checkpoint. Rewrite previews alone change neither stored copy.
 
-`Cmd/Ctrl+S` requests an immediate disk save, respecting any paused conflict or error. `Export a copy` downloads the current text using the workspace draft's filename. `Open a file…` and drag-and-drop accept `.md`, `.markdown` and `.txt` files up to 1 MiB and ask before importing. Import replaces the current workspace draft's contents; it does not switch the server to the imported file's path. History can restore a previous version after confirmation while keeping a checkpoint of the current text.
+`Cmd/Ctrl+S` requests an immediate disk save, respecting any paused conflict or error. `Export a copy` downloads the current text using the workspace draft's filename. `Open a file…` and drag-and-drop accept `.md`, `.markdown` and `.txt` files up to 1 MiB and import without asking. Import replaces the current workspace draft's contents; it does not switch the server to the imported file's path. History restores a previous version at once while keeping a checkpoint of the current text. `New`, import and restore never ask first: the replaced text goes to History, and the notice offers `Undo` for a few seconds.
+
+Everything the app reports outside the conversation — save and load trouble, model errors, confirmations with `Undo` — appears in one notice at the bottom-left, one at a time. Passing notices fade after six seconds; problems stay until their action or `×`. A chat answer never shows the raw edit list: a response that drops the `<litura-edits>` tags still yields edit cards.
 
 Every model-backed action sends the current full document to the selected provider. Rewrite and review requests additionally send the relevant selection or target passages.
 
@@ -343,7 +347,7 @@ All bodies and non-streaming responses are JSON unless noted.
 | `GET` | `/draft` | `{ text, path, id, exists, revision }`; a missing file has empty text and revision `missing` |
 | `PUT` | `/draft` | Save `{ text, revision }`; returns `{ saved: true, text, path, id, exists, revision }`, or `409` with `{ error, current }` when the revision differs |
 | `GET` | `/draft/history` | `{ snapshots }`, latest 20 disk backups with `text`, `at` and `revision` |
-| `GET` | `/files` | `{ files }`: Markdown and text files next to the draft, each with `name`, `size` and `mtime`, sorted by name |
+| `GET` | `/files` | `{ files }`: Markdown and text files next to the draft, each with `name`, `size`, `mtime` and a markup-stripped `excerpt` (first meaningful prose, ~160 chars) for the card preview, sorted by name |
 | `GET` | `/file?name=` | `{ name, text }` for one workspace file by basename; `400` for anything that is not a plain Markdown or text name, `404` when it is gone, `413` past 1 MB |
 | `GET` | `/api/version` | `{ name, current }`; with `?check=1` also `latest` from the npm registry, or `error` if it is unreachable |
 | `GET` | `/api/agent/status` | Providers, models, auth status, and default selection |

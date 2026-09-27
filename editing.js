@@ -62,3 +62,30 @@ function coarseDiff(a, b) {
     { type: 'keep', text: end ? a.slice(-end).join('') : '' },
   ].filter(op => op.text);
 }
+
+// Whose turn it is when the disk copy moved under the editor. lastDisk is
+// the text we last confirmed on disk (durable across restarts); local is
+// the editor now, disk is freshly read. No merge exists, only a verdict:
+// - 'in-sync': nothing to do, adopt the fresh revision quietly.
+// - 'fast-forward': the writer changed nothing since the last save — take
+//   the disk copy silently, no question asked.
+// - 'diverged': both sides moved since the baseline — ask, but never modal.
+// An unknown baseline (legacy installs) can only answer 'diverged': without
+// proof the writer stood still, silence would discard their work.
+export function resolveDrift(local, disk, lastDisk) {
+  if (local === disk) return 'in-sync';
+  if (lastDisk !== undefined && local === lastDisk) return 'fast-forward';
+  return 'diverged';
+}
+
+// Mark bubble box inside `area` (the writing pane below the header). Above
+// the line, clear of its words; below with a gap when the header leaves no
+// room above; pinned inside when the pane is narrower than the bubble.
+export function clampBubble(x, y, size, area) {
+  const width = Math.min(size.w, area.right - area.left);
+  const left = Math.max(area.left, Math.min(x - width / 2, area.right - width));
+  let top = y - size.h - 4;
+  if (top < area.top) top = y + 20;
+  if (top + size.h > area.bottom) top = Math.max(area.top, area.bottom - size.h);
+  return { left, top };
+}

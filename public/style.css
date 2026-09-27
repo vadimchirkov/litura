@@ -54,14 +54,15 @@
   cursor: pointer;
 }
 .icon-button:hover { background: var(--surface-3); }
-.icon-button-sm { width: 28px; height: 28px; border-radius: 7px; color: var(--text-2); }
+/* The sidebar toggle is chrome, not a control asking for attention: no
+   hover background, the icon alone carries it. */
+.sidebar-toggle:hover { background: none; }
 .ph { display: inline-flex; align-items: center; justify-content: center; }
 /* Thinner than Tabler's default 2px and slightly transparent: icons sit
    quiet next to text. Hover on the owning button brings the icon back to
    full opacity — the affordance, not the resting state. */
 .ph svg { display: block; width: 20px; height: 20px; stroke-width: 1.5; opacity: .72; transition: opacity .12s ease; }
 button:hover .ph svg { opacity: 1; }
-.icon-button-sm .ph svg { width: 17px; height: 17px; }
 
 /* ── File sidebar ────────────────────────────────────────────
    Workspace files live here: the list of Markdown and text files next to
@@ -76,18 +77,39 @@ button:hover .ph svg { opacity: 1; }
   overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--surface);
+  /* The pane-header is fixed at z-index 1000 and spans the full width.
+     When the sidebar is open it must sit above that header so its own
+     toggle button (inside sidebar-head) remains clickable. */
+  z-index: 1100;
+  /* Open/close animates the width, never display: the flex pane re-flows
+     every frame, so the draft glides with the panel instead of jumping. */
+  transition: width .25s var(--ease), border-color .25s var(--ease);
 }
-.sidebar[hidden] { display: none; }
+/* Fixed-width content inside the animating frame: rows get clipped, never
+   squeezed, while the panel slides. */
+.sidebar-inner {
+  width: 248px;
+  height: 100vh;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* The root attribute is the pre-paint mirror of .is-closed (see head
+   script): same geometry before JS runs, so reload lands in the persisted
+   state. */
+.sidebar.is-closed,
+:root[data-sidebar="closed"] .sidebar {
+  width: 0;
+  border-right-color: transparent;
+}
 .sidebar-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   height: 48px;
-  padding: 0 8px 0 16px;
+  padding: 0 8px;
   flex-shrink: 0;
 }
-/* Section caption, not a second title: files own the header, actions own theirs. */
-.sidebar-title { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .sidebar-label { padding: 2px 9px 6px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .sidebar-search {
   display: flex;
@@ -103,7 +125,12 @@ button:hover .ph svg { opacity: 1; }
   flex-shrink: 0;
   transition: border-color .12s ease;
 }
-.sidebar-search:focus-within { border-color: var(--accent); }
+/* The lit border alone is too thin to be the only focus indicator, so the
+   focused field carries the same ring the composer uses (WCAG 2.4.11). */
+.sidebar-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
 .sidebar-search .ph svg { width: 15px; height: 15px; }
 .sidebar-search input {
   flex: 1;
@@ -116,28 +143,32 @@ button:hover .ph svg { opacity: 1; }
   font-size: 13px;
   outline: none;
 }
-.sidebar-search input::placeholder { color: var(--muted); }
+/* --text-2, not --muted: this field sits on --surface-2, where --muted reads
+   4.23:1 and misses AA. The inset surface is what costs it. */
+.sidebar-search input::placeholder { color: var(--text-2); }
+/* Full-bleed rows, not inset cards: every row spans the panel edge to edge,
+   divided by hairlines. Switching the open file then repaints only —
+   the 1px top border exists on every row either way, so nothing jumps. */
 .file-list {
   flex: 1;
   overflow-y: auto;
   list-style: none;
   margin: 0;
-  padding: 0 8px 8px;
+  padding: 4px 0 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
 }
-/* File card: name and age on the first row, two lines of excerpt below.
-   Taller than the old single-line row, so the gap grows with it. */
+/* File row: name and age on the first row, two lines of excerpt below. */
 .file-list .file-card {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
-  padding: 9px 11px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--r-field);
+  padding: 8px 16px;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
   background: none;
   color: var(--text);
   font: inherit;
@@ -145,23 +176,15 @@ button:hover .ph svg { opacity: 1; }
   cursor: pointer;
   transition: background .12s ease, border-color .12s ease;
 }
+.file-list > li:first-child .file-card { border-top-color: transparent; }
 .file-list .file-card:hover { background: var(--surface-2); }
-/* The open file reads as the current row, not as a raised card: full-bleed
-   with hairlines top and bottom, no rounding, no side edges. Side borders
-   stay zeroed rather than removed — the resting card already reserves 1px
-   all around, so moving the mark never shifts the list by a pixel. */
+/* The open row carries no borders — only a tint. Its top border stays in
+   place transparently, so selecting never adds or removes a pixel. */
 .file-list .file-card[aria-current="true"] {
-  margin: 0 -8px;
-  padding-left: 19px;
-  padding-right: 19px;
-  border-left: 0;
-  border-right: 0;
-  border-radius: 0;
-  border-top-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  box-shadow: none;
+  border-top-color: transparent;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
+.file-list .file-card[aria-current="true"]:hover { background: color-mix(in srgb, var(--accent) 13%, transparent); }
 .file-list .file-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .file-card-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .file-list .file-name {
@@ -232,6 +255,9 @@ button:hover .ph svg { opacity: 1; }
   from { opacity: 0; translate: -12px 0; }
   to   { opacity: 1; translate: 0 0; }
 }
+/* Nothing above 640px: there the sidebar is a column in the flex row, not an
+   overlay, and has no scrim to need. */
+.sidebar-scrim { display: none; }
 @media (max-width: 640px) {
   .sidebar {
     position: fixed;
@@ -241,9 +267,25 @@ button:hover .ph svg { opacity: 1; }
     box-shadow: var(--shadow-lg);
     animation: sidebar-in .2s var(--ease);
   }
+  .sidebar.is-closed { box-shadow: none; }
+  /* The draft behind an overlay is dimmed, so the panel reads as a layer over
+     it rather than as a column that happens to be too wide. Its only job is to
+     be clicked: the panel closes on it, and on Escape. Visibility follows the
+     same root attribute the pre-paint script writes, so the first paint is
+     already right and no script has to keep a second copy of the state. */
+  .sidebar-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 110;
+    background: var(--scrim);
+    animation: chat-in .2s var(--ease);
+  }
+  :root[data-sidebar="closed"] .sidebar-scrim,
+  :root:not([data-sidebar]) .sidebar-scrim { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sidebar { animation: none; }
+  .sidebar, .sidebar-scrim { animation: none; }
 }
 
 /* Review actions live in the assistant panel, in a row that belongs to the
@@ -339,16 +381,10 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
   font-size: 13px;
   outline: none;
 }
-.history-search:focus { border-color: var(--accent); }
-/* Questions share one right-aligned row: confirm, conflict, save-as. */
-.confirm-actions, .conflict-actions, .save-as-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
-/* Three answers do not fit a narrow dialog side by side, and wrapping leaves
-   two above one against the right edge, which reads as a mistake rather than
-   a choice. Below that width each answer takes its own full-width line. */
-@media (max-width: 560px) {
-  .confirm-actions, .conflict-actions, .save-as-actions { flex-direction: column; align-items: stretch; }
+.history-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
-.confirm-body, .conflict-lead { color: var(--text-2); font-size: 14px; line-height: 1.55; }
 .history-item { padding: 12px 0; border-top: 1px solid var(--border-subtle); }
 .history-item:first-child { border-top: 0; }
 .history-when { color: var(--text); font-size: 13px; font-weight: 500; }
@@ -367,13 +403,10 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 .document-dialog .history-item button { min-height: 30px; padding: 0 14px; margin: 8px 0 0; font-size: 13px; }
 .history-note { display: block; margin-top: 16px; color: var(--muted); font-size: 12px; }
 .document-dialog textarea { display: block; width: 100%; margin-top: 8px; padding: 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border); font: inherit; }
-.save-as-form label { display: grid; gap: 8px; color: var(--text-2); font-size: 13px; }
-.save-as-form input { width: 100%; }
 .passage-preview { display: block; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font: inherit; padding: 8px 0; }
 del.passage-preview { border-left: 2px solid var(--danger); padding-left: 8px; }
 ins.passage-preview { border-left: 2px solid var(--accent); padding-left: 8px; text-decoration: none; }
-.finding-row { display: block; text-align: left; width: 100%; }
-.chat-card select { max-width: 100%; background: var(--surface); color: var(--text); padding: 6px; border: 1px solid var(--border); }
+.chat-entry select { max-width: 100%; background: var(--surface); color: var(--text); padding: 6px; border: 1px solid var(--border); }
 @media (max-width: 640px) {
   .pane-header { padding: 0 8px; gap: 6px; }
   .document-dialog { padding: 16px; }
@@ -527,40 +560,107 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── Scrollbars ───────────────────────────────────────── */
+/* ── Scrollbars ─────────────────────────────────────────
+   Quiet and stable: a thin low-contrast thumb that is always there, so
+   hovering never pops a whole set of thumbs in at once and showing one
+   never shifts the content beside it. Overlay-style in WebKit — the track
+   takes no space — with a reserved gutter in the tall panels. */
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-  transition: scrollbar-color 0.3s;
-}
-
-*:hover {
   scrollbar-color: var(--border-strong) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 
-*::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-corner {
   background: transparent;
-  border-radius: var(--r-pill);
-  transition: background 0.3s;
 }
 
-*:hover::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-thumb {
   background: var(--border-strong);
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
+
+/* The tall panels keep their width whether the bar shows or not. The file
+   list is excluded on purpose: its rows are full-bleed, so a permanent
+   gutter reads as a stray right indent on every row.
+
+   The Slop panel is excluded for the same reason, and it showed it: the
+   reserve sat between a sticky header and the rows under it, so the × stood
+   8px right of everything it was labelling, and a panel with nothing to
+   scroll still carried 13px of dead strip — the empty track, read as a
+   border down the side. Nothing next to it needs a stable width: the panel's
+   own box never changes, and the header and the list move together when the
+   bar appears. */
+.file-list,
+.style-details { scrollbar-gutter: auto; }
+.chat-stream,
+.combo-list,
+.document-dialog,
+.drift-diff-body {
+  scrollbar-gutter: stable;
+}
+
+/* ── Drift banner ──────────────────────────────────────────
+   The file changed on disk while the draft has unsent edits. A bar under
+   the header, not a modal: the draft stays editable, only disk writes wait.
+   The compare view reuses the word diff — struck text lives only on disk,
+   highlighted text only in the writer's copy.
+
+   It sits between the header (which has a bottom border) and the
+   editor-wrapper, so it gets its own top border to match the header's
+   bottom border — the three bands (header / drift / editor) read as
+   distinct layers. */
+.drift-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.drift-banner[hidden] { display: none; }
+.drift-text { color: var(--text-2); font-weight: 500; }
+.drift-actions { display: flex; gap: 8px; }
+.drift-diff { flex-basis: 100%; font-size: 12.5px; color: var(--text-2); }
+.drift-diff summary { cursor: pointer; display: inline-block; }
+.drift-diff-body {
+  margin-top: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.drift-legend { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.drift-diff-more { color: var(--muted); font-size: 12px; }
+.drift-del { text-decoration: line-through; background: var(--removed-tint); border-radius: 3px; }
+.drift-ins { text-decoration: none; background: var(--added-tint); border-radius: 3px; }
 
 /* ── Layout ───────────────────────────────────────────── */
 
@@ -589,13 +689,19 @@ html, body {
    stand out among its neighbours — no color, just weight. */
 .cm-slop.is-hot { background: var(--remark-tint-hover); }
 
-/* Mark bubble: a compact segmented toolbar where the writer clicked — two
-   halves, context on the left, rewrite on the right — instead of arming the
-   composer as a side effect of reading. Fixed to the click point; hidden on
-   scroll, edit, or Escape. */
+/* Mark bubble: a compact segmented toolbar where the writer clicked — context
+   on the left, rewrite on the right — instead of arming the composer as a side
+   effect of reading. Fixed to the click point; hidden on scroll, edit, or
+   Escape.
+
+   z-index above the header (1000) and the sidebar (1100) on purpose. The bubble
+   is a transient toolbar for the text under it, and it is placed inside the
+   writing pane — but on a short window, or a click in the first line, it can
+   reach into the band the fixed header occupies. Below it, it is drawn, it is
+   hit-testable, and it silently eats the click. Chrome yields to the control. */
 .mark-bubble {
   position: fixed;
-  z-index: 150;
+  z-index: 1200;
   display: flex;
   align-items: stretch;
   max-width: 340px;
@@ -631,31 +737,43 @@ html, body {
 .finding-variants:empty { display: none; }
 .finding-variants .chat-variants { gap: 6px; }
 .finding-variants .variant-card { padding: 9px 12px 10px; font-size: 13px; }
-.finding-variants .chat-error { font-size: 12px; }
-
-.card-working { color: var(--muted); font-size: 13px; }
 
 .pane-header {
-  position: relative;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  width: -webkit-fill-available;
+  width: 100%;
   height: 48px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 12px 0 20px;
+  background: transparent;
+  padding: 0 12px 0 8px;
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
   color: var(--text-2);
-  background: none;
   user-select: none;
   flex-shrink: 0;
 }
 
 /* Room for the macOS window buttons, which the desktop build draws over this
    header instead of above it. Ignored everywhere else, including the same page
-   in a browser. */
-.shell-desktop .pane-header { padding-left: 84px; }
+   in a browser. While the sidebar stands the buttons float over its head, not
+   the pane's — the offset moves with the toggle. */
+.shell-desktop .pane-header { padding-left: 60px; }
+.shell-desktop #sidebar-head { padding-left: 60px; }
+.shell-desktop[data-sidebar="open"] .pane-header { padding-left: 8px; }
+/* macOS traffic lights sit high (centre ~18px), not mid-header: pull the
+   toggle up to their line so lights + toggle read as one row. The heads
+   keep centring everything else. */
+.shell-desktop #sidebar-toggle, .shell-desktop #sidebar-toggle-side { align-self: flex-start; margin-top: -2px; }
+/* Next to the 12px lights a 20px glyph shouts: 16px keeps the 32px hit
+   area, only the drawing gets quieter. */
+.shell-desktop .sidebar-toggle .ph svg { width: 16px; height: 16px; }
 
 /* Working pane: CodeMirror 6 mounts here */
 #editor-wrapper {
@@ -671,7 +789,6 @@ html, body {
 
 /* ── Header controls (ChatGPT ghost/pill buttons) ─────── */
 
-.icon-btn,
 .settings-open {
   display: inline-flex;
   align-items: center;
@@ -693,7 +810,6 @@ html, body {
 .settings-open { margin-left: 0; }
 .settings-open .ph svg { width: 17px; height: 17px; }
 
-.icon-btn:hover,
 .settings-open:hover {
   background: var(--surface-3);
   color: var(--text);
@@ -776,7 +892,10 @@ html, body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 8px 12px 16px;
+  /* 16 on both sides, like every row of content below it: the × is 32px wide,
+     so at 8px it hung in from the edge and stood out of line with the button
+     and the list it heads. */
+  padding: 14px 16px 12px;
   background: var(--overlay);
   border-bottom: 1px solid var(--border-subtle);
   border-radius: var(--r-overlay) var(--r-overlay) 0 0;
@@ -847,13 +966,15 @@ html, body {
 .chat-edit-title { display: block; color: var(--text); font-weight: 500; }
 .chat-edit-card details { margin: 8px 0; font-size: 12px; color: var(--text-2); }
 .chat-edit-card summary { cursor: pointer; }
-.chat-edit-source, .chat-edit-replacement { white-space: pre-wrap; overflow-wrap: anywhere; }
-.chat-edit-replacement { margin: 12px 0; padding: 10px 12px; border-radius: var(--r-sm); background: var(--added-tint); font-family: var(--font); }
+.chat-edit-replacement { white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0; padding: 10px 12px; border-radius: var(--r-sm); background: var(--added-tint); font-family: var(--font); }
 .chat-edit-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 /* Leads the action row: message left, buttons right. */
 .chat-edit-status { flex: 1 1 auto; min-width: 120px; margin: 0; font-size: 12px; color: var(--text-2); }
 @media (pointer: coarse) { .review-action, .style-marker-jump { min-height: 44px; } }
-.style-details-note { margin: 0; padding: 10px 12px; color: var(--text-2); }
+/* 8, not 16: this note is a child of .style-remark-list, which is already
+   inset by 8 — 16 here set the sentence in at 24, eight pixels right of the
+   title above it. It is the same 16 as a row, counted from the panel. */
+.style-details-note { margin: 0; padding: 10px 8px; color: var(--text-2); }
 /* One row per mark: the passage, then where it came from. The reason belongs
    to the card that opens on click, so the list stays scannable. Local wording
    reads neutral; a model finding carries the accent — the writer sees which
@@ -864,7 +985,10 @@ html, body {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 10px 8px 10px 12px;
+  /* The row spans the list, and 8px inside that is the panel's 16px — the
+     list's own 8 plus a 12 here used to set the quote in at 20, four pixels
+     right of the title above it. */
+  padding: 10px 8px;
   text-align: left;
   border: 1px solid transparent;
   border-radius: var(--r-field);
@@ -904,20 +1028,21 @@ html, body {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* Editing confirmation toast: "Change applied" / "Kept as is" with Undo.
-   Bottom-left, where neither the centred draft nor the right-side rail
-   usually are. It auto-hides (see showEditFeedback); the Undo on the kept
-   variant card itself stays timer-free, so nothing is lost when this goes. */
+/* The one notice surface (notify() in app.js): confirmations, warnings and
+   errors alike, one at a time. Centred just above the chat panel and
+   following it when the sidebar shifts the draft; --chat-height is the
+   panel height + 48px, so this sits 8px above its top. */
 .edit-feedback {
   position: fixed;
-  left: 16px;
-  bottom: 16px;
+  left: 50%;
+  translate: -50% 0;
+  bottom: calc(var(--chat-height, 140px) - 20px);
   z-index: 200;
   display: flex;
   align-items: center;
   gap: 10px;
   max-width: min(420px, calc(100vw - 32px));
-  padding: 8px 8px 8px 14px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--r-field);
   background: var(--overlay);
@@ -931,17 +1056,21 @@ html, body {
   to   { opacity: 1; }
 }
 .edit-feedback > span { flex: 1 1 auto; }
-.edit-feedback button { padding: 4px 8px; color: var(--text); }
-/* The way back is the point of the toast: a filled pill on the right edge,
-   with one nudge on arrival so the eye finds it. Recreated on every show,
-   so the nudge replays each time. */
+/* Undo uses the same pill as stream actions, but primary (filled) because
+   it's the point of the toast. */
 .edit-feedback .edit-feedback-undo {
   flex-shrink: 0;
-  min-height: 32px;
-  padding: 0 16px;
+  min-height: 26px;
+  padding: 0 12px;
   border-radius: var(--r-pill);
   background: var(--fill);
+  border: 1px solid transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
   font-weight: 500;
+  cursor: pointer;
+  transition: background .12s ease;
   animation: undo-nudge .55s var(--ease);
 }
 .edit-feedback .edit-feedback-undo:hover { background: var(--fill-hover); }
@@ -951,11 +1080,24 @@ html, body {
   0%, 100% { opacity: 1; }
   35%      { opacity: .45; }
 }
-.edit-feedback-close { flex-shrink: 0; }
-/* Narrow windows: the composer spans the full bottom, so the toast docks
-   under the header instead of covering the field. */
+.edit-feedback-close {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--overlay);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.edit-feedback-close:hover { background: var(--surface-2); color: var(--text); }
+:root[data-sidebar="open"] .edit-feedback { left: calc(50% + 124px); }
 @media (max-width: 640px) {
-  .edit-feedback { left: 16px; right: 16px; bottom: auto; top: 56px; max-width: none; }
+  :root[data-sidebar="open"] .edit-feedback { left: 50%; }
 }
 
 /* Available update — quiet on purpose. Nothing is broken, and the writer is
@@ -1002,6 +1144,15 @@ html, body {
   flex-direction: column;
   gap: 8px;
   pointer-events: none;
+  transition: left .25s var(--ease);
+}
+
+/* The open panel narrows the pane, so the draft's centre moves half a panel
+   width right while viewport-centring stays put. The composer follows the
+   text. Below 640px the panel overlays instead of squeezing — no shift. */
+:root[data-sidebar="open"] .chat { left: calc(50% + 124px); }
+@media (max-width: 640px) {
+  :root[data-sidebar="open"] .chat { left: 50%; }
 }
 
 .chat > * { pointer-events: auto; }
@@ -1068,20 +1219,21 @@ html, body {
 .chat-clear:hover { color: var(--text); border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
 .chat-clear[hidden] { display: none; }
 
-.chat-message,
-.chat-card,
-.chat-error {
+/* ── Unified chat entry: one card for all stream messages ──────────────────
+   Modifiers:
+     .is-user       — own message (right, fill, no border)
+     .is-finding    — finding card (title, dismiss, offers)
+   All share: overlay bg, subtle border, 10px 14px padding, 10px radius.
+   Notices and errors are not stream entries: see .edit-feedback. */
+.chat-entry {
   border-radius: var(--r-field);
   border: 1px solid var(--border-subtle);
   background: var(--overlay);
+  color: var(--text);
   line-height: 1.55;
   white-space: pre-wrap;
+  padding: 10px 14px;
   animation: chat-in .2s var(--ease);
-}
-
-/* Cards and errors keep their own size; plain messages inherit the page. */
-.chat-card,
-.chat-error {
   font-size: 14px;
 }
 
@@ -1107,50 +1259,35 @@ html, body {
   pointer-events: none !important;
 }
 
-.chat-message {
-  padding: 10px 14px;
-  border: 1px solid var(--border-subtle);
+/* Assistant message: standard card, chat-rise for gentler arrival. */
+.chat-entry:not(.is-user):not(.is-finding) {
   animation: chat-rise .22s var(--ease);
 }
 
-/* Your own words are already known — placement and fill say so, no quieter
-   ink needed. */
-.chat-message.is-user {
+/* Your own words: right-aligned, fill background, no border. */
+.chat-entry.is-user {
   align-self: flex-end;
   max-width: 80%;
   border: 0;
   background: var(--fill);
-}
-
-/* A failed call is a fact, not an accusation: the mark carries the colour and
-   the sentence stays readable. Message left, the one thing to do about it
-   right, and nothing in between. */
-.chat-error {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
   color: var(--text);
 }
 
-.chat-error::before {
-  content: '!';
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--danger) 16%, transparent);
-  color: var(--danger);
-  font-size: 12px;
-  font-weight: 500;
+/* Finding card: structured — title, reason, dismiss + offers. */
+.chat-entry.is-finding {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-2);
+}
+.chat-entry.is-finding > strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
 }
 
-/* The way out of a dead end. Five places raise one: a failed call, a failed
-   save, a draft left behind by an older version. */
-.chat-again {
+/* Pill button for actions: retry, dismiss, rewrite, open settings. */
+.chat-action {
   flex-shrink: 0;
   min-height: 26px;
   padding: 0 12px;
@@ -1160,15 +1297,16 @@ html, body {
   color: var(--text-2);
   font: inherit;
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   transition: background .12s ease, color .12s ease;
 }
-.chat-again:hover { background: var(--surface-2); color: var(--text); }
-.chat-error .chat-again { margin-left: auto; align-self: center; }
+.chat-action:hover { background: var(--surface-2); color: var(--text); }
+.chat-action.is-primary { background: var(--fill); border-color: transparent; }
+.chat-action.is-primary:hover { background: var(--fill-hover); }
 
-/* Icon-only retry under the options: a quiet refresh mark, not a second pill
-   shouting next to the cards. Text retries elsewhere keep the pill. */
-.chat-again.is-icon {
+/* Icon-only retry under finding options: quiet refresh mark. */
+.chat-action.is-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1177,19 +1315,37 @@ html, body {
   padding: 5px 6px;
   color: var(--muted);
 }
-.chat-again.is-icon:hover { color: var(--text); }
-.chat-again.is-icon svg { display: block; }
+.chat-action.is-icon:hover { color: var(--text); }
+.chat-action.is-icon svg { display: block; }
 
-/* Rendered reply: block spacing comes from the tags, not from pre-wrap */
-.chat-message.is-markdown { white-space: normal; }
-.chat-message.is-markdown > * + * { margin-top: 8px; }
-.chat-message.is-markdown ul,
-.chat-message.is-markdown ol { padding-left: 20px; }
-.chat-message.is-markdown li + li { margin-top: 3px; }
-.chat-message.is-markdown .md-heading { font-weight: 600; }
-.chat-message.is-markdown a { color: var(--accent); }
+/* Dismiss button for finding cards: same pill language. */
+.chat-dismiss {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--overlay);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.chat-dismiss:hover { color: var(--text); background: var(--surface-2); }
 
-.chat-message.is-markdown code {
+/* Rendered reply: block spacing comes from the tags, not from pre-wrap.
+   Keyed on .chat-entry, the class the renderer actually emits. */
+.chat-entry.is-markdown { white-space: normal; }
+.chat-entry.is-markdown > * + * { margin-top: 8px; }
+.chat-entry.is-markdown ul,
+.chat-entry.is-markdown ol { padding-left: 20px; }
+.chat-entry.is-markdown li + li { margin-top: 3px; }
+.chat-entry.is-markdown .md-heading { font-weight: 600; }
+.chat-entry.is-markdown a { color: var(--accent); }
+
+.chat-entry.is-markdown code {
   padding: 1px 5px;
   border-radius: var(--r-xs);
   background: var(--surface-3);
@@ -1197,14 +1353,14 @@ html, body {
   font-size: .9em;
 }
 
-.chat-message.is-markdown pre {
+.chat-entry.is-markdown pre {
   overflow-x: auto;
   padding: 10px 12px;
   border-radius: var(--r-sm);
   background: var(--surface-3);
 }
 
-.chat-message.is-markdown pre code { padding: 0; background: none; }
+.chat-entry.is-markdown pre code { padding: 0; background: none; }
 
 /* Streaming cursor, dropped as soon as the first token lands */
 .chat-caret {
@@ -1218,55 +1374,9 @@ html, body {
 
 @keyframes chat-blink { 50% { opacity: 0; } }
 
-.chat-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  color: var(--text-2);
-  font-size: 13px;
-}
-
-/* Dismiss: rejecting a finding must be as cheap as accepting one */
-.chat-card-dismiss {
-  flex-shrink: 0;
-  min-height: 26px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  background: var(--overlay);
-  color: var(--text-2);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.chat-card-dismiss:hover { color: var(--text); background: var(--surface-2); }
+/* Finding actions use the unified .chat-action and .chat-dismiss pills. */
 .finding-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-.finding-actions .chat-offer { margin-top: 0; min-height: 32px; }
-
-/* Offered, not spent: the rewrite request starts here, not on the underline */
-.chat-offer {
-  align-self: flex-start;
-  margin-top: 6px;
-  height: 26px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background .12s ease;
-}
-
-.chat-offer:hover { background: var(--surface-2); }
-
-.chat-card strong { color: var(--text); font-size: 15px; font-weight: 600; }
-.chat-card small { font: inherit; }
+.finding-actions .chat-action { margin-top: 0; min-height: 32px; }
 
 /* ── Composer ─────────────────────────────────────────── */
 
@@ -1420,12 +1530,10 @@ html, body {
 #chat-rewrite:hover { background: var(--fill-hover); }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-message,
-  .chat-card,
+  .chat-entry,
   .chat-recipes,
   .edit-feedback,
-  .edit-feedback .edit-feedback-undo,
-  .chat-error { animation: none; }
+  .edit-feedback .edit-feedback-undo { animation: none; }
   .recipe.is-busy { animation: none; border-color: var(--accent); }
   .chat-caret { animation: none; opacity: .6; }
 }
@@ -1433,8 +1541,17 @@ html, body {
 /* Keep the last lines of the draft clear of the panel. The panel grows with
    its content, so the reserved space is measured, not guessed. The padding
    eases after the measured value: opening or closing the panel reflows the
-   draft instead of jumping it. */
-#editor-wrapper .cm-content { padding-bottom: var(--chat-height, 140px); transition: padding-bottom .25s var(--ease); }
+   draft instead of jumping it. Top padding clears the fixed header. */
+/* Native scroll-margin so find-in-page, anchor links, and mouse-wheel
+   scrolling keep the first line below the header. The header is 48px;
+   64px gives a 16px buffer. This works even when CodeMirror's
+   viewportMargins facet isn't consulted (manual scroll, Cmd+F). */
+#editor-wrapper .cm-content {
+  scroll-margin-top: 64px;
+  padding-top: 48px;
+  padding-bottom: var(--chat-height, 140px);
+  transition: padding-bottom .25s var(--ease);
+}
 
 /* Just-applied text: a brief blue wash fading out, so the eye lands on what
    changed instead of catching a snap. Same hue family as the selection. */
@@ -1569,7 +1686,7 @@ html, body {
   justify-content: space-between;
   gap: 10px;
 }
-.variant-foot .chat-again { margin-left: auto; }
+.variant-foot .chat-action { margin-left: auto; }
 
 .variant-hint {
   color: var(--muted);
@@ -1583,7 +1700,7 @@ html, body {
 /* The way back on the kept card: one quiet Undo with no timer, sitting under
    the applied text. It stays good until the passage changes under it. */
 .variant-undo-row { display: flex; margin-top: 8px; }
-.variant-undo-row .chat-again { align-self: flex-start; }
+.variant-undo-row .chat-action { align-self: flex-start; }
 
 /* Loading skeletons: same shape as the cards coming, so nothing jumps. */
 .skeleton {
@@ -1616,12 +1733,6 @@ html, body {
   .variant-card { animation: none; transition: none; }
 }
 
-.error-msg {
-  padding: 12px 14px;
-  font-size: 14px;
-  color: var(--danger);
-}
-
 /* ── Pi settings dialog ──────────────────────────────── */
 
 .settings-dialog {
@@ -1635,20 +1746,6 @@ html, body {
   background: var(--overlay);
   font-family: var(--ui-font);
   box-shadow: var(--shadow-lg);
-}
-
-/* Small dialogs are confirmations, not pages: Save as, import, restore, and
-   other two-button questions. The large width is reserved for settings,
-   history and the file conflict, where there is a list to read. */
-.settings-dialog.dialog-sm {
-  width: min(440px, calc(100vw - 32px));
-}
-.settings-dialog.dialog-sm section,
-.document-dialog.dialog-sm {
-  padding: 20px;
-}
-.document-dialog.dialog-sm header {
-  padding: 16px 0 12px;
 }
 
 /* Native <dialog> centres itself — animate opacity only, no transform. */
@@ -1692,7 +1789,16 @@ html, body {
   font-size: 14px;
   outline: none;
 }
-.settings-dialog input:focus, .settings-dialog select:focus { border-color: var(--accent); }
+/* Checkboxes keep their own focus ring (below) and a filled pill would look
+   wrong behind one, so they are left out of both rules. */
+.settings-dialog input:not([type="checkbox"]):focus,
+.settings-dialog select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+/* Left unset, a placeholder falls back to the UA's #757575 — 3.49:1 on the
+   dark panel, the worst pair in the product. */
+.settings-dialog input::placeholder { color: var(--muted); }
 
 /* The trigger reads as the field it replaces; only the list behind it is new. */
 .settings-dialog .combo-trigger {
@@ -1835,20 +1941,6 @@ html, body {
 .settings-dialog button:hover { background: var(--fill-hover); }
 .settings-dialog button:disabled { opacity: .5; cursor: default; }
 
-/* One answer is the one being offered; the rest stay the quiet fill. Ink on
-   paper rather than the accent: the accent already means "a finding is here",
-   and it needs a contrast colour of its own to be filled safely. */
-.settings-dialog button.is-primary { background: var(--text); color: var(--surface); }
-.settings-dialog button.is-primary:hover { background: var(--text-2); }
-
-/* The destructive answer is marked in the markup already; until now nothing
-   showed it. Tinted, not filled — `--danger` turns pale in dark mode, where a
-   filled pill would need its own foreground token for one button. */
-.settings-dialog button[data-danger] {
-  background: color-mix(in srgb, var(--danger) 16%, transparent);
-  color: var(--danger);
-}
-.settings-dialog button[data-danger]:hover { background: color-mix(in srgb, var(--danger) 26%, transparent); }
 .settings-dialog .dialog-close {
   width: 32px;
   min-height: 32px;

@@ -6,11 +6,34 @@ import { clampThinkingLevel } from '@earendil-works/pi-ai';
 import { getAgentStatus } from './pi.js';
 import { renderMarkdown } from './markdown.js';
 import { spellingMarkers, noteSpellingAdded } from './spellcheck.js';
+import { clampBubble, resolveDrift, wordDiff } from './editing.js';
+import { chatVisibleText, parseChatResponse } from './chat-edits.js';
 import {
   completedSentences, findingContext, isLatinScript, locateFindings, markSelection, mergeReviewFindings,
   parseReviewResponse, parseVariants, selectionSlot, styleMarkers, styleMetrics, styleScore, trimOverlap,
   validateReviewFindings, variantLimit, SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
 } from './review.js';
+
+// ── Bare edit list ──
+// A model that drops the envelope tags still yields cards, not raw JSON.
+{
+  const bare = parseChatResponse('Done.\n[{"label":"L","quote":"a b","replacement":"a c"}]', 'x a b y');
+  assert.equal(bare.text, 'Done.');
+  assert.equal(bare.edits[0].from, 2);
+  assert.equal(chatVisibleText('Ok\nProposed edits:\n[{"label":"a'), 'Ok');
+}
+
+// ── Drift verdict ──
+// Same text everywhere is quiet; an untouched local copy fast-forwards; two
+// moved copies ask. An unknown baseline can only ask — silence would discard
+// work we cannot prove stood still.
+{
+  assert.equal(resolveDrift('a', 'a', 'a'), 'in-sync');
+  assert.equal(resolveDrift('a', 'b', 'a'), 'fast-forward');
+  assert.equal(resolveDrift('a', 'b', 'c'), 'diverged');
+  assert.equal(resolveDrift('a', 'b', undefined), 'diverged');
+  assert.deepEqual(wordDiff('a b', 'a c').map(op => op.type), ['keep', 'del', 'ins']);
+}
 
 // Exercise the production completion path without credentials or model calls.
 // Keep the mock at the provider boundary, not at the truncation guard.
@@ -251,6 +274,40 @@ assert.deepEqual(
   completedSentences('Купил хлеб т.д. и молоко. Пошел домой.').map(s => s.text),
   ['Купил хлеб т.д. и молоко.', 'Пошел домой.'],
 );
+
+// ── Mark bubble placement ──
+//
+// The bubble is a fixed toolbar over the draft, and the two things that can
+// swallow it are the chrome it does not know about: the fixed header over the
+// first line, and the file sidebar beside the pane. The arithmetic is pure, so
+// it is checked here rather than by clicking — a bubble hidden under the header
+// still reports as "shown" in the DOM, which is exactly how the bug survived a
+// passing smoke test.
+{
+  const clamp = clampBubble;
+  const size = { w: 116, h: 34 };
+  // The first line of a draft sits under the fixed header: a bubble centred on
+  // it must land below the header band, never inside it.
+  const pane = { left: 0, right: 1200, top: 0 };
+  const header = 48;
+  const area = {
+    left: pane.left + 8, right: pane.right - 8,
+    top: Math.max(pane.top, header) + 8, bottom: 812,
+  };
+  const firstLine = clamp(600, 62, size, area);
+  assert(firstLine.top >= area.top, `bubble top ${firstLine.top} sits inside the header band`);
+  // And a bubble never leaves the pane, which is what keeps the sidebar from
+  // covering it when the panel is open.
+  for (const x of [area.left - 40, area.right + 40, 600]) {
+    const box = clamp(x, 300, size, area);
+    assert(box.left >= area.left - 0.01 && box.left + size.w <= area.right + 0.01,
+      `bubble at x=${x} escaped the pane: ${JSON.stringify(box)}`);
+  }
+  // Narrow pane: the bubble is centred on the click and may not fit, so it is
+  // pinned inside rather than hanging off the edge.
+  const narrow = { left: 8, right: 60, top: 56, bottom: 812 };
+  assert.equal(clamp(30, 300, size, narrow).left, narrow.left);
+}
 
 const status = await getAgentStatus();
 assert(Array.isArray(status.providers));

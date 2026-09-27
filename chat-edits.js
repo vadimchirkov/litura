@@ -17,9 +17,20 @@ Never claim an edit has already been applied. The author chooses Apply or Keep o
 The envelope is application data: never put it in a Markdown code fence or discuss its syntax.
 `;
 
-export function chatVisibleText(raw, complete = false) {
+// Models sometimes drop the tags and end with the bare JSON list (or a
+// "Proposed edits:" line before it). Same envelope, missing its wrapper —
+// never shown to the writer as text.
+const BARE_EDITS_RE = /(?:^|\n)[ \t]*(?:Proposed edits:\s*)?(?:```(?:json)?\s*)?(?=\[\s*\{\s*"(?:label|quote|replacement)")/;
+function envelopeStart(raw) {
   const at = raw.indexOf(EDITS_OPEN);
-  if (at >= 0) return raw.slice(0, at).trimEnd();
+  if (at >= 0) return { at, tagged: true };
+  const bare = BARE_EDITS_RE.exec(raw);
+  return bare && { at: bare.index, tagged: false };
+}
+
+export function chatVisibleText(raw, complete = false) {
+  const start = envelopeStart(raw);
+  if (start) return raw.slice(0, start.at).trimEnd();
   if (!complete) {
     for (let n = EDITS_OPEN.length - 1; n > 0; n--) {
       if (raw.endsWith(EDITS_OPEN.slice(0, n))) return raw.slice(0, -n);
@@ -53,11 +64,18 @@ export function locateChatEdits(items, document, selection = null) {
 }
 
 export function parseChatResponse(raw, document, selection) {
-  const at = raw.indexOf(EDITS_OPEN);
-  if (at < 0) return { text: raw, edits: [] };
-  const end = raw.indexOf(EDITS_CLOSE, at + EDITS_OPEN.length);
-  if (end < 0 || raw.slice(end + EDITS_CLOSE.length).trim()) throw new Error('Incomplete edit envelope');
-  const items = JSON.parse(raw.slice(at + EDITS_OPEN.length, end));
+  const start = envelopeStart(raw);
+  if (!start) return { text: raw, edits: [] };
+  let items;
+  if (start.tagged) {
+    const at = start.at;
+    const end = raw.indexOf(EDITS_CLOSE, at + EDITS_OPEN.length);
+    if (end < 0 || raw.slice(end + EDITS_CLOSE.length).trim()) throw new Error('Incomplete edit envelope');
+    items = JSON.parse(raw.slice(at + EDITS_OPEN.length, end));
+  } else {
+    const tail = raw.slice(start.at);
+    items = JSON.parse(tail.slice(tail.indexOf('[')).replace(/```\s*$/, ''));
+  }
   return { text: chatVisibleText(raw, true), edits: locateChatEdits(items, document, selection) };
 }
 

@@ -21,8 +21,8 @@ import {
 } from '@codemirror/commands';
 import { findingContext, isLatinScript, locateFindings, styleMarkers, styleScore } from '../review.js';
 import { renderMarkdown } from '../markdown.js';
-import { replacementTarget, newerVersion, resolveDrift } from '../editing.js';
-import { locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
+import { clampBubble, replacementTarget, newerVersion, resolveDrift } from '../editing.js';
+import { EDITS_OPEN, chatVisibleText, locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
 import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
 import { hydrateIcons } from './icons.js';
@@ -106,19 +106,41 @@ let savePaused = true;
 let diskHold = false;
 let loadingDocument = true;
 let editVersion = 0;
-// The header carries no save-status line any more. What it said was never
-// routine — paused autosave, a conflict, a draft that would not open — so the
-// messages move to the chat stream rather than disappearing. Repeats are
-// dropped: a paused autosave retries on a timer and would otherwise stack up.
-let lastSaveStatus = '';
-const saveStatus = {
-  set textContent(text) {
-    if (text === lastSaveStatus) return;
-    lastSaveStatus = text;
-    if (text) chatAdd(chatEl('div', 'chat-error', text));
-  },
-  set title(_message) {},
-};
+// ─── Notices ───
+// One surface for everything the app tells the writer outside the
+// conversation: a failed save, a refused model call, a dismissal that can be
+// undone. One notice at a time, so nothing is said twice — a new one replaces
+// the last. Passing notices fade on their own; a sticky one (a problem) stays
+// until its button or × puts it away, and no passing notice may cover it.
+// `key` names who raised it, so only they clear it (clearNotice).
+const NOTICE_MS = 6000;
+let noticeTimer = null;
+let noticeKey = '';
+let noticeSticky = false;
+function notify(text, { action = null, label = 'Undo', sticky = false, detail = '', key = '' } = {}) {
+  if (!text) { clearTimeout(noticeTimer); editFeedback.hidden = true; noticeKey = ''; noticeSticky = false; return; }
+  if (noticeSticky && !sticky && !editFeedback.hidden) return;
+  clearTimeout(noticeTimer);
+  const message = chatEl('span', '', text);
+  message.title = detail || text;
+  editFeedback.replaceChildren(message);
+  if (action) {
+    const run = chatEl('button', 'edit-feedback-undo', label);
+    run.type = 'button';
+    run.addEventListener('click', () => { notify(''); action(); });
+    editFeedback.append(run);
+  }
+  const close = chatEl('button', 'edit-feedback-close', '×');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Hide notice');
+  close.addEventListener('click', () => { notify(''); workView.focus(); });
+  editFeedback.append(close);
+  editFeedback.hidden = false;
+  noticeKey = key;
+  noticeSticky = sticky;
+  if (!sticky) noticeTimer = setTimeout(() => notify(''), NOTICE_MS);
+}
+function clearNotice(key) { if (noticeKey === key) notify(''); }
 const reviewStatus = document.getElementById('review-status');
 let reviewState = 'idle';
 let reviewNotice = '';
@@ -129,9 +151,12 @@ let reviewNotice = '';
 // continuations went quiet.
 function setReviewStatus(text, detail, from = 'review') {
   if (from === 'review') { reviewNotice = text; syncReviewPanel(); }
-  reviewStatus.textContent = text;
-  reviewStatus.title = detail ?? text;
-  reviewStatus.dataset.from = text ? from : '';
+  // Progress ("Suggesting…") stays on this line; anything to read is a notice.
+  const progress = text.endsWith('…');
+  reviewStatus.textContent = progress ? text : '';
+  reviewStatus.title = progress ? text : '';
+  reviewStatus.dataset.from = progress ? from : '';
+  if (text && !progress) notify(text, { detail });
 }
 
 // A provider's failure arrives as a status code and its own JSON, and pasting
@@ -174,33 +199,13 @@ function modelError(error) {
 // The message is the cause; the button is the answer to it. Every failure the
 // writer can act on takes this shape — a bare retry pill with no sentence
 // beside it is a button for a problem that was never named.
-function errorCard(problem, retry, label = 'Try again') {
-  const card = chatEl('div', 'chat-error', problem.say);
-  card.title = problem.detail ?? '';
-  if (problem.act === 'settings') {
-    const open = chatEl('button', 'chat-again', 'Open settings');
-    open.addEventListener('click', openSettings);
-    card.append(open);
-  } else if (problem.act === 'retry' && retry) {
-    const again = chatEl('button', 'chat-again', label);
-    // The card goes as the retry starts, so a working retry leaves no stale
-    // complaint behind — but a retry that rejects puts the way out back,
-    // rather than leaving a paused draft with no control to unpause it.
-    again.addEventListener('click', async () => {
-      card.remove();
-      try { await retry(); } catch { chatAdd(card); }
-    });
-    card.append(again);
-  }
-  return card;
-}
-
-// One outage, one message. Background work fails at the same moment the
-// writer's own request does, and printing the same sentence in the status line
-// that a card is already showing turns one dead server into three complaints.
-function saidInStream(say) {
-  return !chatStream.hidden
-    && [...chatStream.querySelectorAll('.chat-error')].some(card => card.firstChild?.nodeValue === say);
+// A retry that rejects puts the way out back.
+function notifyProblem(problem, retry = null, label = 'Try again', key = '') {
+  const act = problem.act === 'settings' ? { action: openSettings, label: 'Open settings' }
+    : problem.act === 'retry' && retry
+      ? { action: () => Promise.resolve().then(retry).catch(() => notifyProblem(problem, retry, label, key)), label }
+      : {};
+  notify(problem.say, { ...act, sticky: true, detail: problem.detail, key });
 }
 let tabId;
 try {
@@ -209,7 +214,7 @@ try {
 } catch { tabId = crypto.randomUUID(); }
 const docStorage = {
   getItem(key) { try { return documentKey ? (key === 'wa-working' ? localStorage.getItem(documentKey + key + ':' + tabId) : null) ?? localStorage.getItem(documentKey + key) : null; } catch { return null; } },
-  setItem(key, value) { try { if (documentKey) { localStorage.setItem(documentKey + key, value); if (key === 'wa-working') localStorage.setItem(documentKey + key + ':' + tabId, value); } } catch { saveStatus.textContent = 'Browser backup unavailable — keep this tab open until saved'; } },
+  setItem(key, value) { try { if (documentKey) { localStorage.setItem(documentKey + key, value); if (key === 'wa-working') localStorage.setItem(documentKey + key + ':' + tabId, value); } } catch { notify('Browser backup unavailable — keep this tab open until saved', { sticky: true, key: 'backup' }); } },
   removeItem(key) { try { if (documentKey) localStorage.removeItem(documentKey + key); } catch {} },
 };
 const jobs = new Set();
@@ -533,13 +538,13 @@ settingsDialog.querySelector('.dialog-close').addEventListener('click', () => se
 // Without a model every AI action fails in the console and the editor just
 // looks broken. Send the writer to the one place that fixes it instead.
 async function ensureAgent() {
-  if (loadingDocument) { saveStatus.textContent = 'Wait until the draft is loaded'; return false; }
+  if (loadingDocument) { notify('Wait until the draft is loaded'); return false; }
   if (currentAgent()) return true;
   // The status call may still be in flight on a fresh load — ask once more
   // before telling the writer their setup is missing.
   try { await refreshAgent(); } catch {}
   if (currentAgent()) return true;
-  chatAdd(chatEl('div', 'chat-error', 'No model selected — add an API key or pick a model in settings.'));
+  notify('No model selected — add an API key or pick a model in settings.');
   openSettings();
   return false;
 }
@@ -913,7 +918,16 @@ function jumpToNextFinding(direction = 1) {
 document.addEventListener('keydown', event => {
   if (event.key === 'F8') { event.preventDefault(); jumpToNextFinding(event.shiftKey ? -1 : 1); }
   if (event.key === 'Escape' && !markBubble.hidden) { hideMarkBubble(); workView.focus(); return; }
-  if (event.key === 'Escape' && plainPreview) { clearPlainPreview(); workView.focus(); }
+  if (event.key === 'Escape' && plainPreview) { clearPlainPreview(); workView.focus(); return; }
+  // Last, so the lighter dismissals above still win. On a narrow window the
+  // sidebar is a layer over the text, and Escape is how a layer goes away.
+  // The composer claims Escape for itself only while it holds a request or an
+  // attached passage, and claims it by stopping the event on the way out — so
+  // there is nothing left to check here. Tested any looser, the panel became
+  // undismissable by key, because the focus is almost always in the draft and
+  // the draft has no Escape of its own to spend. The scrim is the way out for
+  // a hand that is not on the keyboard.
+  if (event.key === 'Escape' && sidebarIsOverlay()) { setSidebar(false); return; }
 });
 // A press outside the bubble puts it away; a mark click re-opens its own on
 // the following click event, so hiding here never swallows an opening.
@@ -953,7 +967,7 @@ function dismissFinding(id) {
   syncVariantTarget();
   syncReviewLabel();
   workView.focus();
-  if (decision) showEditFeedback('Kept as is', () => {
+  if (decision) notifyUndo('Kept as is', () => {
     const saved = safeJson(docStorage.getItem('dismissed'), []);
     docStorage.setItem('dismissed', JSON.stringify(saved.filter(item => JSON.stringify(item) !== JSON.stringify(decision))));
     if (workView.state.doc.toString() === document) { mergeFindings([finding]); syncReviewLabel(); }
@@ -978,7 +992,7 @@ function restoreFindings() {
 }
 
 function clearReview() {
-  editFeedback.hidden = true;
+  clearNotice('undo');
   discardFindingCards();
   for (const stale of document.querySelectorAll('.chat-variants')) stale.remove();
   clearPlainPreview();
@@ -1221,7 +1235,7 @@ function keepStyleMarker(marker) {
   keptStyle.push(kept);
   workView.dispatch({ effects: refreshStyleFx.of(null) });
   saveKeptStyle(); removeLocalFinding(); syncStyleScore();
-  showEditFeedback('Kept this wording here', () => {
+  notifyUndo('Kept this wording here', () => {
     keptStyle = keptStyle.filter(item => item !== kept); saveKeptStyle();
     workView.dispatch({ effects: refreshStyleFx.of(null) }); syncStyleScore();
   });
@@ -1232,11 +1246,15 @@ function removeLocalFinding() {
   localFinding = null;
   if (activeFinding?.id === -1) detach();
 }
-function selectStyleMarker(marker) {
+// `at` is the click point in the draft, and only a click carries one: a row in
+// the Slop popover is somewhere else entirely, so it asks for the card centred
+// instead. A click is already at the passage and needs no bubble of its own —
+// openFinding raises it from the same point.
+function selectStyleMarker(marker, at = null) {
   closeScorePopover();
   if (localFinding?.from !== marker.from || localFinding?.quote !== marker.quote) removeLocalFinding();
   localFinding = { ...marker, id: -1, pattern: 'Stock wording', state: 'pending' };
-  openFinding(localFinding, true);
+  openFinding(localFinding, !at, at);
 }
 scoreDetails.addEventListener('beforetoggle', event => { if (event.newState === 'open') renderScoreDetails(); });
 scoreDetails.addEventListener('toggle', () => scoreEl.setAttribute('aria-expanded', String(isScoreOpen())));
@@ -1406,7 +1424,7 @@ async function suggestFetch(manual = false) {
         else if (parsed.error) errorMsg = typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error);
       } catch {}
       const problem = modelError(new Error(errorMsg));
-      if (isCurrent() && !saidInStream(problem.say)) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
+      if (isCurrent()) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
       return;
     }
 
@@ -1428,7 +1446,7 @@ async function suggestFetch(manual = false) {
       else if (parsed.message) errorMsg = parsed.message;
     } catch {}
     const problem = modelError(new Error(errorMsg));
-    if (isCurrent() && !saidInStream(problem.say)) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
+    if (isCurrent()) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
   } finally {
     finishJob(job);
     if (suggestAbort === job) suggestAbort = null;
@@ -1464,7 +1482,7 @@ async function runIdeaExpansion(view, line) {
   const target = { from: line.from, to: line.to, text: line.text, document: view.state.doc.toString() };
   if (!await ensureAgent()) return;
   const job = startJob();
-  const bubble = chatAdd(chatEl('div', 'chat-message is-agent', 'Expanding idea… Your draft is unchanged.'));
+  const bubble = chatAdd(chatEl('div', 'chat-entry is-agent', 'Expanding idea… Your draft is unchanged.'));
   let answer = '';
   try {
     const res = await fetch('/idea', {
@@ -1568,7 +1586,7 @@ function restoreChat() {
   if (!Array.isArray(messages)) return;
   chatHistory = messages.filter(message => message && ['user', 'assistant'].includes(message.role) && typeof message.content === 'string').slice(-20);
   for (const message of chatHistory) {
-    if (message.role === 'user') streamAppend(chatEl('div', 'chat-message is-user', message.display ?? message.content));
+    if (message.role === 'user') streamAppend(chatEl('div', 'chat-entry is-user', message.display ?? message.content));
     else {
       message.edits = Array.isArray(message.edits) ? message.edits.filter(edit => edit && typeof edit.quote === 'string' && typeof edit.replacement === 'string' && typeof edit.label === 'string').slice(0, 8) : [];
       for (const edit of message.edits) {
@@ -1576,7 +1594,7 @@ function restoreChat() {
           if (edit.state !== 'unlocated') edit.state = 'stale';
         }
       }
-      renderChatAnswer(streamAppend(chatEl('div', 'chat-message is-agent is-markdown')), message);
+      renderChatAnswer(streamAppend(chatEl('div', 'chat-entry is-agent is-markdown')), message);
     }
   }
   // Closed by default: history is kept and reopenable via Conversation,
@@ -1584,9 +1602,9 @@ function restoreChat() {
   setChatOpen(false);
 }
 function renderChatAnswer(reply, message) {
-  reply.innerHTML = renderMarkdown(message.content);
+  // Older saved answers may still carry a raw edit list in their text.
+  reply.innerHTML = renderMarkdown(chatVisibleText(message.content, true));
   for (const edit of message.edits || []) reply.append(chatEditCard(edit));
-  if (message.editWarning) reply.append(chatEl('p', 'chat-error', message.editWarning));
 }
 function chatEditCard(edit) {
   const card = chatEl('section', 'chat-edit-card');
@@ -1615,7 +1633,7 @@ function chatEditCard(edit) {
   // in its own footer row, not another button in the action row.
   const undoFoot = chatEl('div', 'variant-undo-row');
   undoFoot.hidden = true;
-  const undo = chatEl('button', 'chat-again', 'Undo');
+  const undo = chatEl('button', 'chat-action', 'Undo');
   undo.type = 'button';
   undo.title = 'Put the passage back as it was';
   undo.addEventListener('click', () => {
@@ -1808,25 +1826,7 @@ function streamAppend(node) {
 }
 
 // Keep the way back visible even when the conversation is put away.
-// The toast auto-hides: the Undo on the kept variant card itself stays
-// timer-free, so nothing is lost when this goes away.
-let editFeedbackTimer = null;
-const EDIT_FEEDBACK_MS = 6000;
-function showEditFeedback(message, onUndo) {
-  editFeedback.replaceChildren(chatEl('span', '', message));
-  const undo = chatEl('button', 'edit-feedback-undo', 'Undo');
-  undo.type = 'button';
-  const hide = () => { clearTimeout(editFeedbackTimer); editFeedback.hidden = true; };
-  undo.addEventListener('click', () => { hide(); onUndo(); });
-  const close = chatEl('button', 'edit-feedback-close', '×');
-  close.type = 'button';
-  close.setAttribute('aria-label', 'Hide editing confirmation');
-  close.addEventListener('click', () => { hide(); workView.focus(); });
-  editFeedback.append(undo, close);
-  editFeedback.hidden = false;
-  clearTimeout(editFeedbackTimer);
-  editFeedbackTimer = setTimeout(() => { editFeedback.hidden = true; }, EDIT_FEEDBACK_MS);
-}
+const notifyUndo = (message, onUndo) => notify(message, { action: onUndo, key: 'undo' });
 
 // ── Attached passage ──
 
@@ -1882,37 +1882,76 @@ function attachedRange() {
 //  Clicking a mark or selecting text arms nothing. The bubble beside the click
 //  holds the explicit acts instead: Add to context (names the chip, stays in
 //  the editor) and a rewrite (attaches, then asks the model). One bubble at a
-//  time; scroll, edit, copy, or Escape puts it away.
+//  time; an edit, copy, or Escape puts it away — a scroll carries it along.
 const markBubble = document.getElementById('mark-bubble');
-let bubbleMode = null;   // 'finding' | 'style' | 'selection' while open
+let bubbleMode = null;   // 'finding' | 'style' | 'selection' | 'continue' | 'spell' while open
 
 function hideMarkBubble() {
+  bubbleAnchor = null;
   if (markBubble.hidden) return;
   markBubble.hidden = true;
   markBubble.replaceChildren();
   bubbleMode = null;
 }
 
-function placeBubble(x, y, { below = false } = {}) {
-  markBubble.hidden = false;
-  const box = markBubble.getBoundingClientRect();
-  const left = Math.max(8, Math.min(x - box.width / 2, window.innerWidth - box.width - 8));
-  let top;
-  if (below) {
-    // Below the line with a clear gap: the cursor line stays fully readable,
-    // the bubble never sits on the word it refers to. Falls back above only
-    // when the viewport bottom has no room.
-    top = y + 20;
-    if (top + box.height > window.innerHeight - 8) top = y - box.height - 12;
-  } else {
-    // Above the text, just above its line — below it only when the top
-    // has no room.
-    top = y - box.height - 4;
-    if (top < 8) top = y + 14;
-  }
-  markBubble.style.left = `${left}px`;
-  markBubble.style.top = `${Math.max(8, top)}px`;
+// The box the bubble may live in: the writing pane, not the window. The header
+// is fixed over the draft's first line and the file sidebar is a column beside
+// it, and a toolbar under either is a toolbar nobody can press — the click that
+// should dismiss it lands on the chrome instead, so the bubble looks present
+// and does nothing. Both edges come from the pane the text is in, and the top
+// from under the header, which is why clamping to the window was not enough.
+function bubbleArea() {
+  const pane = document.getElementById('pane-work').getBoundingClientRect();
+  const header = document.getElementById('pane-header').getBoundingClientRect();
+  const left = pane.left + 8;
+  return {
+    left,
+    right: Math.max(left, pane.right - 8),
+    top: Math.max(pane.top, header.bottom) + 8,
+    bottom: window.innerHeight - 8,
+  };
 }
+
+// The document position the bubble was asked for, so a reflow can put it back
+// over the same words — the draft re-centres when the sidebar opens, so the
+// old screen point would be off. Cleared whenever it is put away.
+let bubbleAnchor = null;
+
+function placeBubble(x, y, anchor = null) {
+  markBubble.hidden = false;
+  if (!anchor) {
+    const pos = workView.posAtCoords({ x, y });
+    const at = pos == null ? null : workView.coordsAtPos(pos);
+    anchor = at && { pos, dx: x - at.left, dy: y - at.top };
+  }
+  bubbleAnchor = anchor;
+  const area = bubbleArea();
+  // Scrolled under the header or off the pane: hidden with its words, back
+  // when they return — never pinned to an edge pointing at nothing.
+  markBubble.style.visibility = y < area.top - 8 || y > area.bottom ? 'hidden' : '';
+  const box = markBubble.getBoundingClientRect();
+  const { left, top } = clampBubble(x, y, { w: box.width, h: box.height }, area);
+  markBubble.style.left = `${left}px`;
+  markBubble.style.top = `${top}px`;
+}
+
+// Back over its words after a scroll or reflow, at the same offset from them.
+// Layout is read in CM's measure phase: reading it mid-update throws.
+function reanchorBubble() {
+  const anchor = bubbleAnchor;
+  if (!anchor) return;
+  workView.requestMeasure({
+    read: view => view.coordsAtPos(anchor.pos),
+    write: coords => {
+      if (markBubble.hidden) return;
+      if (!coords) { markBubble.style.visibility = 'hidden'; return; }
+      placeBubble(coords.left + anchor.dx, coords.top + anchor.dy, anchor);
+    },
+  });
+}
+// CM reports no geometry change when the text column only shifts sideways
+// (sidebar, window width), so the pane itself is watched too.
+new ResizeObserver(reanchorBubble).observe(document.getElementById('pane-work'));
 
 function bubbleButton(label, run) {
   const button = chatEl('button', 'mark-bubble-seg', label);
@@ -1926,21 +1965,23 @@ function attachLive(finding, range) {
 }
 
 function showFindingBubble(finding, x, y) {
-  bubbleMode = 'finding';
+  // A local style mark is the same remark with a different origin; only the
+  // copy handler cares which, and it must not read a finding as a selection.
+  bubbleMode = finding.id === -1 ? 'style' : 'finding';
   const actions = chatEl('div', 'mark-bubble-actions');
   actions.append(
+    bubbleButton('Add to context', () => {
+      const range = findingRange(finding.id);
+      if (range) attachLive(finding, range);
+    }),
     bubbleButton('Suggest rewrites', () => {
       const range = findingRange(finding.id);
       if (!range) return;
       attachLive(finding, range);
       const card = findingCards.get(finding.id);
-      const offer = card?.querySelector('.chat-offer');
+      const offer = card?.querySelector('.chat-action');
       if (offer && !offer.disabled) offer.click();
       else if (card) requestVariants(`Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`, null, card);
-    }),
-    bubbleButton('Add to context', () => {
-      const range = findingRange(finding.id);
-      if (range) attachLive(finding, range);
     }),
   );
   markBubble.replaceChildren(actions);
@@ -1991,6 +2032,13 @@ function showContinueBubble(x, y) {
 // A dictionary miss offers direct replacements — no model call, no card, the
 // fix is already known. Suggestions are computed on click, not while typing:
 // nspell's suggest() does an edit-distance search, correct() alone does not.
+//
+// Four words, not five: the bubble is a single unwrapped row capped at 340px,
+// and its segments never shrink below their text. A fifth replacement pushes
+// the last segment past the rounded end of the pill, where it reads as part of
+// the page instead of part of the toolbar. Four is already more than anyone
+// weighs before choosing.
+const SPELL_SUGGESTIONS = 4;
 function showSpellBubble(marker, x, y) {
   bubbleMode = 'spell';
   const actions = chatEl('div', 'mark-bubble-actions');
@@ -1998,7 +2046,7 @@ function showSpellBubble(marker, x, y) {
     if (workView.state.sliceDoc(marker.from, marker.to) !== marker.quote) return;
     workView.dispatch({ changes: { from: marker.from, to: marker.to, insert: suggestion }, userEvent: 'input.spellfix' });
   };
-  for (const suggestion of (spellChecker?.suggest(marker.quote) ?? []).slice(0, 5)) {
+  for (const suggestion of (spellChecker?.suggest(marker.quote) ?? []).slice(0, SPELL_SUGGESTIONS)) {
     actions.append(bubbleButton(suggestion, () => replace(suggestion)));
   }
   actions.append(bubbleButton('Ignore', () => {
@@ -2099,7 +2147,7 @@ function clearPlainPreview() {
 function applyText(text, target, wrap = null, card = null) {
   if (!replacementTarget(workView.state.doc.toString(), target) || workView.state.readOnly) {
     markVariantTarget(null);
-    chatAdd(chatEl('div', 'chat-error', 'The draft changed since this answer. Select the passage and request new options.'));
+    notify('The draft changed since this answer. Select the passage and request new options.');
     return;
   }
   const range = target;
@@ -2135,7 +2183,7 @@ function applyText(text, target, wrap = null, card = null) {
   if (wrap) {
     wrap.classList.add('is-spent');
     attachUndo(card, text, target);
-    const hostCard = wrap.closest('.chat-card');
+    const hostCard = wrap.closest('.chat-entry.is-finding');
     if (hostCard && findingCards.has(Number(hostCard.dataset.findingId))) {
       const findingId = Number(hostCard.dataset.findingId);
       // Decided at once: the other buttons go immediately, while the applied
@@ -2179,21 +2227,21 @@ function attachUndo(card, text, target) {
   let row = card.querySelector('.variant-undo-row');
   if (!row) {
     row = chatEl('div', 'variant-undo-row');
-    const undo = chatEl('button', 'chat-again', 'Undo');
+    const undo = chatEl('button', 'chat-action', 'Undo');
     undo.type = 'button';
     undo.title = 'Put the passage back as it was';
     undo.addEventListener('click', () => {
       const at = Number(undo.dataset.from);
       const { applied, previous } = undo.dataset;
       if (!undo.isConnected || undo.dataset.stale || workView.state.sliceDoc(at, at + applied.length) !== applied) {
-        chatAdd(chatEl('div', 'chat-error', 'That passage has changed since. Use the editor’s undo instead.'));
+        notify('That passage has changed since. Use the editor’s undo instead.');
         return;
       }
       workView.dispatch({ changes: { from: at, to: at + applied.length, insert: previous }, selection: { anchor: at + previous.length } });
       workView.focus();
       save();
       const spentWrap = undo.closest('.chat-variants');
-      const hostCard = undo.closest('.chat-card');
+      const hostCard = undo.closest('.chat-entry.is-finding');
       fadeRemove(spentWrap);
       syncVariantTarget();
       // An undone rail card remarked on text that is back to its original
@@ -2264,12 +2312,12 @@ function refocusAfterRemoval(removedId) {
 }
 
 function findingCard(finding, instruction) {
-  const card = chatEl('div', 'chat-card');
+  const card = chatEl('div', 'chat-entry is-finding');
   card.dataset.findingId = String(finding.id);
   card.addEventListener('mouseenter', () => markFor(finding.id)?.classList.add('is-hot'));
   card.addEventListener('mouseleave', () => markFor(finding.id)?.classList.remove('is-hot'));
   // The card opens on the remark itself: pattern, why it matters, what to do.
-  const dismiss = chatEl('button', 'chat-card-dismiss', 'Keep as is');
+  const dismiss = chatEl('button', 'chat-dismiss', 'Keep as is');
   dismiss.type = 'button';
   dismiss.title = 'Keep this wording and dismiss the finding';
   dismiss.addEventListener('click', () => {
@@ -2289,12 +2337,12 @@ function findingCard(finding, instruction) {
   // draft — so there is nothing to choose before asking.
   // Discussing a finding needs no button of its own: the card is attached, and
   // typing in the composer with a finding attached opens the conversation.
-  const offer = chatEl('button', 'chat-offer', 'Options');
+  const offer = chatEl('button', 'chat-action', 'Options');
   offer.type = 'button';
   offer.addEventListener('click', () => {
     const live = findingRange(finding.id);
     if (!live) {
-      if (!card.querySelector('.chat-error')) card.append(chatEl('div', 'chat-error', 'This passage has changed. Check again.'));
+      notify('This passage has changed. Check again.');
       return;
     }
     // Options already on screen are the answer — asking again would wipe
@@ -2314,7 +2362,7 @@ function findingCard(finding, instruction) {
   });
   const actions = chatEl('div', 'finding-actions');
   actions.append(offer, dismiss);
-  const discuss = chatEl('button', 'chat-again', 'Discuss');
+  const discuss = chatEl('button', 'chat-action', 'Discuss');
   discuss.type = 'button';
   discuss.addEventListener('click', () => { const range = findingRange(finding.id); if (range) attachLive(finding, range); chatInput.focus(); });
   actions.append(discuss);
@@ -2387,7 +2435,7 @@ function variantCards(variants, instruction, target, card = null) {
   const hintSeen = (() => { try { return localStorage.getItem('wa-variant-hint') === 'seen'; } catch { return false; } })();
   if (instruction !== null) {
     const foot = chatEl('div', 'variant-foot');
-    const again = chatEl('button', 'chat-again is-icon');
+    const again = chatEl('button', 'chat-action is-icon');
     again.type = 'button';
     again.setAttribute('aria-label', 'Try again — ask for three more');
     again.title = 'Try again — ask for three more';
@@ -2434,7 +2482,7 @@ function restoreFindingCard(card) {
   if (!card) return;
   // The offer waits dimmed while its request is in flight; a failed request
   // hands it back.
-  const offer = card.querySelector('.chat-offer:disabled');
+  const offer = card.querySelector('.chat-action:disabled');
   if (offer) { offer.disabled = false; offer.textContent = 'Options'; }
   if (!card.hidden) return;
   card.hidden = false;
@@ -2470,7 +2518,7 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
   const range = existingTarget ?? attachedRange();
   const target = existingTarget ?? (range && { ...range, document: workView.state.doc.toString() });
   if (!range) {
-    chatAdd(chatEl('div', 'chat-error', 'That passage is no longer attached — select it again.'));
+    notify('That passage is no longer attached — select it again.');
     return;
   }
   if (!await ensureAgent()) return;
@@ -2514,7 +2562,7 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
       // comes back — it asked and was answered, it must not read as working.
       if (placeholder.isConnected) placeholder.replaceWith(wrap);
       else box.append(wrap);
-      const done = card.querySelector('.chat-offer:disabled');
+      const done = card.querySelector('.chat-action:disabled');
       if (done) { done.disabled = false; done.textContent = 'Options'; }
       layoutRail();
       markVariantTarget(target);
@@ -2536,10 +2584,8 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
     // Nothing came back; the remark is what the card has to say.
     placeholder.remove();
     syncVariantTarget();
-    if (!inCard) restoreFindingCard(card);
-    const err = errorCard(modelError(error), () => requestVariants(instruction, target, card));
-    if (inCard) { box.append(err); restoreFindingCard(card); scrollToNode(err); }
-    else chatAdd(err);
+    restoreFindingCard(card);
+    notifyProblem(modelError(error), () => requestVariants(instruction, target, card));
   } finally { finishJob(job); if (chatAbort === job) chatAbort = null; }
 }
 
@@ -2568,7 +2614,7 @@ function openFinding(finding, center = false, at = null) {
   if (findingCards.get(finding.id)?.isConnected) {
     syncActiveCard();
     collapseStreamBehind(findingCards.get(finding.id));
-    findingCards.get(finding.id)?.querySelector('.chat-offer')?.focus({ preventScroll: true });
+    findingCards.get(finding.id)?.querySelector('.chat-action')?.focus({ preventScroll: true });
     chatScroll(true);
     return;
   }
@@ -2588,7 +2634,11 @@ function openFinding(finding, center = false, at = null) {
   if (card.parentElement === chatStream) setChatOpen(true);
   else collapseStreamBehind(card);
   syncActiveCard();
-  card.querySelector('.chat-offer')?.focus({ preventScroll: true });
+  card.querySelector('.chat-action')?.focus({ preventScroll: true });
+  // The card is for reading the remark; the bubble is for the two acts that
+  // follow it, and only a click knows where to put it. F8 and the remark list
+  // pass no point and get the card alone.
+  if (at) showFindingBubble(finding, at.x, at.y);
 }
 
 // A remark open beside the draft owns the writer's attention: the bottom
@@ -2615,7 +2665,7 @@ async function chatSend() {
   if (!await ensureAgent()) return;
   chatInput.value = '';
   chatResize();
-  chatAdd(chatEl('div', 'chat-message is-user', text));
+  chatAdd(chatEl('div', 'chat-entry is-user', text));
 
   chatHistory.push(attached && activeFinding
     ? {
@@ -2629,7 +2679,7 @@ async function chatSend() {
 }
 
 function newReplyBubble() {
-  const reply = chatAdd(chatEl('div', 'chat-message is-agent is-markdown'));
+  const reply = chatAdd(chatEl('div', 'chat-entry is-agent is-markdown'));
   reply.append(chatEl('span', 'chat-caret'));
   return reply;
 }
@@ -2646,7 +2696,7 @@ async function streamReply(reply) {
     const res = await fetch('/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: job.signal,
       body: JSON.stringify({
-        messages: chatHistory.map(({ role, content, edits }) => ({ role, content: content + (edits?.length ? '\nProposed edits:\n' + JSON.stringify(edits.map(({ label, quote, replacement, state }) => ({ label, quote, replacement, state }))) : '') })),
+        messages: chatHistory.map(({ role, content, edits }) => ({ role, content: content + (edits?.length ? `\n${EDITS_OPEN}${JSON.stringify(edits.map(({ label, quote, replacement, state }) => ({ label, quote, replacement, state })))}</litura-edits>` : '') })),
         document: request.document, selection: request.selection?.text,
         selectionRange: request.selection && { from: request.selection.from, to: request.selection.to }, agent: currentAgent(),
       }),
@@ -2665,11 +2715,12 @@ async function streamReply(reply) {
     for (const edit of edits) for (const changes of request.changes) mapChatEdit(edit, changes);
     const message = { role: 'assistant', content: answer, edits, editWarning: result?.editWarning };
     chatHistory.push(message); renderChatAnswer(reply, message); saveChat(); chatScroll(true);
+    if (message.editWarning) notify(message.editWarning);
   } catch (error) {
     if (!reply.isConnected) return;
     if (error.name === 'AbortError') { reply.innerHTML = renderMarkdown(answer ? answer + '\n\n[Stopped — incomplete]' : 'Stopped'); return; }
     console.error('[/chat]', error);
-    if (!answer) reply.replaceWith(errorCard(modelError(error), () => streamReply(newReplyBubble())));
+    if (!answer) { reply.remove(); notifyProblem(modelError(error), () => streamReply(newReplyBubble())); }
     else reply.innerHTML = renderMarkdown(answer + '\n\n' + modelError(error).say);
   } finally { chatRequests.delete(request); finishJob(job); if (chatAbort === job) chatAbort = null; }
 }
@@ -2727,9 +2778,16 @@ chatInput.addEventListener('input', chatResize);
 chatInput.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); chatSend(); }
   else if (event.key === 'Escape') {
-    if (chatAbort && !chatAbort.signal.aborted) { chatAbort.abort(); return; }
+    // Escape belongs to the composer only while it has something to give up.
+    // A key with two owners is claimed by the inner one: stopPropagation, so
+    // nothing further up reads a state this handler has already undone — and
+    // nothing above can act on the same press. With nothing attached and no
+    // request running, the key is left alone to reach the sidebar overlay.
+    if (chatAbort && !chatAbort.signal.aborted) { chatAbort.abort(); event.stopPropagation(); return; }
+    if (!attached) return;
     detach();
     workView.focus();
+    event.stopPropagation();
   }
 });
 
@@ -2904,7 +2962,7 @@ const editorTheme = EditorView.theme({
   '&.streaming .cm-content': { opacity: '0.8' },
 
   // Placeholder text (shown when doc is empty)
-  // It carries the only instructions in the product now, so it has to be
+  // It carries the only instruction in the product now, so it has to be
   // readable, not a watermark.
   '.cm-placeholder': {
     color:      'var(--muted)',
@@ -2998,7 +3056,9 @@ const workView = new EditorView({
       // line never parks flush under it.
       EditorView.scrollMargins.of(() => ({ top: 64, bottom: chatHeight })),
 
-      placeholder('Start writing'),
+      // The only instruction the product gives here: where files come from.
+      // Gone by the first keystroke. SPEC.md §Editor.
+      placeholder('Start writing, or open a file from the sidebar.'),
 
       // Visual theme
       editorTheme,
@@ -3023,7 +3083,7 @@ const workView = new EditorView({
             const marker = local && view.state.field(styleMarkerField).find(item => item.from === Number(local.dataset.styleFrom));
             // Reading the reason arms nothing — the bubble holds Add to
             // context and Rewrite for when the writer decides.
-            if (marker) selectStyleMarker(marker);
+            if (marker) selectStyleMarker(marker, at);
             // Only where a continuation is even possible — the same spot
             // Cmd/Ctrl+Enter already requires — so an ordinary click to fix a
             // word mid-paragraph never raises the bubble.
@@ -3060,9 +3120,10 @@ const workView = new EditorView({
       EditorView.updateListener.of(update => {
         if (update.docChanged || update.geometryChanged || update.viewportChanged) {
           layoutRail();
-          // The bubble points at document coordinates: any edit or scroll
-          // leaves it pointing at the wrong place, so it goes.
-          hideMarkBubble();
+          // Only an edit invalidates the bubble — the words it points at may
+          // be gone. A scroll or a reflow moves them; the bubble follows.
+          if (update.docChanged) hideMarkBubble();
+          else reanchorBubble();
         } else if (bubbleMode === 'selection' && update.selectionSet && update.state.selection.main.empty) {
           hideMarkBubble();
         }
@@ -3089,7 +3150,7 @@ const workView = new EditorView({
             });
             undo.dataset.from = String(update.changes.mapPos(from, 1));
           }
-          if (update.transactions.some(tr => tr.isUserEvent('undo') || tr.isUserEvent('redo'))) editFeedback.hidden = true;
+          if (update.transactions.some(tr => tr.isUserEvent('undo') || tr.isUserEvent('redo'))) clearNotice('undo');
           // No "out of date" notice here: findings are live-anchored — edits
           // outside their ranges only shift the marks, edits inside drop
           // them — so there is nothing stale to announce on every keystroke.
@@ -3145,9 +3206,9 @@ function exportText(text, name = 'draft.md') {
   link.href = url; link.download = name; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function dialog(title, { size = 'lg' } = {}) {
+function dialog(title) {
   const trigger = document.activeElement;
-  const modal = chatEl('dialog', `settings-dialog document-dialog dialog-${size}`);
+  const modal = chatEl('dialog', 'settings-dialog document-dialog');
   const heading = chatEl('h2', '', title);
   heading.id = 'document-dialog-' + crypto.randomUUID();
   modal.setAttribute('aria-labelledby', heading.id);
@@ -3164,36 +3225,12 @@ function dialog(title, { size = 'lg' } = {}) {
   modal.showModal();
   return modal;
 }
-// A two-button question in the same visual language as every other dialog —
-// the replacement for window.confirm, which cannot be styled, focused, or
-// dismissed with Escape consistently. Resolves true on the action, false
-// otherwise (including × and Escape, via the close event's return value).
-function confirmDialog({ title, body, okLabel = 'Confirm', danger = false }) {
-  return new Promise(resolve => {
-    const modal = dialog(title, { size: 'sm' });
-    modal.append(chatEl('p', 'confirm-body', body));
-    const actions = chatEl('div', 'confirm-actions');
-    const cancel = chatEl('button', '', 'Cancel');
-    cancel.type = 'button';
-    const ok = chatEl('button', 'is-primary', okLabel);
-    ok.type = 'button';
-    if (danger) ok.dataset.danger = 'true';
-    actions.append(cancel, ok);
-    modal.append(actions);
-    let done = false;
-    const finish = value => { done = true; modal.close(); resolve(value); };
-    cancel.addEventListener('click', () => finish(false));
-    ok.addEventListener('click', () => finish(true));
-    modal.addEventListener('close', () => { if (!done) resolve(false); }, { once: true });
-    (danger ? ok : cancel).focus();
-  });
-}
 function loadFromDisk(text) {
   loadingDocument = true;
   reviewState = 'idle'; reviewNotice = ''; keptStyle = []; removeLocalFinding();
   chatEditCards.clear();
   scoreDetails.hidePopover();
-  editFeedback.hidden = true;
+  clearNotice('undo');
   for (const job of jobs) job.abort();
   cancelSuggestion();
   saveSnapshot('Before replacing document');
@@ -3206,6 +3243,13 @@ function loadFromDisk(text) {
   docStorage.removeItem('dismissed');
   setChatOpen(false);   // the stream was just emptied — don't leave × over nothing
   loadingDocument = false;
+}
+// Replacing the draft asks nothing: the old text goes to History, and the
+// notice carries an Undo for the next few seconds.
+function replaceDraft(text, message) {
+  const previous = workView.state.doc.toString();
+  loadFromDisk(text); save();
+  notifyUndo(message, () => { loadFromDisk(previous); save(); });
 }
 function saveToDisk() {
   clearTimeout(diskTimer);
@@ -3230,21 +3274,15 @@ async function flushSave() {
     if (!response.ok) throw new Error(data.error || 'Save failed');
     noteDiskBaseline(text, data.revision);
     // A recovered save clears a previous error line, then goes quiet again.
-    saveStatus.textContent = '';
-    saveStatus.title = '';
+    clearNotice('disk');
   } catch (error) {
     savePaused = true;
     cancelSuggestion();
     ghostClear(workView);
-    // The payload belongs in the tooltip; the header keeps the fact, and the
-    // card in the stream carries the sentence and the way out.
-    saveStatus.textContent = 'Not saved — autosave paused';
-    saveStatus.title = error.message;
-    chatAdd(errorCard(
-      { say: 'The draft could not be saved to disk.', act: 'retry', detail: error.message },
-      () => { savePaused = false; saveToDisk(); },
-      'Retry saving',
-    ));
+    // The payload belongs in the tooltip; the notice carries the sentence
+    // and the way out.
+    notifyProblem({ say: 'Not saved — autosave paused.', act: 'retry', detail: error.message },
+      () => { savePaused = false; saveToDisk(); }, 'Retry saving', 'disk');
   } finally {
     saving = false;
     if (!savePaused && workView.state.doc.toString() !== diskText) saveToDisk();
@@ -3291,18 +3329,15 @@ function adoptDiskText(current, announce = false) {
   workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: current.text } });
   noteDiskBaseline(current.text, current.revision);
   diskHold = false; hideDriftBanner(); save();
-  if (announce) {
-    editFeedback.replaceChildren(chatEl('span', '', 'Reloaded from disk — it changed outside Litura.'));
-    editFeedback.hidden = false;
-    clearTimeout(editFeedbackTimer);
-    editFeedbackTimer = setTimeout(() => { editFeedback.hidden = true; }, EDIT_FEEDBACK_MS);
-  }
+  if (announce) notify('Reloaded from disk — it changed outside Litura.');
 }
 function showDriftBanner(current) {
   driftCurrent = current;
   diskHold = true;
-  saveStatus.textContent = 'Paused — file changed on disk';
-  saveStatus.title = 'Resolve above the draft: load the disk copy or keep writing.';
+  // The banner is the whole report for this case: it sits over the draft,
+  // names the conflict and carries both ways out. A second copy in the stream
+  // said the same sentence in error red and pulled the panel open over the
+  // text the writer was trying to resolve it against.
   renderDriftDiff();
   driftBanner.hidden = false;
 }
@@ -3385,21 +3420,16 @@ async function initializeDocument() {
       if (verdict === 'fast-forward') adoptDiskText(current);
       else if (verdict === 'diverged') showDriftBanner(current);
     }
-    else { saveStatus.textContent = ''; saveStatus.title = ''; }
+    else clearNotice('disk');
     const legacy = localStorage.getItem('wa-working');
     if (legacy !== null && legacy !== current.text && !docStorage.getItem('legacy-offered')) {
-      const recover = chatEl('button', 'chat-again', 'Export draft from the previous Litura version');
-      recover.addEventListener('click', () => { exportText(legacy, 'legacy-draft.md'); docStorage.setItem('legacy-offered', 'yes'); recover.remove(); });
-      chatAdd(recover);
+      notify('A draft from the previous Litura version was found.', {
+        action: () => { exportText(legacy, 'legacy-draft.md'); docStorage.setItem('legacy-offered', 'yes'); },
+        label: 'Export', sticky: true,
+      });
     }
   } catch (error) {
-    saveStatus.textContent = 'Cannot open draft';
-    saveStatus.title = error.message;
-    chatAdd(errorCard(
-      { say: 'Litura could not open the draft.', act: 'retry', detail: error.message },
-      initializeDocument,
-      'Retry opening document',
-    ));
+    notifyProblem({ say: 'Litura could not open the draft.', act: 'retry', detail: error.message }, initializeDocument, 'Retry', 'disk');
   }
 }
 initializeDocument();
@@ -3408,7 +3438,7 @@ async function checkDiskDrift() {
   try {
     const current = await api('/draft');
     if (current.revision !== diskRevision) handleFreshDisk(current);
-  } catch (error) { saveStatus.textContent = 'Cannot check disk: ' + error.message; }
+  } catch (error) { notify('Cannot check disk: ' + error.message, { sticky: true, key: 'disk' }); }
 }
 window.addEventListener('focus', () => { checkDiskDrift(); if (!sidebar.classList.contains('is-closed')) refreshFileList(); });
 document.addEventListener('visibilitychange', () => {
@@ -3418,16 +3448,8 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('beforeunload', event => {
   if (!loadingDocument && (saving || workView.state.doc.toString() !== diskText)) { event.preventDefault(); event.returnValue = ''; }
 });
-document.getElementById('file-new').addEventListener('click', async () => {
-  if (workView.state.doc.length) {
-    const ok = await confirmDialog({
-      title: 'Start a new document',
-      body: 'The current text will be kept in History.',
-      okLabel: 'Start new',
-    });
-    if (!ok) { workView.focus(); return; }
-    loadFromDisk(''); save();
-  }
+document.getElementById('file-new').addEventListener('click', () => {
+  if (workView.state.doc.length) replaceDraft('', 'New document — the old text is in History');
   workView.focus();
 });
 document.getElementById('file-export').addEventListener('click', async () => {
@@ -3449,19 +3471,13 @@ document.addEventListener('keydown', event => {
 async function importFile(file) {
   if (!file || loadingDocument) return;
   if (file.size > 1024 * 1024 || !/\.(md|markdown|txt)$/i.test(file.name)) {
-    chatAdd(chatEl('div', 'chat-error', 'Open a Markdown or text file under 1 MB.'));
+    notify('Open a Markdown or text file under 1 MB.');
     return;
   }
   try {
     const text = await file.text();
-    const ok = await confirmDialog({
-      title: `Import ${file.name}`,
-      body: 'The file replaces this workspace draft. The current text will be kept in History.',
-      okLabel: 'Import',
-    });
-    if (!ok) return;
-    loadFromDisk(text); save(); refreshFileList();
-  } catch (error) { saveStatus.textContent = 'Import failed: ' + error.message; }
+    replaceDraft(text, `Imported ${file.name}`); refreshFileList();
+  } catch (error) { notify('Import failed: ' + error.message, { sticky: true }); }
 }
 // ─── File sidebar ────────────────────────────────────────────────────────────
 //
@@ -3492,6 +3508,12 @@ function timeAgo(iso) {
   if (seconds < 30 * 86400) return `${Math.floor(seconds / 86400)}d ago`;
   return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
+// True only where the sidebar is a layer over the draft rather than a column
+// beside it — the same 640px the stylesheet switches the panel to `fixed` at.
+// Above it the panel is part of the layout, and dismissing it on Escape or a
+// stray click would be closing a pane the writer is reading beside.
+const sidebarOverlayQuery = window.matchMedia('(max-width: 640px)');
+const sidebarIsOverlay = () => sidebarOverlayQuery.matches && !sidebar.classList.contains('is-closed');
 function setSidebar(open, persist = true) {
   // Width-animated, not display-toggled: the pane and composer glide with
   // it. inert keeps the collapsed panel out of tab order and screen readers.
@@ -3508,7 +3530,10 @@ function setSidebar(open, persist = true) {
   sidebarToggleSide.setAttribute('aria-expanded', String(open));
   clearTimeout(sidebarToggleTimer);
   const revealToggle = () => { sidebarToggle.hidden = open; sidebarToggleSide.hidden = !open; };
-  if (reduceMotion()) revealToggle();
+  // Nothing glides on the first call — the panel is already where it is going
+  // to be — so waiting out the transition would only leave the window with no
+  // toggle at all for a quarter of a second on every launch.
+  if (!persist || reduceMotion()) revealToggle();
   else sidebarToggleTimer = setTimeout(revealToggle, 260);
   // The composer is viewport-centred (position: fixed), while the draft
   // re-centres inside the narrowed pane — without this it sits 124px off
@@ -3549,7 +3574,12 @@ function renderFileList() {
       excerpt.textContent = file.excerpt;
       row.append(excerpt);
     }
-    row.addEventListener('click', () => openWorkspaceFile(file.name));
+    // Opening a file is the end of the visit to the panel, so on a narrow
+    // window the overlay gets out of the way of the draft it just replaced.
+    row.addEventListener('click', () => {
+      if (sidebarIsOverlay()) setSidebar(false);
+      openWorkspaceFile(file.name);
+    });
     item.append(row);
     fileList.append(item);
   }
@@ -3564,7 +3594,7 @@ async function refreshFileList() {
 async function openWorkspaceFile(name) {
   let text;
   try { ({ text } = await api(`/file?name=${encodeURIComponent(name)}`)); }
-  catch (error) { chatAdd(chatEl('div', 'chat-error', `Could not open ${name}: ${error.message}`)); return; }
+  catch (error) { notify(`Could not open ${name}: ${error.message}`, { sticky: true }); return; }
   // No confirm: the click is the intent, and loadFromDisk snapshots the
   // current text into History before replacing it. Clicking the file that
   // is already open does nothing at all.
@@ -3581,6 +3611,9 @@ async function openWorkspaceFile(name) {
 const toggleSidebar = () => { setSidebar(sidebar.classList.contains('is-closed')); workView.focus(); };
 sidebarToggle.addEventListener('click', toggleSidebar);
 sidebarToggleSide.addEventListener('click', toggleSidebar);
+// The light-dismiss for the narrow-window overlay. The scrim is the only part
+// of the sidebar a click can miss, so it is the only place that needs wiring.
+document.getElementById('sidebar-scrim').addEventListener('click', () => setSidebar(false));
 fileFilter.addEventListener('input', renderFileList);
 setSidebar((() => { try { return localStorage.getItem('wa-sidebar') === 'open'; } catch { return false; } })(), false);
 
@@ -3629,14 +3662,7 @@ document.getElementById('file-history').addEventListener('click', async () => {
           if (full.open && !preview.textContent) preview.textContent = item.text;
         }, { once: true });
         const restore = chatEl('button', '', 'Restore');
-        restore.addEventListener('click', async () => {
-          const ok = await confirmDialog({
-            title: 'Restore this version',
-            body: 'The current text is kept in History.',
-            okLabel: 'Restore',
-          });
-          if (ok) { loadFromDisk(item.text); save(); modal.close(); }
-        });
+        restore.addEventListener('click', () => { modal.close(); replaceDraft(item.text, 'Version restored'); });
         row.append(full, restore);
       }
       list.append(row);
@@ -3660,11 +3686,11 @@ document.getElementById('file-history').addEventListener('click', async () => {
     renderHistory();
     modal.append(chatEl('small', 'history-note',
       'Last 20 disk versions and 10 browser checkpoints. Disk copies sit beside the draft in .litura-history and are never deleted automatically.'));
-  } catch (error) { list.append(chatEl('p', 'chat-error', error.message)); }
+  } catch (error) { list.append(chatEl('p', 'history-note', error.message)); }
 });
 
 // ─── Initial focus ─────────────────────────────────────────────────────────────
 
-workView.scrollDOM.addEventListener('scroll', layoutRail, { passive: true });
+workView.scrollDOM.addEventListener('scroll', () => { layoutRail(); reanchorBubble(); }, { passive: true });
 workView.focus();
 syncStyleScore();
