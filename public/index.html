@@ -139,7 +139,7 @@
     draft stays visible and editable, which is why there is no scrim and no
     prev/next stepper: the underlines themselves are the navigation.
   -->
-  <div class="chat" id="chat">
+  <div class="chat is-collapsed" id="chat">
     <!-- Closing puts the conversation away; it does not end it. The same
          control brings it back, and the turns are still there. Own row above
          the stream — never overlapping cards or the composer. -->
@@ -170,15 +170,23 @@
         </button>
       </div>
     </div>
+    <!-- Idle the whole chat is one pill, after Symbioen's DynamicIsland: the
+         pill opens both the field and the stream. Labelled by JS — a restored
+         history shows Conversation plus its count. -->
+    <button type="button" class="chat-pill" id="chat-pill" aria-expanded="false" aria-label="Open conversation">
+      <span class="ph" data-icon="plus" aria-hidden="true"></span>
+      <span id="chat-pill-label">Ask anything</span>
+      <kbd title="Focus the composer (Cmd/Ctrl+K)">⌘K</kbd>
+    </button>
+    <!-- The one notice (notify() in app.js). The island shows either the input
+         or the notice, never both: while one is up the composer, the pill and
+         the recipes row step aside for it, buttons and all. -->
+    <div id="edit-feedback" class="edit-feedback" role="status" hidden></div>
   </div>
 
   <!-- Mark bubble: explicit actions for a clicked mark or a selection.
         Reading arms nothing — attaching and rewriting live here. -->
   <div id="mark-bubble" class="mark-bubble" role="toolbar" aria-label="Passage actions" hidden></div>
-
-  <!-- The one notice (notify() in app.js). Lives at body level — not inside #chat, whose
-       transform would capture fixed positioning — centred just above it. -->
-  <div id="edit-feedback" class="edit-feedback" role="status" hidden></div>
 
   <dialog id="settings-dialog" class="settings-dialog">
     <!-- No method="dialog": Enter in the API-key field adds the key instead of
@@ -305,6 +313,10 @@
         <label class="settings-check">
           <input type="checkbox" id="auto-suggest" checked>
           <span>Suggest continuations while typing<small>Switch both off to send your text only when you ask.</small></span>
+        </label>
+        <label class="settings-check">
+          <input type="checkbox" id="pills-margin">
+          <span>Actions in the margin<small>Experiment: Note and Add to context stand beside the selected line, Continue right after the caret, instead of floating over the text.</small></span>
         </label>
         <p class="settings-hint" id="suggest-shortcut">Cmd/Ctrl+Enter requests a continuation in the editor, even with automatic suggestions off. Tab accepts; Escape dismisses or cancels.</p>
         <p class="settings-hint">All changes take effect immediately.</p>

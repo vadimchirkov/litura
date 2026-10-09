@@ -4,6 +4,14 @@ Litura follows [semantic versioning](https://semver.org). Until 1.0 the minor nu
 
 ## Unreleased
 
+- The draft sets larger (17px) on a 68-character measure. Margin notes are written in the draft's own italic, sit on the passage's baseline and open as a single line with no background. The conversation island now morphs its outline between the pill, the composer and a notice, notices are pill-sized and wait eight seconds (longer under the pointer), and `Suggesting…` shows in the folded pill instead of vanishing with the composer.
+- The paragraph `+` stands on the line under the pointer instead of a long paragraph's first line, stays up while a bubble is open, and on a paragraph that already has a note opens that note. The selection and Continue bubbles wait a beat (250 and 450 ms) and never appear if you type or click again first; every bubble fades in and out.
+- A margin note now stands on the line it was made at — its passage, or the line its `+` was pressed beside — instead of at the top of a long paragraph, and the `+` is no longer offered beside a line a note already covers. Retrying a failed draft load no longer duplicates the restored notes.
+- Notes in the margin no longer overlap: the rail cards were positioned relative to their normal place instead of the rail, and now also restack when a note grows. The conversation island sits 16px higher.
+- Experiment, Settings → While you write → Actions in the margin: `Note` and `Add to context` stand in the notes rail beside the selected line, and `Continue` sits right after the caret with its `⌘↵` hint, instead of floating over the text. Falls back to the floating bubble where there is no rail.
+- With a conversation open, the turns and the field now stand inside one opaque panel (near-black in dark mode) instead of floating over the draft, and the fade behind the island is gone. Notes in the margin no longer get cut at the header: the rail reaches the window top like the draft's lines do.
+- Margin notes, slice 1: select a passage and press `Note` in the bubble to pin your own remark beside the line — plain text on the margin, no card chrome, blur commits and `Escape` drops, no Save/Cancel. Hover the empty margin beside a paragraph for its `+` (a paragraph note, never drifts); select all and press `Note` for the whole draft (pinned at the rail top, no mark). Notes stand in the margin rail on wide windows and stack in the chat stream on narrow ones. Create, edit, delete with Undo; notes persist per file. Notes go to the model with chat and rewrite requests as labeled scope context. No threads yet.
+
 ## 0.4.2 — 2026-09-13
 
 - Clicking at the end of a paragraph now offers a Continue bubble, asking for the same continuation Cmd/Ctrl+Enter would. An explicit ask is allowed to open the next sentence and run longer than a background suggestion, instead of stopping at a finished thought.

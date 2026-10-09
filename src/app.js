@@ -58,6 +58,8 @@ const chatChipText  = document.getElementById('chat-chip-text');
 const chatChipClear = document.getElementById('chat-chip-clear');
 const chatSendButton = document.getElementById('chat-send');
 const chatClear     = document.getElementById('chat-clear');
+const chatPill      = document.getElementById('chat-pill');
+const chatPillLabel = document.getElementById('chat-pill-label');
 const scoreEl       = document.getElementById('style-score');
 const scoreValueEl  = document.getElementById('style-score-value');
 const scoreCountEl  = document.getElementById('style-score-count');
@@ -116,17 +118,46 @@ let editVersion = 0;
 // the last. Passing notices fade on their own; a sticky one (a problem) stays
 // until its button or × puts it away, and no passing notice may cover it.
 // `key` names who raised it, so only they clear it (clearNotice).
-const NOTICE_MS = 6000;
+// The notice is a view of the conversation island (#edit-feedback lives
+// inside #chat): while one is shown the pill steps aside for it, like an
+// iPhone alert expanding the island. Tapping the notice opens the chat.
+const NOTICE_MS = 8000;
 let noticeTimer = null;
 let noticeKey = '';
 let noticeSticky = false;
-function notify(text, { action = null, label = 'Undo', sticky = false, detail = '', key = '' } = {}) {
-  if (!text) { clearTimeout(noticeTimer); editFeedback.hidden = true; noticeKey = ''; noticeSticky = false; return; }
+// A notice never covers a focused field — keystrokes must not fall into the
+// void. While the writer types, the notice parks here (one slot: the next
+// notice replaces a parked one, like shown ones do) and flushes on blur.
+let pendingNotice = null;
+function notify(text, { action = null, label = 'Undo', sticky = false, detail = '', key = '', icon = 'info', tone = '' } = {}) {
+  if (!text) {
+    clearTimeout(noticeTimer);
+    editFeedback.hidden = true;
+    chatPanel.classList.remove('has-notice');
+    if (key === '' || (pendingNotice && pendingNotice.key === key)) pendingNotice = null;
+    noticeKey = ''; noticeSticky = false;
+    return;
+  }
   if (noticeSticky && !sticky && !editFeedback.hidden) return;
+  // A passing notice waits for the field's blur rather than covering typing.
+  // A problem does not: it is usually the answer to what was just sent from
+  // that field, and parked it stayed invisible while the writer waited.
+  if (document.activeElement === chatInput && !sticky) { pendingNotice = { text, key, opts: { action, label, sticky, detail, key, icon, tone } }; return; }
+  pendingNotice = null;
+  showNotice(text, { action, label, sticky, detail, key, icon, tone });
+}
+function showNotice(text, { action = null, label = 'Undo', sticky = false, detail = '', key = '', icon = 'info', tone = '' } = {}) {
   clearTimeout(noticeTimer);
+  editFeedback.replaceChildren();
+  if (icon) {
+    const badge = chatEl('span', 'ph notice-icon', '');
+    badge.dataset.icon = icon;
+    badge.setAttribute('aria-hidden', 'true');
+    editFeedback.append(badge);
+  }
   const message = chatEl('span', '', text);
   message.title = detail || text;
-  editFeedback.replaceChildren(message);
+  editFeedback.append(message);
   if (action) {
     const run = chatEl('button', 'edit-feedback-undo', label);
     run.type = 'button';
@@ -138,27 +169,59 @@ function notify(text, { action = null, label = 'Undo', sticky = false, detail = 
   close.setAttribute('aria-label', 'Hide notice');
   close.addEventListener('click', () => { notify(''); workView.focus(); });
   editFeedback.append(close);
+  hydrateIcons(editFeedback);
+  if (tone) editFeedback.dataset.tone = tone; else delete editFeedback.dataset.tone;
   editFeedback.hidden = false;
+  chatPanel.classList.add('has-notice');
   noticeKey = key;
   noticeSticky = sticky;
   if (!sticky) noticeTimer = setTimeout(() => notify(''), NOTICE_MS);
 }
+// A notice under the pointer is being read or about to be pressed: it must
+// not fade out from under the hand. Leaving restarts the full count.
+editFeedback.addEventListener('mouseenter', () => clearTimeout(noticeTimer));
+editFeedback.addEventListener('mouseleave', () => {
+  if (noticeSticky || editFeedback.hidden) return;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => notify(''), NOTICE_MS);
+});
+// Summoning the composer dismisses a passing notice: the island shows either
+// the input or the notice, never both. A sticky problem stays until its own
+// action or × — it keeps the input covered until then.
+function dismissPassingNotice() {
+  if (!noticeSticky && !editFeedback.hidden) notify('');
+}
+chatInput.addEventListener('blur', event => {
+  if (!pendingNotice) return;
+  // Focus moving within the island (Send, chip clear) is still the composer
+  // at work — the parked notice waits for a real leave.
+  if (event.relatedTarget && chatPanel.contains(event.relatedTarget)) return;
+  const parked = pendingNotice;
+  pendingNotice = null;
+  notify(parked.text, parked.opts);
+});
 function clearNotice(key) { if (noticeKey === key) notify(''); }
 const reviewStatus = document.getElementById('review-status');
 let reviewState = 'idle';
 let reviewNotice = '';
 // One header line, truncated when the window is narrow — the title keeps the
 // whole message reachable instead of pushing the draft down a row.
-// Two background features share this line, so each says who wrote it: a
-// finished review must not wipe the line that told the writer why their
-// continuations went quiet.
+// "Suggesting…" never touches this line: it lives only in the island's pill
+// (syncPill), so a finished review cannot wipe it and it cannot wipe a review.
 function setReviewStatus(text, detail, from = 'review') {
+  if (from === 'suggest') {
+    suggestWorking = text.endsWith('…') ? text : '';
+    syncPill();
+    if (text && !suggestWorking) notify(text, { detail });
+    return;
+  }
   if (from === 'review') { reviewNotice = text; syncReviewPanel(); }
   // Progress ("Suggesting…") stays on this line; anything to read is a notice.
   const progress = text.endsWith('…');
   reviewStatus.textContent = progress ? text : '';
   reviewStatus.title = progress ? text : '';
   reviewStatus.dataset.from = progress ? from : '';
+  syncPill();
   if (text && !progress) notify(text, { detail });
 }
 
@@ -193,8 +256,9 @@ function modelError(error) {
   const status = Number(/^(?:HTTP |Server error )?([45]\d\d)\b/.exec(detail)?.[1]);
   return {
     say: MODEL_ERRORS[status] ?? 'The model could not answer.',
-    // Retrying a rejected key or an oversized draft only fails again.
-    act: [401, 402, 403].includes(status) ? 'settings' : status === 413 ? null : 'retry',
+    // Retrying a rejected key, a missing model or an oversized draft only
+    // fails again; all but the draft are fixed in settings.
+    act: [401, 402, 403, 404].includes(status) ? 'settings' : status === 413 ? null : 'retry',
     detail,
   };
 }
@@ -208,7 +272,7 @@ function notifyProblem(problem, retry = null, label = 'Try again', key = '') {
     : problem.act === 'retry' && retry
       ? { action: () => Promise.resolve().then(retry).catch(() => notifyProblem(problem, retry, label, key)), label }
       : {};
-  notify(problem.say, { ...act, sticky: true, detail: problem.detail, key });
+  notify(problem.say, { ...act, sticky: true, detail: problem.detail, key, icon: 'alert', tone: 'error' });
 }
 let tabId;
 try {
@@ -1194,7 +1258,8 @@ document.addEventListener('mouseup', event => {
   if (!workView.dom.contains(event.target)) return;
   if (event.button === 2) return;
   if (workView.state.selection.main.empty) return;
-  showSelectionBubble(event.clientX, event.clientY);
+  const { clientX, clientY } = event;
+  deferBubble(() => showSelectionBubble(clientX, clientY), 250);
 });
 document.addEventListener('copy', () => { if (bubbleMode === 'selection') hideMarkBubble(); });
 // Disagreeing with a finding has to be as cheap as accepting one, or the
@@ -1335,6 +1400,13 @@ let autoReviewBusy  = false;
 // Every pause costs a model call, so this has to be switchable — and visible
 // while it runs, or the writer cannot tell what they are paying for.
 let autoReviewOn = localStorage.getItem('wa-autoreview') !== 'off';
+// Experiment: dock Note/Context in the margin and Continue at the caret.
+const pillsMarginEl = document.getElementById('pills-margin');
+pillsMarginEl.checked = localStorage.getItem('wa-pills') === 'margin';
+pillsMarginEl.addEventListener('change', () => {
+  pillsMargin = pillsMarginEl.checked;
+  localStorage.setItem('wa-pills', pillsMargin ? 'margin' : 'float');
+});
 let autoSuggestOn = localStorage.getItem('wa-autosuggest') !== 'off';
 const autoSuggestEl = document.getElementById('auto-suggest');
 autoSuggestEl.checked = autoSuggestOn;
@@ -1562,6 +1634,7 @@ async function autoReviewRun() {
 // ─── Suggestion system ─────────────────────────────────────────────────────────
 
 let suggestTimer = null;
+let suggestWorking = '';   // "Suggesting…" while a request is out (see setReviewStatus)
 let suggestAbort = null;
 let suggestVersion = 0;
 
@@ -1586,7 +1659,7 @@ function cancelSuggestion() {
   suggestTimer = null;
   suggestAbort?.abort();
   suggestAbort = null;
-  if (reviewStatus.dataset.from === 'suggest' && reviewStatus.textContent === 'Suggesting…') setReviewStatus('');
+  if (suggestWorking) setReviewStatus('', undefined, 'suggest');
 }
 
 function suggestSchedule() {
@@ -1687,7 +1760,7 @@ async function suggestFetch(manual = false) {
 
     // Only show if nothing changed while we were waiting
     if (!isCurrent()) return;
-    if (reviewStatus.dataset.from === 'suggest') setReviewStatus('');
+    setReviewStatus('', undefined, 'suggest');
     if (data.suggestion) ghostShow(view, data.suggestion);
     else if (manual) setReviewStatus('No continuation to suggest.', undefined, 'suggest');
   } catch (error) {
@@ -1806,6 +1879,15 @@ const reduceMotion = () =>
 
 // Discrete jumps glide; token-by-token follow stays instant — smooth scrolling
 // lags behind a live stream and stutters.
+// Scrollbar only while moving: the class is set on every scroll event (wheel,
+// drag, key, or our own chatScroll) and dropped after a quiet moment.
+let chatScrollTimer = 0;
+chatStream.addEventListener('scroll', () => {
+  chatStream.classList.add('is-scrolling');
+  clearTimeout(chatScrollTimer);
+  chatScrollTimer = setTimeout(() => chatStream.classList.remove('is-scrolling'), 900);
+}, { passive: true });
+
 function chatScroll(stick, smooth = false) {
   if (!stick) return;
   const top = chatStream.scrollHeight;
@@ -1852,9 +1934,10 @@ function restoreChat() {
       renderChatAnswer(streamAppend(chatEl('div', 'chat-entry is-agent is-markdown')), message);
     }
   }
-  // Closed by default: history is kept and reopenable via Conversation,
+  // Folded into the pill by default: history is kept and reopens with it,
   // genuinely new arrivals still open it via chatAdd.
   setChatOpen(false);
+  setIsland(false);
 }
 function renderChatAnswer(reply, message) {
   // Older saved answers may still carry a raw edit list in their text.
@@ -1970,16 +2053,35 @@ function changeChatEdit(edit, undo = false) {
 const rail = document.getElementById('rail');
 const railAnchors = new Map();   // node → () => document position | null
 const railHomes = new Map();     // node → where it lives when there is no rail
-const RAIL_WIDTH = 300, RAIL_GUTTER = 24;
+const RAIL_WIDTH = 220, RAIL_GUTTER = 24;   // .rail width in style.css
 let railOn = false;
 
-// The rail is retired (step 1): every card lives in the chat stream at every
-// width, so there is nothing to measure and nowhere to move. Kept as a
-// no-op for its callers until the layout pass is deleted outright.
+// The rail lives in the margin the centred text column leaves empty, so it is
+// available exactly when that margin can hold a note card and a gutter.
+// Measured, not guessed at a breakpoint: the text column's padding is the
+// margin. Only margin-note cards stand here — finding cards keep their
+// stream behavior at every width (see railAdd).
 function syncRail() {
-  railOn = false;
-  if (!rail.hidden) rail.hidden = true;
-  return;
+  const margin = parseFloat(getComputedStyle(workView.contentDOM).paddingRight) || 0;
+  const fits = margin >= RAIL_WIDTH + RAIL_GUTTER;
+  if (fits) {
+    // Beside the text, not against the window: the note belongs to the line.
+    // Measured against the pane, which is the rail's containing block — the
+    // rail's own offsetParent is null while it is still hidden.
+    const box = workView.contentDOM.getBoundingClientRect();
+    const pane = document.getElementById('pane-work').getBoundingClientRect();
+    rail.style.left = `${box.right - margin - pane.left + RAIL_GUTTER}px`;
+  }
+  if (fits === railOn) {
+    rail.hidden = !fits || rail.children.length === 0;
+    return;
+  }
+  railOn = fits;
+  // Crossing the width moves note cards; finding cards stay where they are.
+  // Moving must never open the chat: streamAppend keeps the panel as it was.
+  for (const note of marginNotes) placeNoteCard(note);
+  rail.hidden = !fits || rail.children.length === 0;
+  if (!fits) chatScroll(true);   // cards moved into the stream land below the fold
 }
 
 // Without a rail a card belongs in the stream, stacked in DOM order. Moving
@@ -1994,8 +2096,12 @@ function placeHome(node) {
 function railAdd(node, anchor, home = chatStream) {
   railAnchors.set(node, anchor);
   railHomes.set(node, home);
-  // Single surface: home is always the stream now — no rail branch.
-  placeHome(node);
+  syncRail();
+  // Only margin-note cards stand in the rail; everything else stacks in the
+  // stream at every width, as before.
+  if (railOn && node.dataset.noteId !== undefined) rail.append(node);
+  else placeHome(node);
+  if (node.dataset.noteId !== undefined) railSizes.observe(node);
   layoutRail();
   return node;
 }
@@ -2008,22 +2114,145 @@ function layoutRail() {
     .map(node => {
       const position = railAnchors.get(node)?.();
       const coords = position == null ? null : workView.coordsAtPos(position);
-      return { node, at: coords && coords.top - top };
+      // −3 to stand exactly where the paragraph "+" stands (see moveNotePlus).
+      return { node, at: coords && coords.top - top - 3 };
     })
     .filter(item => item.at !== null && item.at !== undefined)
     .sort((a, b) => a.at - b.at);
   for (const node of rail.children) node.style.visibility = 'hidden';
-  let floor = 0;
+  // Cards whose passage scrolled out of view go with it: above the edge they
+  // keep a negative top and slide away like the text (overflow clips them),
+  // fully-out ones stay hidden. Clamping to zero instead pinned them to the
+  // rail's top edge, where they sat while the draft scrolled underneath.
+  const railHeight = rail.clientHeight;
+  let floor = -Infinity;
   for (const item of placed) {
+    const height = item.node.offsetHeight;
     const at = Math.max(item.at, floor);
+    if (at + height <= 0 || at >= railHeight) continue;
     item.node.style.top = `${at}px`;
     item.node.style.visibility = 'visible';
-    floor = at + item.node.offsetHeight + 8;
+    floor = at + height + 8;
   }
 }
 
 new MutationObserver(layoutRail).observe(rail, { childList: true });
+// Cards are stacked by their measured heights, so a card that grows or shrinks
+// afterwards (typing a longer note, committing it, a font arriving) has to
+// restack the ones below it — otherwise they keep their old tops and overlap.
+const railSizes = new ResizeObserver(() => layoutRail());
 window.addEventListener('resize', layoutRail);
+// CM reports no geometry change when the text column only shifts sideways
+// (sidebar, window width), so the pane itself is watched too — its width is
+// what the rail measurement reads.
+new ResizeObserver(() => layoutRail()).observe(document.getElementById('pane-work'));
+
+// ── Conversation island ──
+//
+//  Idle the whole chat is one pill, after Symbioen's DynamicIsland (a compact
+//  idle pill morphing into the full panel with a spring — idle content swaps
+//  for open content, entering with scale .9 → 1 and blur 5px → 0). Here the
+//  pill and the composer share surface/border/shadow so the swap reads as one
+//  surface changing shape, and island-in (.35s on --ease) stands in for the
+//  spring.
+//
+//  The pill opens both the field and the stream: a restored history reopens
+//  with it. A notice takes the island over (see notify): while one is up the
+//  composer, the pill and the recipes row step aside for it — either input or
+//  notice, never both. Summoning the composer dismisses a passing notice; a
+//  sticky problem keeps the input covered until its own action or ×.
+//  Closing never discards — turns, cards and Undo stay, like
+//  setChatOpen. Collapse is allowed only with nothing to lose (empty field,
+//  no chip, no request running), so typing is never interrupted.
+function syncPill() {
+  if (!chatPillLabel) return;
+  const n = chatStream.children.length;
+  // Background work speaks through the pill until it ends.
+  const working = suggestWorking || reviewStatus.textContent;
+  chatPanel.classList.toggle('is-working', Boolean(working));
+  chatPillLabel.textContent = working || (n > 0 ? `Conversation${n > 1 ? ` • ${n}` : ''}` : 'Ask anything');
+}
+
+function canCollapseIsland() {
+  return !chatInput.value.trim() && !attached && ![...jobs].some(job => !job.background);
+}
+
+function setIsland(open, opts = {}) {
+  chatPanel.classList.toggle('is-collapsed', !open);
+  chatPill?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  chatPill?.setAttribute('aria-label', open ? 'Conversation open' : 'Open conversation');
+  syncPill();
+  if (open) {
+    if (opts.stream && chatStream.children.length > 0) setChatOpen(true);
+    if (opts.focus) setTimeout(() => chatInput.focus({ preventScroll: true }), reduceMotion() ? 0 : 160);
+  } else if (document.activeElement === chatInput) {
+    try { workView.focus(); } catch {}
+  }
+  layoutRail();
+}
+
+function openIsland(opts = {}) {
+  if (chatPanel.classList.contains('is-collapsed')) setIsland(true, opts);
+  else if (opts.focus) chatInput.focus();
+}
+
+function maybeCollapseIsland() {
+  if (canCollapseIsland()) setIsland(false);
+}
+
+chatPill?.addEventListener('mousedown', event => event.preventDefault());
+chatPill?.addEventListener('click', () => {
+  setIsland(true, { focus: true, stream: true });
+});
+
+// Clicking away from an empty, unstarted chat puts the pill back — only when
+// there is nothing to lose (see canCollapseIsland) and no history to keep
+// open. A scroll never collapses: the draft scrolls constantly.
+document.addEventListener('pointerdown', event => {
+  if (chatPanel.classList.contains('is-collapsed')) return;
+  if (chatStream.children.length > 0) return;
+  if (!canCollapseIsland()) return;
+  if (event.target.closest('#chat')) return;
+  setIsland(false);
+});
+
+// The pill names the count, so it must follow every stream change —
+// including card removals that bypass setChatOpen.
+new MutationObserver(() => syncPill()).observe(chatStream, { childList: true });
+
+// The island morph. Pill, composer and notice are three elements, so a plain
+// swap reads as one thing fading out and another fading in. Instead the
+// incoming view is revealed from the outgoing one's outline and the outgoing
+// view is clipped down to the incoming one's, on the same spring — the shape
+// travels, the contents crossfade. Watching the class covers every path that
+// swaps views (setIsland, notify) without threading a hook through each.
+// The clip ends 60px outside the box so the shadow is revealed with it
+// instead of popping in when the animation lets go.
+const ISLAND_MORPH = { duration: 450, easing: 'cubic-bezier(.32, .72, 0, 1)' };
+const chatComposer = chatPanel.querySelector('.chat-composer');
+function islandView() {
+  if (chatPanel.classList.contains('has-notice')) return editFeedback;
+  return chatPanel.classList.contains('is-collapsed') ? chatPill : chatComposer;
+}
+let islandShown = islandView();
+let islandRect = null;   // last known outline, for a view already display:none
+new MutationObserver(() => {
+  const next = islandView();
+  if (!next || next === islandShown) return;
+  const prev = islandShown;
+  islandShown = next;
+  const to = next.getBoundingClientRect();
+  let from = prev?.getBoundingClientRect();
+  if (!from?.width) from = islandRect;
+  islandRect = to.width ? to : islandRect;
+  if (reduceMotion() || !from?.width || !to.width) return;
+  const inset = (box, of) => `inset(${box.top - of.top}px ${of.right - box.right}px ${of.bottom - box.bottom}px ${box.left - of.left}px round ${box.height / 2}px)`;
+  const open = el => `inset(-60px round ${getComputedStyle(el).borderTopLeftRadius})`;
+  next.animate([{ clipPath: inset(from, to) }, { clipPath: open(next) }], ISLAND_MORPH);
+  if (prev?.getBoundingClientRect().width) {
+    prev.animate([{ clipPath: open(prev) }, { clipPath: inset(to, from) }], ISLAND_MORPH);
+  }
+}).observe(chatPanel, { attributes: true, attributeFilter: ['class'] });
 
 // Closing the conversation is a view, not an edit: the turns stay in memory
 // and in storage, and the same control opens them again. Something new
@@ -2037,6 +2266,9 @@ function setChatOpen(open) {
   // The toggle is its own right-aligned row above the stream (see .chat-clear)
   // — in normal flow, never overlapping cards or the composer, so it takes
   // a layout row and never scrolls away with a long stream.
+  // A stream inside the folded pill is display:none — opening it there shows
+  // nothing and leaves its fields unfocusable, so the island unfolds too.
+  if (open) openIsland();
   if (open) chatStream.hidden = false;      // measure against a laid-out stream
   chatClear.textContent = open ? '×' : 'Conversation';
   chatClear.setAttribute('aria-label', open ? 'Close the conversation' : 'Show the conversation');
@@ -2061,6 +2293,7 @@ function discardFindingCards() {
 }
 
 function chatAdd(node) {
+  setIsland(true);
   setChatOpen(true);
   chatStream.append(node);
   // A new turn is worth showing: force-scroll, unlike streaming updates
@@ -2080,8 +2313,529 @@ function streamAppend(node) {
   return node;
 }
 
+// ── Margin notes ─────────────────────────────────────────────────────────────
+//  The writer's own remarks on the draft (slice 1: create, show, delete — no
+//  threads, no model calls yet). Each note anchors to a paragraph with a
+//  quote snapshot:
+//
+//  - the quote is found verbatim → the mark stands on it, drifted is false;
+//  - the quote is gone (reworded) → the mark falls back to the paragraph and
+//    the card carries a "text changed" badge, so one retyped word never kills
+//    a note the way it kills a finding mark;
+//  - the paragraph is gone too (empty draft) → no mark; the card waits in the
+//    stream until the text returns.
+//
+//  Storage is a new per-document key, so STORAGE_SCHEMA stays '1': no stored
+//  shape changed, only a new one appeared.
+let noteSeq = 0;
+let marginNotes = [];       // { id, para, quote, text, at, drifted }
+const noteCards = new Map();  // note id → its card, while it is on screen
+
+const setNoteFx = StateEffect.define();
+const noteMark = note => Decoration.mark({
+  class: 'cm-note' + (note.drifted ? ' is-drifted' : ''),
+  attributes: {
+    'data-note-id': note.id,
+    title: note.text || 'Margin note',
+  },
+}).range(note.from, note.to);
+
+const noteField = StateField.define({
+  create: () => Decoration.none,
+  update(decorations, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setNoteFx)) return Decoration.set(effect.value.map(noteMark), true);
+    }
+    if (!tr.docChanged) return decorations;
+    // Edits elsewhere only shift a note; edits inside one drop its mark until
+    // the microtask below re-resolves it (verbatim or paragraph fallback).
+    const edited = [];
+    tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => edited.push([fromB, toB]));
+    return decorations.map(tr.changes).update({
+      filter: (from, to) => !edited.some(([a, b]) => a < to && b > from),
+    });
+  },
+  provide: field => EditorView.decorations.from(field),
+});
+
+// Paragraph index at creation time; the same blank-line splitting the
+// automatic review uses, so "paragraph N" means the same thing everywhere.
+// Scope rule, one line: a non-empty quote is a passage note (verbatim, else
+// drifted fallback); an empty quote is a paragraph note (always live, never
+// drifted); a null paragraph is a document note (no mark, pinned at top).
+function resolveNoteRange(document, note) {
+  if (note.para === null) return { from: 0, to: 0, drifted: false, bare: true };
+  const paras = reviewParagraphs(document);
+  const para = paras[Math.min(note.para, paras.length - 1)];
+  if (!para) return null;
+  // A "+" note is a point, not a span: the line the writer pressed beside,
+  // kept as an offset into its paragraph (clamped if the paragraph shrank).
+  // No mark — a long paragraph would light up whole.
+  if (!note.quote) {
+    const at = Math.min(para.from + (note.off || 0), para.to);
+    return { from: at, to: at, drifted: false, bare: true };
+  }
+  if (document.includes(note.quote)) {
+    const from = document.indexOf(note.quote);
+    return { from, to: from + note.quote.length, drifted: false };
+  }
+  return { from: para.from, to: para.to, drifted: true };
+}
+
+// Live position of a note — decorations move with the document, the offsets
+// captured at creation time do not. Document notes have no mark; their
+// position is the top by definition.
+function noteRange(id) {
+  const note = marginNotes.find(item => item.id === id);
+  if (!note) return null;
+  if (note.para === null) return { from: 0, to: 0 };
+  if (!note.quote) {
+    const at = resolveNoteRange(workView.state.doc.toString(), note);
+    return at && { from: at.from, to: at.to };
+  }
+  let found = null;
+  workView.state.field(noteField).between(0, workView.state.doc.length, (from, to, deco) => {
+    if (deco.spec.attributes?.['data-note-id'] === id) { found = { from, to }; return false; }
+  });
+  return found;
+}
+
+function markForNote(id) { return workView.dom.querySelector(`.cm-note[data-note-id="${CSS.escape(id)}"]`); }
+
+// Rail position of a note: its own line — where its "+" stood or its passage
+// begins — so a note stands exactly where it was made. Passage notes
+// anchor by their live range's paragraph (falling back to the stored one),
+// document notes pin at the very top.
+function noteAnchor(id) {
+  const note = marginNotes.find(item => item.id === id);
+  if (!note) return null;
+  if (note.para === null) return 0;
+  const paras = reviewParagraphs(workView.state.doc.toString());
+  if (!paras.length) return null;
+  // Stands where it was made: at its passage, or at the line its "+" was
+  // pressed beside. Anchored to the paragraph's top it landed screens above a
+  // click in a long paragraph. A reworded passage falls back to the paragraph.
+  return noteRange(id)?.from ?? paras[Math.min(note.para, paras.length - 1)].from;
+}
+
+// Re-anchor every note against the document as it is now. Illegal inside an
+// update listener — callers queue it as a microtask (see the docChanged
+// listener below), or call it directly from event handlers.
+function syncNoteMarks() {
+  const document = workView.state.doc.toString();
+  const marks = [];
+  for (const note of marginNotes) {
+    const resolved = resolveNoteRange(document, note);
+    note.drifted = !resolved || resolved.drifted;
+    // Document notes and empty drafts resolve bare: no mark to draw, the
+    // card's place (rail top, or stream) is decided by placeNoteCard.
+    if (resolved && !resolved.bare && resolved.to > resolved.from) {
+      marks.push({ id: note.id, from: resolved.from, to: resolved.to, drifted: note.drifted, text: note.text });
+    }
+  }
+  workView.dispatch({ effects: setNoteFx.of(marks) });
+  for (const note of marginNotes) placeNoteCard(note);
+  layoutRail();
+}
+
+// A note with a live range stands in the rail when there is one; a drifted
+// orphan with no range waits in the stream. Never opens the chat — arriving
+// by edit or resize is not something new arriving.
+function placeNoteCard(note) {
+  const card = noteCards.get(note.id);
+  if (!card || !card.isConnected) return;
+  card.style.top = '';
+  card.style.visibility = '';
+  if (railOn && noteRange(note.id)) {
+    if (card.parentElement !== rail) rail.append(card);
+  } else placeHome(card);
+  rail.hidden = !railOn || rail.children.length === 0;
+  // Never clobber an open editor: typing elsewhere re-anchors notes on every
+  // keystroke, and that must not eat the text being typed in the card.
+  if (!card.querySelector('textarea')) renderNoteCard(note);
+}
+
+function saveNotes() {
+  docStorage.setItem('wa-notes', JSON.stringify({ notes: marginNotes }));
+}
+
+function restoreNotes() {
+  // Restoring runs again on a retried load and on every file switch: cards
+  // from the last pass must go first, or each one is stacked a second time.
+  discardNoteCards();
+  let saved = null;
+  try { saved = JSON.parse(docStorage.getItem('wa-notes') || 'null'); } catch {}
+  const notes = Array.isArray(saved?.notes) ? saved.notes : [];
+  marginNotes = notes.filter(note =>
+    note && typeof note.id === 'string' && typeof note.quote === 'string'
+    && typeof note.text === 'string' && note.text.trim() !== ''
+    && (Number.isInteger(note.para) || note.para === null));
+  for (const note of marginNotes) if (!Number.isInteger(note.off) || note.off < 0) note.off = 0;
+  for (const note of marginNotes) {
+    note.drifted = false;
+    noteCards.set(note.id, railAdd(noteCard(note), () => noteAnchor(note.id)));
+  }
+  syncNoteMarks();   // also clears the marks a previous document left
+}
+
+function discardNoteCards() {
+  for (const card of noteCards.values()) {
+    railAnchors.delete(card); railHomes.delete(card); card.remove();
+  }
+  noteCards.clear();
+  marginNotes = [];
+}
+
+function noteExcerpt(note) {
+  const range = noteRange(note.id);
+  const live = range ? workView.state.sliceDoc(range.from, note.quote ? range.to : range.from + 160) : '';
+  const text = (live || note.quote).trim().replace(/\s+/g, ' ');
+  return text.length > 120 ? text.slice(0, 120).replace(/\s+\S*$/, '') + '…' : text;
+}
+
+function noteCard(note) {
+  const card = chatEl('div', 'note-card');
+  card.dataset.noteId = note.id;
+  card.tabIndex = 0;
+  card.setAttribute('aria-label', 'Margin note. Press Enter to edit.');
+  card.addEventListener('mouseenter', () => markForNote(note.id)?.classList.add('is-hot'));
+  card.addEventListener('mouseleave', () => markForNote(note.id)?.classList.remove('is-hot'));
+  card.addEventListener('click', event => {
+    if (event.target.closest('textarea, button')) return;
+    focusNote(note.id);
+  });
+  card.addEventListener('keydown', event => {
+    if (event.target !== card) return;
+    if (event.key === 'Enter') { event.preventDefault(); editNoteCard(note.id); }
+    // Keyboard way to delete: the × is hover-only on desktop, unreachable
+    // without a mouse. Undo stays the way back, like the button.
+    else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteNote(note.id); }
+  });
+  renderNoteCard(note, card);
+  return card;
+}
+
+function renderNoteCard(note, card = noteCards.get(note.id)) {
+  if (!card || card.querySelector('textarea')) return;
+  // Re-rendered on every keystroke via placeNoteCard — skip when nothing the
+  // note shows changed, so hover and focus survive typing elsewhere.
+  const inStream = card.parentElement === chatStream;
+  const key = `${inStream}|${note.drifted}|${note.text}|${noteExcerpt(note)}`;
+  if (card.dataset.renderKey === key) return;
+  card.dataset.renderKey = key;
+  card.replaceChildren();
+  // In the rail the note stands beside its passage, so the passage itself is
+  // the context — just the text. In the stream there is no beside, so the
+  // quote travels with it; a document note names the whole draft instead.
+  const scope = note.para === null ? 'Whole draft' : noteExcerpt(note);
+  if (inStream || note.para === null) card.append(chatEl('div', 'note-quote', note.para === null ? scope : `“${scope}”`));
+  const body = chatEl('div', 'note-text', note.text);
+  body.addEventListener('click', event => { event.stopPropagation(); editNoteCard(note.id); });
+  card.append(body);
+  if (note.drifted) card.append(chatEl('div', 'note-meta', 'text changed — pinned to the paragraph'));
+  const del = chatEl('button', 'note-del', '×');
+  del.type = 'button';
+  del.setAttribute('aria-label', 'Delete note');
+  del.title = 'Delete note';
+  del.addEventListener('click', event => { event.stopPropagation(); deleteNote(note.id); });
+  card.append(del);
+}
+
+function editNoteCard(id) {
+  const note = marginNotes.find(item => item.id === id);
+  const card = noteCards.get(id);
+  if (!note || !card || card.querySelector('textarea')) return;
+  delete card.dataset.renderKey;
+  card.replaceChildren();
+  const field = document.createElement('textarea');
+  field.value = note.text;
+  field.rows = 1;
+  field.setAttribute('aria-label', 'Note text');
+  field.placeholder = 'Write a note…';
+  card.append(field);
+  // No Save/Cancel: blur commits, Escape drops. A commit flag keeps the blur
+  // from re-saving after Escape already cancelled.
+  // Empty notes don't linger: a fresh note left empty is removed silently
+  // (cancelling is not deleting — there is nothing to put back), while
+  // clearing a note that held text goes through deleteNote with its Undo.
+  let finished = false;
+  const finish = save => {
+    if (finished) return;
+    finished = true;
+    const fresh = note.text === '';
+    const next = field.value.trim();
+    if ((!save || next === '') && fresh) { removeNoteSilent(id); workView.focus(); return; }
+    if (save && next === '') { deleteNote(id); return; }   // focuses + Undo itself
+    if (save && next !== note.text) {
+      note.text = next;
+      saveNotes();
+      syncNoteMarks();
+    }
+    delete card.dataset.renderKey;
+    field.remove();   // renderNoteCard skips a card that still holds a field
+    renderNoteCard(note);
+  };
+  field.addEventListener('blur', () => finish(true));
+  field.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); finish(false); workView.focus(); }
+    else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); finish(true); workView.focus(); }
+    event.stopPropagation();
+  });
+  // Fit the field to its text. Rows counted against a fixed 22px came out a
+  // line too tall for an empty note; the content height is never wrong.
+  const fit = () => { field.style.height = 'auto'; field.style.height = `${field.scrollHeight}px`; };
+  field.addEventListener('input', fit);
+  field.focus();
+  field.setSelectionRange(field.value.length, field.value.length);
+  fit();
+}
+
+function createNote(from, to) {
+  const document = workView.state.doc.toString();
+  // A drag that starts on the blank line above a paragraph would pin the note
+  // there and quote a leading newline; anchor at the first real character.
+  // The whole-draft check below needs the untrimmed range, so it goes first.
+  if (!(from === 0 && to === document.length)) {
+    const slice = document.slice(from, to);
+    const lead = slice.length - slice.trimStart().length;
+    const trimmed = slice.trim();
+    if (trimmed) { from += lead; to = from + trimmed.length; }
+  }
+  // A selection spanning the whole draft is a note on the draft, not on a
+  // passage: no anchor paragraph, no quote, no mark — pinned at the rail top.
+  if (from === 0 && to === document.length && document.length > 0) {
+    return addNote({ para: null, quote: '' });
+  }
+  // A drag rarely lands on a word edge; a quote cut mid-word ("carry exac")
+  // reads as a typo in the card, so the passage snaps out to whole words.
+  const inWord = i => /[\p{L}\p{N}_]/u.test(document[i] ?? '');
+  while (from > 0 && inWord(from - 1) && inWord(from)) from--;
+  while (to < document.length && inWord(to - 1) && inWord(to)) to++;
+  const paras = reviewParagraphs(document);
+  let para = paras.findIndex(paragraph => from >= paragraph.from && from <= paragraph.to);
+  if (para < 0) para = 0;
+  return addNote({ para, quote: document.slice(from, to).slice(0, 500) });
+}
+
+// A note on a line: empty quote, so it never drifts — the paragraph and the
+// offset into it are the anchor, not a snapshot of the wording.
+function createParagraphNote(para, off = 0) {
+  const paras = reviewParagraphs(workView.state.doc.toString());
+  if (!paras.length || para < 0 || para >= paras.length) return null;
+  return addNote({ para, quote: '', off });
+}
+
+function addNote({ para, quote, off = 0 }) {
+  const note = {
+    id: `n${Date.now().toString(36)}${(noteSeq++).toString(36)}`,
+    para,
+    quote,
+    off,
+    text: '',
+    at: new Date().toISOString(),
+    drifted: false,
+  };
+  marginNotes.push(note);
+  saveNotes();
+  const card = noteCard(note);
+  noteCards.set(note.id, railAdd(card, () => noteAnchor(note.id)));
+  // A fresh note is a new arrival: open for it when it lands in the stream.
+  // In the rail it is already visible beside the line.
+  if (card.parentElement === chatStream) setChatOpen(true);
+  syncNoteMarks();
+  // The bubble's button returns focus to the editor after this runs — take
+  // the field back on the next tick.
+  queueMicrotask(() => editNoteCard(note.id));
+  return note;
+}
+
+// ── Paragraph "+" ────────────────────────────────────────────────────────────
+//  Hovering the empty margin beside a paragraph shows one faint "+", Notion-
+//  style: the paragraph is the commonest note target, and selecting it first
+//  just to press Note is a tax on every remark. Clicking the "+" opens a
+//  paragraph note (empty quote: the paragraph is the anchor, never drifted).
+//  No shortcut to remember, no button to find — the margin itself invites.
+const notePlus = document.createElement('button');
+notePlus.type = 'button';
+notePlus.className = 'note-plus';
+notePlus.textContent = '+';
+notePlus.title = 'Note on this paragraph';
+notePlus.setAttribute('aria-label', 'Add a note on this paragraph');
+notePlus.hidden = true;
+document.getElementById('pane-work').append(notePlus);
+let plusPara = -1;
+let plusOff = 0;
+let plusRaf = 0;
+
+// Paragraph splitting on every mousemove would tax long drafts; the split
+// only changes on edit, so cache it keyed by editVersion.
+let paraCacheVersion = -1;
+let paraCache = [];
+function cachedParagraphs() {
+  if (paraCacheVersion !== editVersion) {
+    paraCache = reviewParagraphs(workView.state.doc.toString());
+    paraCacheVersion = editVersion;
+  }
+  return paraCache;
+}
+
+function hideNotePlus() {
+  plusPara = -1;
+  if (plusRaf) { cancelAnimationFrame(plusRaf); plusRaf = 0; }
+  if (plusHideTimer) { clearTimeout(plusHideTimer); plusHideTimer = null; }
+  if (!notePlus.hidden) notePlus.hidden = true;
+}
+
+// Boundary crossings (text ⇄ "+") hide and re-show within one mousemove,
+// which reads as blinking. Hiding waits a beat instead; anything continuous
+// (scroll, drag, selection, bubble, rail off) still hides at once.
+let plusHideTimer = null;
+function schedulePlusHide() {
+  if (plusHideTimer || notePlus.hidden) return;
+  plusHideTimer = setTimeout(() => { plusHideTimer = null; hideNotePlus(); }, 150);
+}
+
+function moveNotePlus(event) {
+  if (plusRaf) return;
+  const clientY = event.clientY;
+  plusRaf = requestAnimationFrame(() => {
+    plusRaf = 0;
+    // The "+" belongs to the rail: no rail, no plus. Hidden while dragging or
+    // holding a selection (its bubble already offers Note) and before the
+    // draft loads. An open bubble does not hide it: the Continue bubble after
+    // any click at a paragraph's end used to take the "+" away with it, and a
+    // press on the "+" closes the bubble anyway.
+    if (!railOn || loadingDocument || event.buttons !== 0
+        || !workView.state.selection.main.empty) {
+      hideNotePlus();
+      return;
+    }
+    const contentBox = workView.contentDOM.getBoundingClientRect();
+    const pos = workView.posAtCoords({ x: contentBox.left + 40, y: clientY });
+    if (pos == null) { hideNotePlus(); return; }
+    const paras = cachedParagraphs();
+    if (!paras.length) { hideNotePlus(); return; }
+    let index = paras.findIndex(paragraph => pos >= paragraph.from && pos <= paragraph.to);
+    // The "+" stands on the line under the pointer, not the paragraph's first
+    // line: a hard-wrapped draft reads as one long paragraph, and pinned to
+    // its top the "+" sat screens away from the hand, often scrolled out.
+    let at = pos;
+    if (index < 0) {
+      // Blank gaps between paragraphs belong to no paragraph — snapping to
+      // the nearest one instead of blinking out on every crossing.
+      let best = 0, bestDist = Infinity;
+      paras.forEach((paragraph, i) => {
+        const dist = pos < paragraph.from ? paragraph.from - pos : pos - paragraph.to;
+        if (dist < bestDist) { bestDist = dist; best = i; }
+      });
+      index = best;
+      at = pos < paras[index].from ? paras[index].from : paras[index].to;
+    }
+    const coords = workView.coordsAtPos(at);
+    // A line a note already stands beside needs no invitation: pressing it
+    // would stack a second card on the first. Notes elsewhere in the same
+    // paragraph do not count — each line is its own place.
+    if (coords && marginNotes.some(note => {
+      const card = noteCards.get(note.id);
+      if (!card?.isConnected || card.parentElement !== rail) return false;
+      const box = card.getBoundingClientRect();
+      return coords.top >= box.top - 4 && coords.top <= box.bottom;
+    })) { hideNotePlus(); return; }
+    const railLeft = parseFloat(rail.style.left) || 0;
+    if (!coords || !railLeft) { hideNotePlus(); return; }
+    if (plusHideTimer) { clearTimeout(plusHideTimer); plusHideTimer = null; }
+    const pane = document.getElementById('pane-work').getBoundingClientRect();
+    plusPara = index;
+    plusOff = at - paras[index].from;
+    notePlus.style.left = `${railLeft - 28}px`;
+    notePlus.style.top = `${(coords.top + coords.bottom) / 2 - 11 - pane.top}px`;   // 22px "+" centred on the line
+    notePlus.hidden = false;
+  });
+}
+editorWrap.addEventListener('mousemove', moveNotePlus);
+editorWrap.addEventListener('mouseleave', event => {
+  // Moving onto the "+" itself must not dismiss it — it is the target.
+  if (event.relatedTarget === notePlus) return;
+  hideNotePlus();
+});
+notePlus.addEventListener('mouseenter', () => {
+  if (plusHideTimer) { clearTimeout(plusHideTimer); plusHideTimer = null; }
+});
+notePlus.addEventListener('mouseleave', schedulePlusHide);
+notePlus.addEventListener('click', event => {
+  event.preventDefault();
+  event.stopPropagation();
+  const para = plusPara, off = plusOff;
+  hideNotePlus();
+  // Focus stays where it was; the new note's editor takes it on the tick.
+  if (para >= 0) createParagraphNote(para, off);
+});
+
+// A note that never held text leaves no trace: no toast, no Undo — there is
+// nothing to put back. Backing out of a fresh note is cancelling, not deleting.
+function removeNoteSilent(id) {
+  const index = marginNotes.findIndex(note => note.id === id);
+  if (index < 0) return;
+  marginNotes.splice(index, 1);
+  const card = noteCards.get(id);
+  if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); }
+  noteCards.delete(id);
+  syncNoteMarks();
+  saveNotes();
+}
+
+function deleteNote(id) {  const index = marginNotes.findIndex(note => note.id === id);
+  if (index < 0) return;
+  const [note] = marginNotes.splice(index, 1);
+  const document = workView.state.doc.toString();
+  const card = noteCards.get(id);
+  if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); }
+  noteCards.delete(id);
+  syncNoteMarks();
+  saveNotes();
+  workView.focus();
+  notifyUndo('Note deleted', () => {
+    marginNotes.splice(Math.min(index, marginNotes.length), 0, note);
+    saveNotes();
+    const restored = noteCard(note);
+    noteCards.set(note.id, railAdd(restored, () => noteAnchor(note.id)));
+    if (restored.parentElement === chatStream) setChatOpen(true);
+    syncNoteMarks();
+    if (workView.state.doc.toString() !== document) notify('Note restored — its passage moved while it was gone.');
+  });
+}
+
+// The writer's margin notes as model context: short lines labeled by scope,
+// so a "tighten this" reads as the author's voice, not an instruction from
+// nowhere. Empty notes never persist (see editNoteCard), so everything here
+// is content. Sent with chat and rewrites only — suggestions fire on every
+// pause and review must judge the prose unbiased.
+function notesBrief() {
+  if (!marginNotes.length) return '';
+  const lines = marginNotes.map(note => {
+    if (note.para === null) return `- On the whole draft: ${note.text}`;
+    const range = noteRange(note.id);
+    const live = range ? workView.state.sliceDoc(range.from, note.quote ? range.to : range.from + 200).trim().replace(/\s+/g, ' ') : '';
+    return `- On "${(live || note.quote).slice(0, 200)}": ${note.text}`;
+  });
+  return `WRITER'S MARGIN NOTES (the author's own remarks — weigh them, do not quote them back):\n${lines.join('\n')}`;
+}
+
+// Clicking a note's mark reads the note: the editor scrolls the passage into
+// view and the card takes focus. Arms nothing, like a finding mark.
+function focusNote(id) {
+  const range = noteRange(id);
+  if (range) workView.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: 'center' }) });
+  const card = noteCards.get(id);
+  if (card?.isConnected) {
+    if (card.parentElement === chatStream) setChatOpen(true);
+    layoutRail();
+    card.focus({ preventScroll: true });
+  }
+}
+
 // Keep the way back visible even when the conversation is put away.
-const notifyUndo = (message, onUndo) => notify(message, { action: onUndo, key: 'undo' });
+const notifyUndo = (message, onUndo) => notify(message, { action: onUndo, key: 'undo', icon: 'check', tone: 'ok' });
 
 // ── Attached passage ──
 
@@ -2100,6 +2854,8 @@ function basePlaceholder() {
 // Clicking a mark opens its remark and arms nothing: the writer may just as
 // well be putting the caret there to fix the sentence themselves.
 function attach(range, finding = null, focusComposer = true) {
+  dismissPassingNotice();
+  openIsland();
   attached = range;
   activeFinding = finding;
   // Context remains visible after the placeholder disappears while typing.
@@ -2142,12 +2898,36 @@ const markBubble = document.getElementById('mark-bubble');
 let bubbleMode = null;   // 'finding' | 'style' | 'selection' | 'continue' | 'spell' while open
 
 function hideMarkBubble() {
+  cancelDeferredBubble();
   bubbleAnchor = null;
   if (markBubble.hidden) return;
+  // Children stay: the bubble fades out (style.css), and emptied first it
+  // would shrink to a sliver mid-fade. The next show replaces them.
   markBubble.hidden = true;
-  markBubble.replaceChildren();
   bubbleMode = null;
 }
+
+// Bubbles nobody asked for by name — after a selection, after a click at a
+// paragraph's end — wait a beat. Most such clicks are about to type, drag or
+// click again, and a toolbar flashing up for each reads as noise. Any key or
+// press in the meantime cancels; so does the text or caret moving on.
+// Clicking a mark is asking, so those bubbles still open at once.
+let bubbleTimer = 0;
+function deferBubble(show, ms) {
+  clearTimeout(bubbleTimer);
+  const { doc, selection } = workView.state;
+  bubbleTimer = setTimeout(() => {
+    bubbleTimer = 0;
+    const now = workView.state;
+    if (now.doc === doc && now.selection.main.eq(selection.main)) show();
+  }, ms);
+}
+function cancelDeferredBubble() {
+  clearTimeout(bubbleTimer);
+  bubbleTimer = 0;
+}
+document.addEventListener('keydown', cancelDeferredBubble, true);
+document.addEventListener('mousedown', cancelDeferredBubble, true);
 
 // The box the bubble may live in: the writing pane, not the window. The header
 // is fixed over the draft's first line and the file sidebar is a column beside
@@ -2172,22 +2952,53 @@ function bubbleArea() {
 // old screen point would be off. Cleared whenever it is put away.
 let bubbleAnchor = null;
 
-function placeBubble(x, y, anchor = null) {
+// Where bubbles stand: 'float' above the words (the default), or, with the
+// "Actions in the margin" setting, 'margin' beside the selected line in the
+// notes rail and 'inline' right after the caret for Continue. The docked kinds
+// are placed exactly (left edge at x, centred on the line at y) instead of
+// centred above a point, and fall back to float where there is no rail.
+let pillsMargin = localStorage.getItem('wa-pills') === 'margin';
+function bubbleDock(kind) {
+  return pillsMargin && (kind === 'inline' || railOn) ? kind : 'float';
+}
+
+function placeBubble(x, y, anchor = null, dock = 'float') {
   markBubble.hidden = false;
   if (!anchor) {
     const pos = workView.posAtCoords({ x, y });
     const at = pos == null ? null : workView.coordsAtPos(pos);
-    anchor = at && { pos, dx: x - at.left, dy: y - at.top };
+    anchor = at && { pos, dx: x - at.left, dy: y - at.top, dock };
   }
   bubbleAnchor = anchor;
+  dock = anchor?.dock ?? 'float';
+  markBubble.dataset.dock = dock;
   const area = bubbleArea();
   // Scrolled under the header or off the pane: hidden with its words, back
   // when they return — never pinned to an edge pointing at nothing.
-  markBubble.style.visibility = y < area.top - 8 || y > area.bottom ? 'hidden' : '';
   const box = markBubble.getBoundingClientRect();
-  const { left, top } = clampBubble(x, y, { w: box.width, h: box.height }, area);
+  const cy = dock === 'float' ? y : y + box.height / 2;   // docked: judged by its line
+  markBubble.style.visibility = cy < area.top - 8 || cy > area.bottom ? 'hidden' : '';
+  let left, top;
+  if (dock === 'float') ({ left, top } = clampBubble(x, y, { w: box.width, h: box.height }, area));
+  else {
+    left = Math.min(x, window.innerWidth - box.width - 8);
+    top = y;
+  }
   markBubble.style.left = `${left}px`;
   markBubble.style.top = `${top}px`;
+}
+
+// A docked bubble is centred on the text line it belongs to.
+function placeDockedBubble(pos, dock) {
+  const coords = workView.coordsAtPos(pos);
+  if (!coords) return false;
+  markBubble.hidden = false;
+  const h = markBubble.getBoundingClientRect().height;
+  const pane = document.getElementById('pane-work').getBoundingClientRect();
+  const x = dock === 'margin' ? pane.left + (parseFloat(rail.style.left) || 0) : coords.left + 12;
+  const y = (coords.top + coords.bottom) / 2 - h / 2;
+  placeBubble(x, y, { pos, dx: x - coords.left, dy: y - coords.top, dock }, dock);
+  return true;
 }
 
 // Back over its words after a scroll or reflow, at the same offset from them.
@@ -2256,7 +3067,16 @@ function showSelectionBubble(x, y) {
     if (live.empty) return;
     attach({ from: live.from, to: live.to, text: workView.state.sliceDoc(live.from, live.to) }, null, true);
   }));
+  // A note is the writer talking to themselves about the passage — no model
+  // call, just a card on the rail. The card opens its editor on the next
+  // tick, after the bubble returns focus to the draft.
+  actions.append(bubbleButton('Note', () => {
+    const live = workView.state.selection.main;
+    if (live.empty) return;
+    createNote(live.from, live.to);
+  }));
   markBubble.replaceChildren(actions);
+  if (bubbleDock('margin') === 'margin' && placeDockedBubble(sel.from, 'margin')) return;
   placeBubble(x, y);
 }
 
@@ -2276,9 +3096,15 @@ function showContinueBubble(x, y) {
   // the empty tail of the line, while writing continues at the caret. The
   // bubble stands right above the caret line. Falls back to the click point
   // when caret coordinates are unavailable.
+  const head = workView.state.selection.main.head;
+  if (bubbleDock('inline') === 'inline') {
+    const hint = chatEl('kbd', '', '⌘↵');
+    actions.firstChild.append(' ', hint);
+    if (placeDockedBubble(head, 'inline')) return;
+  }
   let cx = x, cy = y;
   try {
-    const coords = workView.coordsAtPos(workView.state.selection.main.head);
+    const coords = workView.coordsAtPos(head);
     if (coords) { cx = coords.left; cy = coords.top; }
   } catch {}
   placeBubble(cx, cy);
@@ -2513,7 +3339,7 @@ function attachUndo(card, text, target) {
       layoutRail();
       // The wrap may have been the last thing in the stream — don't leave the
       // toggle over an empty panel.
-      if (chatStream.children.length === 0) setChatOpen(false);
+      if (chatStream.children.length === 0) { setChatOpen(false); maybeCollapseIsland(); }
     });
     row.append(undo);
     card.append(row);
@@ -2803,6 +3629,7 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
         from:        range.from,   // exact span, so the server marks the right occurrence
         instruction,
         agent:       currentAgent(),
+        context:     notesBrief() || undefined,
       }),
     });
     const data = await res.json();
@@ -2954,6 +3781,7 @@ async function streamReply(reply) {
         messages: chatHistory.map(({ role, content, edits }) => ({ role, content: content + (edits?.length ? `\n${EDITS_OPEN}${JSON.stringify(edits.map(({ label, quote, replacement, state }) => ({ label, quote, replacement, state })))}</litura-edits>` : '') })),
         document: request.document, selection: request.selection?.text,
         selectionRange: request.selection && { from: request.selection.from, to: request.selection.to }, agent: currentAgent(),
+        context: notesBrief() || undefined,
       }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Server error ${res.status}`);
@@ -3039,10 +3867,18 @@ chatInput.addEventListener('keydown', event => {
     // nothing above can act on the same press. With nothing attached and no
     // request running, the key is left alone to reach the sidebar overlay.
     if (chatAbort && !chatAbort.signal.aborted) { chatAbort.abort(); event.stopPropagation(); return; }
-    if (!attached) return;
-    detach();
-    workView.focus();
-    event.stopPropagation();
+    if (attached) {
+      detach();
+      workView.focus();
+      event.stopPropagation();
+      return;
+    }
+    // An empty, unstarted composer folds back into the pill.
+    if (!chatInput.value.trim() && canCollapseIsland()) {
+      setIsland(false);
+      workView.focus();
+      event.stopPropagation();
+    }
   }
 });
 
@@ -3054,6 +3890,14 @@ chatChipClear.addEventListener('click', () => { detach(); chatInput.focus(); });
 chatClear.addEventListener('mousedown', event => event.preventDefault());
 chatClear.addEventListener('click', () => {
   const open = chatStream.hidden;
+  // Closing an empty, unstarted chat folds the whole island back into the
+  // pill; the draft gets the focus back either way.
+  if (!open && canCollapseIsland()) {
+    setChatOpen(false);
+    setIsland(false);
+    workView.focus();
+    return;
+  }
   setChatOpen(open);
   // Dismissing returns to the draft; opening returns to the composer. Focusing
   // the composer on close pops the keyboard after the user asked to leave.
@@ -3068,6 +3912,8 @@ const MANUAL_ATTACH = false;
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
+    dismissPassingNotice();
+    openIsland();
     const sel = workView.state.selection.main;
     if (!sel.empty) attach({ from: sel.from, to: sel.to, text: workView.state.sliceDoc(sel.from, sel.to) });
     else chatInput.focus();
@@ -3093,14 +3939,15 @@ const editorTheme = EditorView.theme({
   // Scrollable area — inherits the writing font
   '.cm-scroller': {
     fontFamily: 'var(--font)',
-    fontSize:   '15px',
-    lineHeight: '1.8',
+    fontSize:   '17px',
+    lineHeight: '1.75',
     overflowY:  'auto',
   },
 
   // Editable content area — generous padding, centred like the old textarea
   '.cm-content': {
-    padding:    '28px max(32px, calc((100% - 620px) / 2))',
+    // The measure is set in characters, so it holds if the size changes.
+    padding:    '28px max(32px, calc((100% - 68ch) / 2))',
     caretColor: 'var(--accent)',
     color:      'var(--text)',
     minHeight:  '100%',
@@ -3192,6 +4039,24 @@ const editorTheme = EditorView.theme({
   },
 
   '.cm-slop:hover': { background: 'var(--remark-tint-hover)' },
+
+  // Margin notes read blue against the findings' amber: the writer's own
+  // remarks, not the model's. A background wash like every other working
+  // state — underlines belong to errors. Drifted notes (quote gone, holding
+  // the paragraph) get the dashed outline instead of the wash edge.
+  '.cm-note': {
+    background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
+    borderRadius: '2px',
+    boxShadow: 'inset 0 -1px 0 color-mix(in srgb, var(--accent) 45%, transparent)',
+    cursor: 'pointer',
+    transition: 'background .12s ease',
+  },
+
+  '.cm-note.is-drifted': {
+    background: 'color-mix(in srgb, var(--accent) 6%, transparent)',
+    outline: '1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent)',
+    outlineOffset: '2px',
+  },
 
   // The passage whose variants are currently open: a dashed accent outline
   // with a faint wash — the only dashed mark in the draft, reading as
@@ -3293,6 +4158,7 @@ const workView = new EditorView({
       // Ghost text state + decoration provider
       ghostField,
       reviewField,
+      noteField,
       styleMarkerField,
       spellMarkerField,
       attachField,
@@ -3329,6 +4195,13 @@ const workView = new EditorView({
           // from mouseup; the mark keeps its caret placement only.
           if (!view.state.selection.main.empty) return false;
           const at = { x: event.clientX, y: event.clientY };
+          // The writer's own notes win over model marks underneath: a click
+          // reads the note and arms nothing.
+          const noteMarkEl = event.target.closest?.('.cm-note');
+          if (noteMarkEl) {
+            if (noteMarkEl.dataset.noteId && noteCards.has(noteMarkEl.dataset.noteId)) focusNote(noteMarkEl.dataset.noteId);
+            return false;
+          }
           const mark = event.target.closest?.('.cm-slop');
           if (!mark) {
             const spellLocal = event.target.closest?.('.cm-spell-marker');
@@ -3342,7 +4215,9 @@ const workView = new EditorView({
             // Only where a continuation is even possible — the same spot
             // Cmd/Ctrl+Enter already requires — so an ordinary click to fix a
             // word mid-paragraph never raises the bubble.
-            else if (atParagraphEnd(view.state)) showContinueBubble(at.x, at.y);
+            // Deferred longer than a selection's: a click at the end is
+            // most often the writer about to keep typing themselves.
+            else if (atParagraphEnd(view.state)) deferBubble(() => showContinueBubble(at.x, at.y), 450);
             return false;
           }
           const finding = reviewFindings.find(item => item.id === Number(mark.dataset.slopId));
@@ -3375,6 +4250,7 @@ const workView = new EditorView({
       EditorView.updateListener.of(update => {
         if (update.docChanged || update.geometryChanged || update.viewportChanged) {
           layoutRail();
+          hideNotePlus();   // its paragraph may have moved; it follows the mouse back
           // Only an edit invalidates the bubble — the words it points at may
           // be gone. A scroll or a reflow moves them; the bubble follows.
           if (update.docChanged) hideMarkBubble();
@@ -3418,6 +4294,13 @@ const workView = new EditorView({
           // A hover preview is a decoration over the old range; any edit drops it.
           if (plainPreview) queueMicrotask(clearPlainPreview);
           if (reviewFindings.length) { syncReviewLabel(); saveFindings(); }
+          // Notes re-anchor against the new text (verbatim, else paragraph
+          // fallback) on the next tick — a dispatch inside an update is
+          // illegal, same as the detach below.
+          if (marginNotes.length && !loadingDocument) {
+            saveNotes();
+            queueMicrotask(() => { if (!loadingDocument && marginNotes.length) syncNoteMarks(); });
+          }
           if (!loadingDocument) save();
           autoReviewSchedule();
           syncStyleScore();
@@ -3439,8 +4322,8 @@ loadSpellDictionary().then(spell => {
 // ─── Persist ───────────────────────────────────────────────────────────────────
 
 new ResizeObserver(() => {
-  // Panel height + its 20px offset from the bottom + a line of breathing room.
-  chatHeight = Math.round(chatPanel.getBoundingClientRect().height) + 48;
+  // Panel height + its 36px offset from the bottom + a line of breathing room.
+  chatHeight = Math.round(chatPanel.getBoundingClientRect().height) + 64;
   document.documentElement.style.setProperty('--chat-height', `${chatHeight}px`);
   workView.dispatch({
     effects: EditorView.scrollIntoView(workView.state.selection.main.head, { y: 'nearest' }),
@@ -3492,11 +4375,14 @@ function loadFromDisk(text) {
   detach();
   workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: text } });
   clearReview();
+  discardNoteCards();
+  docStorage.removeItem('wa-notes');
   chatHistory = []; chatStream.replaceChildren(); findingCards.clear();
   docStorage.removeItem('wa-chat');
   docStorage.removeItem('wa-kept-wording');
   docStorage.removeItem('dismissed');
   setChatOpen(false);   // the stream was just emptied — don't leave × over nothing
+  maybeCollapseIsland();
   loadingDocument = false;
 }
 // Replacing the draft asks nothing: the old text goes to History, and the
@@ -3667,7 +4553,7 @@ async function initializeDocument() {
       if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
     } catch {}
     workView.dispatch({ effects: refreshStyleFx.of(null) });
-    restoreFindings(); restoreChat(); syncStyleScore(); renderFileList();
+    restoreFindings(); restoreChat(); restoreNotes(); syncStyleScore(); renderFileList();
     // A reopen with unsaved work is not a conflict when the disk stood
     // still — only a disk that moved while we were away earns the banner.
     if (cached !== null) {
@@ -3862,7 +4748,7 @@ async function switchDocument(name) {
   try {
     clearTimeout(diskTimer);
     if (!savePaused && !diskHold) await flushSave();
-    saveChat(); saveFindings(); saveKeptStyle();
+    saveChat(); saveFindings(); saveKeptStyle(); saveNotes();
     saveSnapshot('Before switching document');
   } catch {}
   let current;
@@ -3881,6 +4767,7 @@ async function switchDocument(name) {
   clearNotice('undo');
   clearNotice('disk');
   discardFindingCards();
+  discardNoteCards();
   for (const stale of document.querySelectorAll('.chat-variants')) stale.remove();
   clearPlainPreview();
   reviewFindings = [];
@@ -3888,6 +4775,7 @@ async function switchDocument(name) {
   checkedSentences.clear();
   chatHistory = []; chatStream.replaceChildren();
   setChatOpen(false);   // the stream was just emptied — don't leave × over nothing
+  maybeCollapseIsland();
   hideDriftBanner(); diskHold = false;
   // Retarget storage and the disk baseline onto the new file first: every
   // restore below reads under the new key.
@@ -3916,7 +4804,7 @@ async function switchDocument(name) {
     if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
   } catch {}
   workView.dispatch({ effects: refreshStyleFx.of(null) });
-  restoreFindings(); restoreChat(); syncStyleScore(); renderFileList();
+  restoreFindings(); restoreChat(); restoreNotes(); syncStyleScore(); renderFileList();
   // A reopen with unsaved work is not a conflict when the disk stood
   // still — only a disk that moved while we were away earns the banner.
   if (cached !== null) {
@@ -4019,6 +4907,6 @@ document.getElementById('file-history').addEventListener('click', async () => {
 
 // ─── Initial focus ─────────────────────────────────────────────────────────────
 
-workView.scrollDOM.addEventListener('scroll', () => { layoutRail(); reanchorBubble(); }, { passive: true });
+workView.scrollDOM.addEventListener('scroll', () => { layoutRail(); hideNotePlus(); reanchorBubble(); }, { passive: true });
 workView.focus();
 syncStyleScore();

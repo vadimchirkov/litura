@@ -444,6 +444,7 @@ ins.passage-preview { border-left: 2px solid var(--accent); padding-left: 8px; t
   --primary-fg:    #ffffff;
   --primary-hover: #212121;
   --overlay:       #ffffff;
+  --chat-panel:    #ffffff;   /* the open conversation's container */
   --scrim:         #00000073;
 
   /* Review marks. A finding is a remark, not an error and not a selection, so
@@ -497,6 +498,7 @@ ins.passage-preview { border-left: 2px solid var(--accent); padding-left: 8px; t
     --primary-fg:    #0d0d0d;
     --primary-hover: #ececec;
     --overlay:       #303030;
+    --chat-panel:    #171717;
 
     /* The same tints read weaker against a dark canvas — lift them. */
     --remark:            #e0a050;
@@ -537,6 +539,7 @@ ins.passage-preview { border-left: 2px solid var(--accent); padding-left: 8px; t
   --primary-fg:    #0d0d0d;
   --primary-hover: #ececec;
   --overlay:       #303030;
+  --chat-panel:    #171717;
   --remark:            #e0a050;
   --remark-tint:       color-mix(in srgb, var(--remark) 16%, transparent);
   --remark-tint-hover: color-mix(in srgb, var(--remark) 26%, transparent);
@@ -680,14 +683,149 @@ html, body {
   background: var(--surface);
 }
 
-/* The rail is retired: remarks stack in the chat stream at every width.
-   The element stays hidden even if something unhides it. */
-#rail { display: none !important; }
+/* ── Margin-notes rail ──────────────────────────────────────────
+   Remarks about a place in the draft stand next to that place. The rail
+   lives in the margin the centred text column leaves empty (measured in
+   syncRail, not guessed at a breakpoint), so the draft sits exactly where
+   it sat before any card existed. Finding cards keep their stream
+   behavior; only margin-note cards stand here. */
+/* From the very top, not under the header: the header is transparent and the
+   draft's lines show through it while scrolling, so a rail clipped at its
+   bottom edge cut a note in half beside a line that was still fully visible. */
+.rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 220px;   /* RAIL_WIDTH in app.js */
+  overflow: hidden;
+  pointer-events: none;   /* left is set to the text column's right edge */
+  z-index: 5;
+}
+.rail[hidden] { display: none; }
+.rail > * {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0;
+  pointer-events: auto;
+  /* No transition on top: during scrolling the cards must stick to their
+     lines — a 120ms ease reads as rubber-banding behind the text. */
+}
 
 /* Hovering a card lights the mark it belongs to. What is attached is already
    named in the composer chip, so the open card only needs a firmer edge to
    stand out among its neighbours — no color, just weight. */
 .cm-slop.is-hot { background: var(--remark-tint-hover); }
+.cm-note.is-hot { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* ── Margin notes: plain text, not cards ────────────────────────────
+   A note is the writer thinking on paper — no chrome, no buttons. In the
+   rail it stands beside its passage, so the passage is the context and only
+   the text shows. Delete is one × that appears on hover and keyboard focus.
+   Click the text to edit it in place: blur commits, Escape drops. */
+.note-card {
+  position: relative;
+  /* 4px down puts the note's first baseline on the passage's (17px/1.75
+     prose beside 14px/1.55 italic). */
+  padding: 4px 24px 0 0;
+  color: var(--text-2);
+  font-family: var(--ui-font);
+  font-size: 14px;
+  line-height: 1.55;
+  animation: chat-in .2s var(--ease);
+  outline: none;
+  cursor: default;
+}
+/* In the rail the cards are placed by `top` (layoutRail). The rule above, later
+   in the file, used to win over `.rail > *` and left them in normal flow with
+   `top` as a relative nudge — each card then sat below the previous one's
+   height as well, and overlapped whatever it was placed against. */
+.rail > .note-card { position: absolute; }
+.note-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--r-xs); }
+/* The draft's own italic, a size down: the note reads as the writer's aside,
+   not the app's. Text and field share face, size and leading, so committing a
+   note never shifts it. No surface, no border — a note is ink on
+   the margin, and the caret plus placeholder are enough to show it is open. */
+.note-text,
+.note-card textarea {
+  font-family: var(--font);
+  font-size: 14px;
+  font-style: italic;
+  line-height: 1.55;
+}
+.note-quote {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.note-text { white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+.note-meta { margin-top: 2px; color: var(--muted); font-size: 11.5px; }
+.note-card textarea {
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  resize: none;
+  border: 0;
+  background: none;
+  color: inherit;
+  outline: none;
+}
+.note-card textarea::placeholder { color: var(--muted); opacity: .8; }
+.note-del {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  /* Hidden until hover or keyboard focus: a rail of × reads as a toolbar. */
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.note-card:hover .note-del,
+.note-card:focus-within .note-del { opacity: .8; }
+.note-del:hover { opacity: 1 !important; background: var(--surface-3); }
+/* No hover on touch: the × is the only way to delete, so it stays visible. */
+@media (hover: none) {
+  .note-del { opacity: .6; }
+}
+
+/* The paragraph "+": one faint invitation in the empty margin, following the
+   mouse and snapping to paragraph tops. Quiet until hovered — the margin is
+   for reading, and this is its only control. */
+.note-plus {
+  position: absolute;
+  z-index: 6;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--overlay);
+  box-shadow: var(--shadow-sm);
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease;
+}
+.note-plus[hidden] { display: none; }
+.note-plus:hover { color: var(--text); border-color: var(--border-strong); }
 
 /* Mark bubble: a compact segmented toolbar where the writer clicked — context
    on the left, rewrite on the right — instead of arming the composer as a side
@@ -710,9 +848,25 @@ html, body {
   border-radius: var(--r-pill);
   background: var(--overlay);
   box-shadow: var(--shadow-lg);
-  animation: chat-in .15s var(--ease);
+  /* Soft in, softer out: rises 4px into place, fades away where it stood.
+     Translate only — a scale would skew the measured width placeBubble clamps.
+     `display` rides the transition (allow-discrete) so the fade-out plays. */
+  transition:
+    opacity .16s ease-out,
+    translate .2s var(--ease),
+    display .16s allow-discrete;
 }
-.mark-bubble[hidden] { display: none; }
+@starting-style {
+  .mark-bubble:not([hidden]) { opacity: 0; translate: 0 4px; }
+}
+.mark-bubble[hidden] { display: none; opacity: 0; transition-duration: .12s; }
+/* Docked variants (Actions in the margin): quieter, they stand where the eye
+   already is. The margin pill leads with the line; the inline one is a ghost. */
+.mark-bubble[data-dock="margin"] { padding: 1px; box-shadow: var(--shadow-sm); }
+.mark-bubble[data-dock="margin"] .mark-bubble-seg { min-height: 24px; padding: 0 9px; font-size: 12px; color: var(--text-secondary); }
+.mark-bubble[data-dock="inline"] { padding: 0; border-style: dashed; box-shadow: none; background: transparent; }
+.mark-bubble[data-dock="inline"] .mark-bubble-seg { min-height: 22px; padding: 0 9px; font-size: 12px; color: var(--text-muted); }
+.mark-bubble[data-dock="inline"] kbd { font: inherit; font-size: 11px; opacity: .8; }
 .mark-bubble-actions { display: flex; align-items: stretch; }
 .mark-bubble-seg {
   min-height: 28px;
@@ -1029,38 +1183,52 @@ html, body {
   outline-offset: 2px;
 }
 /* The one notice surface (notify() in app.js): confirmations, warnings and
-   errors alike, one at a time. Centred just above the chat panel and
-   following it when the sidebar shifts the draft; --chat-height is the
-   panel height + 48px, so this sits 8px above its top. */
+   errors alike, one at a time, buttons and all. The island shows either the
+   input or the notice, never both — while one is up it takes the composer's
+   place at the bottom of the panel. The panel's ResizeObserver already
+   measures it into --chat-height. */
 .edit-feedback {
-  position: fixed;
-  left: 50%;
-  translate: -50% 0;
-  bottom: calc(var(--chat-height, 140px) - 20px);
-  z-index: 200;
+  order: 5;
+  align-self: center;
+  width: fit-content;
+  max-width: min(480px, calc(100vw - 32px));
   display: flex;
   align-items: center;
-  gap: 10px;
-  max-width: min(420px, calc(100vw - 32px));
-  padding: 10px 14px;
+  gap: 6px;
+  /* Pill height (≈38px, like .chat-pill): the buttons sit inside the
+     padding instead of pushing it out. */
+  min-height: 38px;
+  padding: 4px 4px 4px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--r-field);
+  border-radius: 19px;
   background: var(--overlay);
   box-shadow: var(--shadow-lg);
   color: var(--text-2);
   font-size: 13px;
-  animation: toast-in .25s var(--ease);
 }
-@keyframes toast-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+.edit-feedback > span { flex: 1 1 auto; min-width: 0; }
+/* Notice icon: neutral by default, green for confirmations, red for problems. */
+/* Centred on the row like everything else in it: pinned to the top it drifted
+   above the text whenever the buttons made the row taller than one line. */
+.notice-icon { display: inline-flex; flex-shrink: 0; color: var(--muted); }
+.notice-icon svg { display: block; width: 15px; height: 15px; }
+.edit-feedback > span:not(.notice-icon) { line-height: 1.4; padding-block: 5px; }
+.edit-feedback .edit-feedback-close {
+  flex-shrink: 0;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
 }
-.edit-feedback > span { flex: 1 1 auto; }
+.edit-feedback[data-tone="ok"] .notice-icon { color: var(--ok); }
+.edit-feedback[data-tone="error"] .notice-icon { color: var(--danger); }
 /* Undo uses the same pill as stream actions, but primary (filled) because
    it's the point of the toast. */
 .edit-feedback .edit-feedback-undo {
   flex-shrink: 0;
-  min-height: 26px;
+  min-height: 28px;
   padding: 0 12px;
   border-radius: var(--r-pill);
   background: var(--fill);
@@ -1095,10 +1263,6 @@ html, body {
   transition: background .12s ease, color .12s ease;
 }
 .edit-feedback-close:hover { background: var(--surface-2); color: var(--text); }
-:root[data-sidebar="open"] .edit-feedback { left: calc(50% + 124px); }
-@media (max-width: 640px) {
-  :root[data-sidebar="open"] .edit-feedback { left: 50%; }
-}
 
 /* Available update — quiet on purpose. Nothing is broken, and the writer is
    mid-sentence; this must not compete with the draft. */
@@ -1136,7 +1300,7 @@ html, body {
 .chat {
   position: fixed;
   left: 50%;
-  bottom: 20px;
+  bottom: 36px;
   transform: translateX(-50%);
   z-index: 100;
   width: min(680px, calc(100vw - 32px));
@@ -1157,16 +1321,56 @@ html, body {
 
 .chat > * { pointer-events: auto; }
 
-/* The draft has to stop where the panel starts. Without this backdrop the
-   cards sit directly on running text and their edges disappear into it. */
+/* One panel, Granola-style: once there is a conversation to show, the stream,
+   the toggle and the field live inside a single opaque container — the draft
+   no longer shows through the turns and the field stops floating separately
+   under them. An empty or folded chat stays a lone field or pill. The panel
+   is a ::before so it can fade in with the island's morph instead of
+   switching on with the class. */
 .chat::before {
   content: '';
   position: absolute;
-  inset: -12px -16px -24px;
+  inset: 0;
   z-index: -1;
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background: var(--chat-panel);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
   pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--surface) 56px);
+  transition: opacity .25s var(--ease);
 }
+.chat:not(.is-collapsed):not(.has-notice):has(.chat-stream:not([hidden]):not(:empty))::before { opacity: 1; }
+.chat:not(.is-collapsed):not(.has-notice):has(.chat-stream:not([hidden]):not(:empty)) { padding: 8px; }
+/* Inside the panel the field is a plain inset, not a second floating card. */
+.chat:not(.is-collapsed):not(.has-notice):has(.chat-stream:not([hidden]):not(:empty)) .chat-composer {
+  background: var(--surface-2);
+  box-shadow: none;
+  border-color: transparent;
+}
+.chat:not(.is-collapsed):not(.has-notice):has(.chat-stream:not([hidden]):not(:empty)) .chat-composer:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* The × is the panel's own corner control, not a pill of its own: no border,
+   no shadow, no row of its own — the first turn clears it instead. */
+.chat:not(.is-collapsed):not(.has-notice):has(.chat-stream:not([hidden]):not(:empty)) .chat-clear {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  width: 28px;
+  min-width: 0;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-size: 18px;
+  font-weight: 400;
+}
+.chat:not(.is-collapsed):not(.has-notice):has(.chat-stream:not([hidden]):not(:empty)) .chat-clear:hover { background: var(--surface-2); color: var(--text); }
+.chat:not(.is-collapsed):has(.chat-stream:not([hidden]):not(:empty)) .chat-stream > :first-child { margin-top: 28px; }
+.chat:not(.is-collapsed):has(.chat-stream:not([hidden]):not(:empty)) .chat-entry:not(.is-user) { background: var(--surface-2); border-color: transparent; }
 
 .chat-stream {
   display: flex;
@@ -1174,14 +1378,27 @@ html, body {
   gap: 8px;
   max-height: 46vh;
   overflow-y: auto;
-  padding: 4px;
+  /* The bottom 16px is the fade into the field (mask below): content resting
+     at the end of the scroll sits above it, fully opaque, instead of being cut
+     by the stream's edge a line above the field. */
+  padding: 4px 4px 16px;
   order: 1;
-  /* Top fade: turns dissolve toward the top edge instead of clipping hard
+  /* Edge fades: turns dissolve toward the top and bottom edges instead of clipping hard
      against it. A mask, not an overlay — it fades the pixels themselves,
      takes no space and no clicks. */
-  -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 56px), transparent);
-  mask-image: linear-gradient(to top, #000 calc(100% - 56px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 56px, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 56px, #000 calc(100% - 16px), transparent);
 }
+
+/* The thumb is there only while the stream is moving (is-scrolling, set from
+   app.js). A resting panel is a column of turns, not a scrollable widget. */
+.chat-stream {
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color .25s ease;
+}
+.chat-stream.is-scrolling { scrollbar-color: var(--border-strong) transparent; }
+.chat-stream::-webkit-scrollbar-thumb { background: transparent; }
+.chat-stream.is-scrolling::-webkit-scrollbar-thumb { background: var(--border-strong); }
 
 .chat-stream:empty { display: none; }
 
@@ -1397,6 +1614,160 @@ html, body {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-lg), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
+
+/* ── Conversation island ───────────────────────────────────────
+ * iPhone Dynamic Island, in CSS. The real island runs a spring (response
+ * ~0.45s, damping just under critical so it lands without overshoot); the
+ * CSS stand-in is the iOS system curve below — fast attack, long soft
+ * landing. Expand runs the full response; collapse is shorter; content
+ * trails the shell by ~70ms so the shape leads and the pixels follow. Blur
+ * 8px → 0 sells the morph between pill, alert and composer, which share
+ * surface/border/shadow so the swap reads as one surface changing shape.
+ * Opacity resolves early (55%) while the transform keeps settling — the way
+ * a spring's brightness lands before its position does.
+ *
+ * Exit is transitioned where the engine allows it: `display` flips discrete,
+ * so the leave fade runs only under `allow-discrete` — elsewhere the swap is
+ * instant, as before. Enter stays a keyframe animation so it works everywhere;
+ * it overrides the transition while it runs (same endpoints, no snap). */
+.chat {
+  --island-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --island-expand: .45s var(--island-spring);
+  --island-settle: .3s var(--island-spring);
+  --island-trail: .07s;
+}
+.chat.is-collapsed .chat-composer,
+.chat.is-collapsed .chat-stream,
+.chat.is-collapsed .chat-recipes,
+.chat.is-collapsed .chat-clear { display: none; }
+
+/* Hidden views rest at their leave state, so showing always starts from it.
+   A leaving view also drops out of flow: the swap must never stack both
+   views in the column, or the panel jumps taller and falls back as the old
+   view fades — the "appears above and drops" bounce. Absolute keeps it
+   parked over its in-flow spot (translate composes with the animated
+   transform) while the incoming view alone defines the panel height. */
+.chat.is-collapsed .chat-composer,
+.chat.has-notice .chat-composer {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+}
+.chat:not(.is-collapsed) .chat-pill,
+.chat.has-notice .chat-pill,
+.chat .edit-feedback[hidden] {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  translate: -50% 0;
+}
+.chat.is-collapsed .chat-composer,
+.chat:not(.is-collapsed) .chat-pill,
+.chat.has-notice .chat-composer,
+.chat.has-notice .chat-pill,
+.chat .edit-feedback[hidden] {
+  opacity: 0;
+  filter: blur(4px);
+}
+
+.chat:not(.is-collapsed) .chat-pill { display: none; }
+
+/* Either input or notice, never both: while one is up the composer, the pill
+   and the recipes row step aside for it. End-state values included so the
+   leave fade has somewhere to go in both directions. */
+.chat.has-notice .chat-composer,
+.chat.has-notice .chat-pill {
+  display: none;
+  opacity: 0;
+  filter: blur(4px);
+}
+.chat.has-notice .chat-recipes { display: none; }
+
+/* The leave fade: composer and alert settle the same way. (The pill carries
+   its own merged transition below, next to its hover scale.) */
+.chat-composer,
+.chat .edit-feedback {
+  transition:
+    opacity .22s ease-out,
+    transform var(--island-settle),
+    filter var(--island-settle),
+    display var(--island-settle) allow-discrete,
+    border-color .12s ease,
+    box-shadow .12s ease;
+}
+
+.chat-pill {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--overlay);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-2);
+  font-family: var(--ui-font);
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  order: 5;
+  transition:
+    color .12s ease,
+    border-color .12s ease,
+    opacity .22s ease-out,
+    transform var(--island-settle),
+    filter var(--island-settle),
+    display var(--island-settle) allow-discrete;
+}
+
+.chat-pill:hover { color: var(--text); border-color: var(--border-strong); transform: scale(1.03); }
+
+.chat-pill .ph svg { width: 15px; height: 15px; }
+/* Background work ("Suggesting…") folded into the pill: the + gives way to
+   a breathing dot, so the pill reads as a status, still pressable. */
+.chat.is-working .chat-pill .ph svg,
+.chat.is-working .chat-pill kbd { display: none; }
+.chat.is-working .chat-pill .ph::before {
+  content: '';
+  display: block;
+  width: 7px;
+  height: 7px;
+  margin: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pill-breathe 1.2s ease-in-out infinite;
+}
+@keyframes pill-breathe {
+  0%, 100% { opacity: .35; transform: scale(.8); }
+  50%      { opacity: 1;   transform: scale(1); }
+}
+
+.chat-pill kbd {
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: var(--surface-2);
+}
+
+/* Contents only: the outline's travel is the clip-path morph in app.js
+   (islandView). A scale here would fight the clip and wobble the edges. */
+@keyframes island-in {
+  from { opacity: 0; filter: blur(4px); }
+  60%  { opacity: 1; filter: blur(0); }
+  to   { opacity: 1; filter: blur(0); }
+}
+
+/* Enter choreography: the composer takes the full spring response, pill and
+   alert trail the shell by --island-trail (`backwards` holds the from-state
+   through the delay). */
+.chat.is-collapsed .chat-pill { animation: island-in .35s var(--island-spring) backwards; }
+.chat:not(.is-collapsed) .chat-composer { animation: island-in var(--island-expand) var(--island-trail) backwards; }
+.chat.has-notice .edit-feedback:not([hidden]) { animation: island-in .4s var(--island-spring) var(--island-trail) backwards; }
 
 /* One line at rest: field left, send right, both on the same baseline. */
 .chat-row {
