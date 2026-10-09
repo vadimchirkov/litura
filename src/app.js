@@ -2704,9 +2704,11 @@ function moveNotePlus(event) {
     // holding a selection (its bubble already offers Note) and before the
     // draft loads. An open bubble does not hide it: the Continue bubble after
     // any click at a paragraph's end used to take the "+" away with it, and a
-    // press on the "+" closes the bubble anyway.
+    // press on the "+" closes the bubble anyway. A selection hides it only while
+    // its bubble stands: Discuss puts the bubble away but leaves the passage
+    // selected, and that must not take the "+" from every paragraph.
     if (!railOn || loadingDocument || event.buttons !== 0
-        || !workView.state.selection.main.empty) {
+        || (!workView.state.selection.main.empty && !markBubble.hidden)) {
       hideNotePlus();
       return;
     }
@@ -2849,7 +2851,7 @@ function basePlaceholder() {
   return CHAT_PLACEHOLDER;
 }
 
-// Attaching is always an explicit act — the bubble's Add to context, a card's
+// Attaching is always an explicit act — the bubble's Discuss, a card's
 // Discuss, Cmd+K on a selection — never a side effect of reading.
 // Clicking a mark opens its remark and arms nothing: the writer may just as
 // well be putting the caret there to fix the sentence themselves.
@@ -2891,7 +2893,7 @@ function attachedRange() {
 // ── Mark bubble ──
 //
 //  Clicking a mark or selecting text arms nothing. The bubble beside the click
-//  holds the explicit acts instead: Add to context (names the chip, stays in
+//  holds the explicit acts instead: Discuss (names the chip, stays in
 //  the editor) and a rewrite (attaches, then asks the model). One bubble at a
 //  time; an edit, copy, or Escape puts it away — a scroll carries it along.
 const markBubble = document.getElementById('mark-bubble');
@@ -3036,7 +3038,7 @@ function showFindingBubble(finding, x, y) {
   bubbleMode = finding.id === -1 ? 'style' : 'finding';
   const actions = chatEl('div', 'mark-bubble-actions');
   actions.append(
-    bubbleButton('Add to context', () => {
+    bubbleButton('Discuss', () => {
       const range = findingRange(finding.id);
       if (range) attachLive(finding, range);
     }),
@@ -3062,7 +3064,7 @@ function showSelectionBubble(x, y) {
   // what to do with it.
   bubbleMode = 'selection';
   const actions = chatEl('div', 'mark-bubble-actions');
-  actions.append(bubbleButton('Add to context', () => {
+  actions.append(bubbleButton('Discuss', () => {
     const live = workView.state.selection.main;
     if (live.empty) return;
     attach({ from: live.from, to: live.to, text: workView.state.sliceDoc(live.from, live.to) }, null, true);
@@ -3675,7 +3677,7 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
 // opens its card and arms nothing — reading a remark is not a request. The
 // tint in the draft and the range a rewrite would replace are the same span,
 // and a problem that needs material moved between paragraphs is a
-// conversation, for which the bubble offers Add to context.
+// conversation, for which the bubble offers Discuss.
 const findingCards = new Map();  // finding id → its card, while it is on screen
 
 // `at` carries the click point for the action bubble; keyboard navigation

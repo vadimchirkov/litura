@@ -17,7 +17,7 @@ Litura is a local, AI-assisted text editor for making prose sharper and less gen
 - Provides a compact chat for discussing the whole draft.
 - Suggests short continuations below the current line; press `Tab` to accept or `Escape` to dismiss or cancel. `Cmd/Ctrl+Enter` requests a continuation even when automatic suggestions are off.
 
-Clicking a mark only reads it — the card or reason appears and nothing is attached. A bubble beside the click offers `Add to context` and rewrites; selecting text offers `Add to context`, or press `Cmd/Ctrl+K` to attach the current selection or focus the chat. `Cmd/Ctrl+S` downloads the draft; dropping a text file on the editor opens it.
+Clicking a mark only reads it — the card or reason appears and nothing is attached. A bubble beside the click offers `Discuss` and rewrites; selecting text offers `Discuss`, or press `Cmd/Ctrl+K` to attach the current selection or focus the chat. `Cmd/Ctrl+S` downloads the draft; dropping a text file on the editor opens it.
 
 ## Data and model access
 

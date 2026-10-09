@@ -151,7 +151,7 @@ single mandatory paragraph template.
 
 A passage can be attached to the composer in three ways, all explicit:
 
-- the bubble's `Add to context` on a review mark, a style mark, or a text selection;
+- the bubble's `Discuss` on a review mark, a style mark, or a text selection;
 - press `Cmd/Ctrl+K` with a selection;
 - the `Options` / rewrite action on a finding card or in the bubble.
 
@@ -161,7 +161,7 @@ An attached passage is marked in the draft with a tinted highlight that survives
 
 Editing inside the attached passage ends the attachment and cancels an in-flight rewrite: the author has taken the sentence over, and alternatives generated for the old wording no longer apply.
 
-Clicking any finding shows its card and offers a bubble with `Add to context` and `Suggest rewrites`. It makes no model request: the card carries a single `Options` control, and reading the remark and fixing the sentence by hand is a complete outcome. Clicking the same mark again returns to its card rather than repeating the remark.
+Clicking any finding shows its card and offers a bubble with `Discuss` and `Suggest rewrites`. It makes no model request: the card carries a single `Options` control, and reading the remark and fixing the sentence by hand is a complete outcome. Clicking the same mark again returns to its card rather than repeating the remark.
 
 The bubble is placed inside the writing pane and below the header, never over the sidebar or the fixed header band: a toolbar a chrome layer covers is a toolbar that looks present and swallows the click meant for it. It is anchored to the words it was raised on: a scroll, the panel opening under it or a window resize carries it along with them, and it hides while they are scrolled out of the pane. Only an edit, which may remove those words, takes it away.
 
