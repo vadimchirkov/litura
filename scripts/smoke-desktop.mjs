@@ -35,15 +35,16 @@ function* releaseDirs() {
 }
 
 // On macOS only the .app is complete: a bare binary has no Resources beside it
-// and could not find the server it is supposed to start.
+// and could not find the server it is supposed to start. Older builds for
+// other targets linger beside the new one, so the newest binary wins.
 function findBinary() {
-  for (const dir of releaseDirs()) {
-    const candidates = process.platform === 'darwin'
-      ? [path.join(dir, 'bundle/macos/Litura.app/Contents/MacOS/litura')]
-      : [path.join(dir, WINDOWS ? 'litura.exe' : 'litura')];
-    const found = candidates.find(candidate => fs.existsSync(candidate));
-    if (found) return found;
-  }
+  const found = [...releaseDirs()]
+    .map(dir => process.platform === 'darwin'
+      ? path.join(dir, 'bundle/macos/Litura.app/Contents/MacOS/litura')
+      : path.join(dir, WINDOWS ? 'litura.exe' : 'litura'))
+    .filter(candidate => fs.existsSync(candidate))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+  if (found) return found;
   throw new Error('No built desktop app found. Run `npm run desktop:build` first, or pass the binary path.');
 }
 

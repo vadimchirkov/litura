@@ -2,8 +2,11 @@
 
 Litura follows [semantic versioning](https://semver.org). Until 1.0 the minor number carries breaking changes.
 
-## Unreleased
+## 0.6.0 — 2026-10-09
 
+- Litura now works alongside coding agents. `litura-mcp` (also `mcp-server.mjs`) is a stdio MCP server with seven tools — `draft_read`, `draft_write`, `review`, `rewrite`, `suggest`, `chat`, `idea` — that reuse the editor's own prompts; only `draft_write` changes anything, under the same revision guard as `PUT /draft`. A ready-made skill ships in `skills/litura/SKILL.md` with the voice rules, finding codes and the localhost API, for Codex CLI and Claude Code.
+- Continuations use their own suggestion model, chosen in Settings. It defaults to the cheapest authenticated model that writes well, with reasoning off; review, rewrites, chat and `/idea` keep the default model.
+- Settings offers ChatGPT Plus/Pro sign-in as an alternative to an API key, with a note that subscriptions count messages and automatic checks send many small requests.
 - The bubble's `Add to context` is now `Discuss`, matching the button on finding cards. After `Discuss` the paragraph `+` is available again: the passage stays selected, and that no longer hides it.
 - Markdown in the draft stays plain text: markers remain, dimmed, and what they mark is styled in place. Headings set bold, `**bold**`, `*italic*`, `_italic_` and `***both***` follow suit, `` `code` `` gets a quiet background, `[links](url)` an accent underline, `>` lines are muted, list markers dimmed and `---` carries a thin rule. Fenced blocks and inline code are left unparsed.
 - The draft sets larger (17px) on a 68-character measure. Margin notes are written in the draft's own italic, sit on the passage's baseline and open as a single line with no background. The conversation island now morphs its outline between the pill, the composer and a notice, notices are pill-sized and wait eight seconds (longer under the pointer), and `Suggesting…` shows in the folded pill instead of vanishing with the composer.
@@ -13,6 +16,15 @@ Litura follows [semantic versioning](https://semver.org). Until 1.0 the minor nu
 - Experiment, Settings → While you write → Actions in the margin: `Note` and `Discuss` stand in the notes rail beside the selected line, and `Continue` sits right after the caret with its `⌘↵` hint, instead of floating over the text. Falls back to the floating bubble where there is no rail.
 - With a conversation open, the turns and the field now stand inside one opaque panel (near-black in dark mode) instead of floating over the draft, and the fade behind the island is gone. Notes in the margin no longer get cut at the header: the rail reaches the window top like the draft's lines do.
 - Margin notes, slice 1: select a passage and press `Note` in the bubble to pin your own remark beside the line — plain text on the margin, no card chrome, blur commits and `Escape` drops, no Save/Cancel. Hover the empty margin beside a paragraph for its `+` (a paragraph note, never drifts); select all and press `Note` for the whole draft (pinned at the rail top, no mark). Notes stand in the margin rail on wide windows and stack in the chat stream on narrow ones. Create, edit, delete with Undo; notes persist per file. Notes go to the model with chat and rewrite requests as labeled scope context. No threads yet.
+
+## 0.5.0 — 2026-09-27
+
+- A file sidebar lists the `.md` and `.txt` files beside the draft, with a filter. Clicking one opens it; the previous text goes to History first. New, Open, Save as and History moved there from the header. The sidebar starts hidden.
+- `Save as new` uses the system save dialog.
+- Icons are now Tabler outline at a thinner stroke, resting dim and full on hover.
+- Provider errors such as an exceeded quota are shown as their message instead of raw JSON.
+- The chosen model survives restarts, even while it is missing from the current catalog.
+- The desktop app opens at once: it no longer fetches the model catalog on startup.
 
 ## 0.4.2 — 2026-09-13
 

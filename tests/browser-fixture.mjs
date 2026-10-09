@@ -14,6 +14,10 @@ const fakePi = `
 export async function getAgentStatus() { return { available: true, providers: [{id:'fixture', name:'Test'}], models:[{provider:'fixture',model:'test',name:'Test model',thinkingLevels:['off']}], authProviders:[], defaultSelection:{provider:'fixture',model:'test',thinkingLevel:'off'} }; }
 export async function saveProviderApiKey() { throw Error('Fixture does not store keys'); }
 export async function removeProviderApiKey() { throw Error('Fixture does not store keys'); }
+export async function getOAuthStatus() { return { supported: [], active: null }; }
+export async function startOAuth() { throw Error('Fixture does not sign in'); }
+export async function submitOAuthCode() { throw Error('Fixture does not sign in'); }
+export async function cancelOAuth() { return { active: null }; }
 export async function completeText({systemPrompt, userPrompt, signal}) {
   await new Promise((resolve,reject) => { const timer=setTimeout(resolve, 300); signal?.addEventListener('abort',()=>{clearTimeout(timer);reject(signal.reason)}, {once:true}); });
   if (systemPrompt.includes('exactly 3 different replacements')) {
