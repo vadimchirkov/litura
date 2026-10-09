@@ -4,6 +4,7 @@ Litura follows [semantic versioning](https://semver.org). Until 1.0 the minor nu
 
 ## Unreleased
 
+- Markdown in the draft stays plain text: markers remain, dimmed, and what they mark is styled in place. Headings set bold, `**bold**`, `*italic*`, `_italic_` and `***both***` follow suit, `` `code` `` gets a quiet background, `[links](url)` an accent underline, `>` lines are muted, list markers dimmed and `---` carries a thin rule. Fenced blocks and inline code are left unparsed.
 - The draft sets larger (17px) on a 68-character measure. Margin notes are written in the draft's own italic, sit on the passage's baseline and open as a single line with no background. The conversation island now morphs its outline between the pill, the composer and a notice, notices are pill-sized and wait eight seconds (longer under the pointer), and `Suggesting…` shows in the folded pill instead of vanishing with the composer.
 - The paragraph `+` stands on the line under the pointer instead of a long paragraph's first line, stays up while a bubble is open, and on a paragraph that already has a note opens that note. The selection and Continue bubbles wait a beat (250 and 450 ms) and never appear if you type or click again first; every bubble fades in and out.
 - A margin note now stands on the line it was made at — its passage, or the line its `+` was pressed beside — instead of at the top of a long paragraph, and the `+` is no longer offered beside a line a note already covers. Retrying a failed draft load no longer duplicates the restored notes.

@@ -1012,6 +1012,16 @@ html, body {
   cursor: pointer;
 }
 .cm-style-marker:hover { background: var(--surface-3); }
+/* Markdown stays plain text: the markers remain, quiet, and the text they
+   mark is styled in place. */
+.cm-md-h { font-weight: 700; }
+.cm-md-b { font-weight: 700; }
+.cm-md-i { font-style: italic; }
+.cm-md-quote { color: var(--text-2); }
+.cm-md-code { background: var(--surface-3); border-radius: 3px; }
+.cm-md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.cm-md-rule { color: var(--muted); border-bottom: 1px solid var(--border); }
+.cm-md-mark { color: var(--muted); font-weight: 400; font-style: normal; text-decoration: none; }
 .cm-spell-marker {
   text-decoration: underline wavy var(--danger);
   text-underline-offset: 3px;
