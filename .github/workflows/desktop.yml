@@ -53,20 +53,32 @@ jobs:
       # tauri build runs desktop:prepare itself (beforeBuildCommand), which
       # bundles the frontend, bundles the server, and fetches the Node runtime
       # for this target.
+      # Unset before an Apple Developer ID exists. Then the fallback signs the
+      # bundle ad-hoc, which is not a trusted signature but is a valid one:
+      # macOS offers the writer `Open Anyway` instead of calling the app
+      # damaged and sending them to the Trash. A missing secret still arrives
+      # as an empty variable, and Tauri tries to import an empty
+      # APPLE_CERTIFICATE, so only the ones that are set are passed on.
+      - name: Apple signing credentials
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -n "${!name}" ]; then
+              printf '%s<<__LITURA_EOF__\n%s\n__LITURA_EOF__\n' "$name" "${!name}" >> "$GITHUB_ENV"
+            fi
+          done
+
       - uses: tauri-apps/tauri-action@v0
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Unset before an Apple Developer ID exists. Then the fallback signs
-          # the bundle ad-hoc, which is not a trusted signature but is a valid
-          # one: macOS offers the writer `Open Anyway` instead of calling the
-          # app damaged and sending them to the Trash.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           args: --target ${{ matrix.target }}
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
