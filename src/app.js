@@ -21,7 +21,7 @@ import {
 } from '@codemirror/commands';
 import { findingContext, isLatinScript, locateFindings, styleMarkers, styleScore } from '../review.js';
 import { renderMarkdown } from '../markdown.js';
-import { clampBubble, replacementTarget, newerVersion, resolveDrift } from '../editing.js';
+import { clampBubble, replacementTarget, newerVersion, resolveDrift, unwrapProse } from '../editing.js';
 import { EDITS_OPEN, chatVisibleText, locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
 import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
@@ -47,6 +47,9 @@ const keyAddEl      = document.getElementById('key-add');
 const configuredKeys = document.getElementById('configured-keys');
 const settingsError = document.getElementById('settings-error');
 const modelHint     = document.getElementById('model-hint');
+const suggestProviderEl = document.getElementById('suggest-provider');
+const suggestModelEl = document.getElementById('suggest-model');
+const suggestHint   = document.getElementById('suggest-hint');
 const reviewButton  = document.getElementById('review-button');
 const chatStream    = document.getElementById('chat-stream');
 const chatInput     = document.getElementById('chat-input');
@@ -295,6 +298,57 @@ function saveAgentSelection() {
   localStorage.setItem('wa-agent', JSON.stringify(agentSelection));
 }
 
+// ─── Suggestion model ──────────────────────────────────────────────────────
+// Continuations fire on nearly every pause, so they get their own cheap model
+// while review, rewrite, chat, and /idea keep the default above. The server
+// always spends the least reasoning the model allows (see `continuation` in
+// pi.js), so there is no reasoning control here — only provider and model.
+//
+// Preference order, checked against Text Arena creative-writing scores
+// (Oct 2026) crossed with price and `off`-level support: GPT-6 Luna (1411,
+// $0.10/$0.50 per 1M) ties GPT-5.6 Luna and DeepSeek Flash on quality at a
+// third of the input price, and all three switch reasoning off. Higher-ranked
+// cheap models (Gemini 3.8 Flash at 1492, GLM-5.3 Flash at 1435) mandate
+// reasoning, which would burn deliberation tokens on every keystroke pause —
+// the writer may still pick them by hand; they just aren't the default.
+const SUGGEST_FALLBACKS = [
+  ['openai', 'gpt-6-luna'],
+  ['openai', 'gpt-5.6-luna'],
+  ['xiaomi', 'mimo-v2.6-flash'],
+  ['deepseek', 'deepseek-flash'],
+  ['anthropic', 'claude-haiku-4-5'],
+];
+let suggestSelection = null;
+try { suggestSelection = JSON.parse(localStorage.getItem('wa-suggest') || 'null'); } catch {}
+let draftSuggest = suggestSelection;
+
+function normalizeSuggest(selection) {
+  const model = agentInfo.models.find(item => item.provider === selection?.provider && item.model === selection?.model);
+  if (!model) return null;
+  return { provider: model.provider, model: model.model };
+}
+
+function defaultSuggest() {
+  for (const [provider, model] of SUGGEST_FALLBACKS) {
+    if (agentInfo.models.some(item => item.provider === provider && item.model === model)) return { provider, model };
+  }
+  return normalizeSelection(agentSelection);
+}
+
+function activeSuggestAgent() {
+  return normalizeSuggest(suggestSelection) ?? defaultSuggest();
+}
+
+function saveSuggestSelection() {
+  const normalized = normalizeSuggest(draftSuggest);
+  if (!normalized) return;
+  draftSuggest = normalized;
+  suggestSelection = normalized;
+  cancelSuggestion();
+  ghostClear(workView);
+  localStorage.setItem('wa-suggest', JSON.stringify(suggestSelection));
+}
+
 // ── Combobox ──
 //
 //  Six hundred models do not fit a <select>, and a native datalist cannot
@@ -415,6 +469,8 @@ function combobox(trigger) {
 
 combobox(providerEl);
 combobox(modelEl);
+combobox(suggestProviderEl);
+combobox(suggestModelEl);
 
 // One open popover at most follows its field; closed ones cost nothing.
 for (const event of ['resize', 'scroll']) {
@@ -469,6 +525,24 @@ function renderModelSettings() {
   modelHint.textContent = agentInfo.models.length ? '' : 'Add an API key or configure Pi authentication to see models.';
 }
 
+function renderSuggestSettings() {
+  draftSuggest = normalizeSuggest(draftSuggest) ?? defaultSuggest();
+  const providerIds = [...new Set(agentInfo.models.map(model => model.provider))];
+  setOptions(suggestProviderEl, providerIds.map(id => ({
+    value: id,
+    label: agentInfo.providers.find(provider => provider.id === id)?.name ?? id,
+  })), draftSuggest?.provider);
+  const models = agentInfo.models.filter(model => model.provider === fieldValue(suggestProviderEl));
+  setOptions(suggestModelEl, models.map(model => ({ value: model.model, label: model.name || model.model })), draftSuggest?.model);
+  const model = models.find(item => item.model === fieldValue(suggestModelEl));
+  draftSuggest = model ? { provider: model.provider, model: model.model } : null;
+  suggestHint.textContent = !agentInfo.models.length
+    ? 'Add an API key or configure Pi authentication to see models.'
+    : draftSuggest
+      ? `Continuations use ${model.name || model.model}; review, rewrites, chat, and /idea use the default model above.`
+      : '';
+}
+
 function renderCredentials() {
   setOptions(keyProviderEl, agentInfo.authProviders.map(provider => ({ value: provider.id, label: provider.name })), keyProviderEl.value || 'openai');
   apiKeyEl.placeholder = agentInfo.authProviders.find(provider => provider.id === keyProviderEl.value)?.label ?? 'API key';
@@ -519,17 +593,28 @@ async function refreshAgent() {
     agentSelection = normalizeSelection(agentInfo.defaultSelection);
     if (agentSelection) localStorage.setItem('wa-agent', JSON.stringify(agentSelection));
   }
+  // Unlike the default model, a stale suggestion pick is migrated, not kept:
+  // it names no voice the writer chose, only a cost optimization, and a dead
+  // default would silently bill keystrokes to the expensive model.
+  suggestSelection = normalizeSuggest(suggestSelection) ?? defaultSuggest();
+  if (suggestSelection) localStorage.setItem('wa-suggest', JSON.stringify(suggestSelection));
+  else localStorage.removeItem('wa-suggest');
   return agentInfo;
 }
 
 async function openSettings() {
   settingsError.textContent = '';
   try { await refreshAgent(); } catch (error) { settingsError.textContent = error.message; }
+  await refreshOAuth();
   draftSelection = currentAgent();
+  draftSuggest = suggestSelection;
   renderModelSettings();
+  renderSuggestSettings();
   renderCredentials();
+  renderSubscriptions();
   syncKeyAdd();
   if (!settingsDialog.open) settingsDialog.showModal();
+  else pollOAuth();
 }
 
 settingsOpen.addEventListener('click', openSettings);
@@ -560,9 +645,21 @@ modelEl.addEventListener('change', () => {
   renderModelSettings();
   saveAgentSelection();
 });
+suggestProviderEl.addEventListener('change', () => {
+  const first = agentInfo.models.find(model => model.provider === fieldValue(suggestProviderEl));
+  if (first) draftSuggest = { provider: first.provider, model: first.model };
+  renderSuggestSettings();
+  saveSuggestSelection();
+});
+suggestModelEl.addEventListener('change', () => {
+  draftSuggest = { provider: fieldValue(suggestProviderEl), model: fieldValue(suggestModelEl) };
+  renderSuggestSettings();
+  saveSuggestSelection();
+});
 
 // A popover left open behind a closed dialog comes back with it.
 settingsDialog.addEventListener('close', () => {
+  stopOAuthPoll();
   for (const popover of document.querySelectorAll('.combo')) {
     if (popover.matches(':popover-open')) popover.hidePopover();
   }
@@ -606,6 +703,7 @@ async function addProviderKey() {
     apiKeyEl.value = '';
     syncKeyAdd();
     renderModelSettings();
+    renderSuggestSettings();
     renderCredentials();
   } catch (error) { settingsError.textContent = error.message; }
   finally { syncKeyAdd(); }
@@ -617,9 +715,165 @@ async function removeProviderKey(provider) {
   try {
     agentInfo = await api('/api/agent/credentials', { method: 'DELETE', body: JSON.stringify({ provider }) });
     renderModelSettings();
+    renderSuggestSettings();
     renderCredentials();
+    await refreshOAuth();
   } catch (error) { settingsError.textContent = error.message; }
 }
+
+// ─── Subscription sign-in (OAuth) ──────────────────────────────────────────
+// Only allowlisted providers (see pi.js) — currently ChatGPT Plus/Pro via the
+// Codex OAuth flow. The server runs Pi's login in the background; here we
+// show the auth URL (or device code), offer the manual-paste fallback, and
+// poll until the flow settles.
+const oauthProvidersEl = document.getElementById('oauth-providers');
+const oauthFlowEl   = document.getElementById('oauth-flow');
+const oauthStatusEl = document.getElementById('oauth-status');
+const oauthUrlWrap  = document.getElementById('oauth-url-wrap');
+const oauthUrlEl    = document.getElementById('oauth-url');
+const oauthDeviceWrap = document.getElementById('oauth-device-wrap');
+const oauthDeviceLink = document.getElementById('oauth-device-link');
+const oauthDeviceCode = document.getElementById('oauth-device-code');
+const oauthPasteWrap = document.getElementById('oauth-paste-wrap');
+const oauthCodeEl   = document.getElementById('oauth-code');
+const oauthSendEl   = document.getElementById('oauth-send');
+const oauthCancelEl = document.getElementById('oauth-cancel');
+let oauthInfo = { supported: [], active: null };
+let oauthTimer = null;
+
+function stopOAuthPoll() {
+  if (oauthTimer) { clearTimeout(oauthTimer); oauthTimer = null; }
+}
+
+function oauthActivePending() {
+  const step = oauthInfo.active?.step;
+  return step === 'starting' || step === 'url' || step === 'device';
+}
+
+function renderSubscriptions() {
+  oauthProvidersEl.replaceChildren(...oauthInfo.supported.map(provider => {
+    const chip = document.createElement('div');
+    chip.className = 'key-chip';
+    const dot = document.createElement('i');
+    const name = document.createElement('span');
+    name.textContent = `${provider.label ?? provider.name} · ${provider.configured ? 'connected' : 'not connected'}`;
+    chip.append(dot, name);
+    if (provider.configured) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'Sign out';
+      remove.title = `Sign out of ${provider.label ?? provider.name}`;
+      remove.addEventListener('click', () => removeProviderKey(provider.id));
+      chip.append(remove);
+    } else {
+      const signin = document.createElement('button');
+      signin.type = 'button';
+      signin.textContent = 'Sign in';
+      signin.title = `Sign in with ${provider.label ?? provider.name}`;
+      signin.addEventListener('click', () => startOAuthFlow(provider.id, 'browser'));
+      chip.append(signin);
+      const device = document.createElement('button');
+      device.type = 'button';
+      device.textContent = 'Device code';
+      device.title = 'Sign in with a code on another device (no local browser callback)';
+      device.addEventListener('click', () => startOAuthFlow(provider.id, 'device_code'));
+      chip.append(device);
+    }
+    return chip;
+  }));
+  renderOAuthFlow();
+}
+
+function renderOAuthFlow() {
+  const active = oauthInfo.active;
+  const pending = oauthActivePending();
+  oauthFlowEl.hidden = !active || (!pending && active.step !== 'error');
+  if (oauthFlowEl.hidden) { stopOAuthPoll(); return; }
+  if (active.step === 'error') {
+    oauthStatusEl.textContent = `Sign-in failed: ${active.error ?? 'unknown error'}`;
+    oauthUrlWrap.hidden = true;
+    oauthDeviceWrap.hidden = true;
+    oauthPasteWrap.hidden = true;
+    stopOAuthPoll();
+    return;
+  }
+  oauthStatusEl.textContent = active.step === 'device'
+    ? 'Waiting for approval on the verification page…'
+    : 'Waiting for the browser sign-in to finish…';
+  if (active.url) {
+    oauthUrlWrap.hidden = false;
+    oauthUrlEl.href = active.url;
+    oauthUrlEl.textContent = 'sign-in link';
+  } else oauthUrlWrap.hidden = true;
+  if (active.step === 'device' && active.userCode) {
+    oauthDeviceWrap.hidden = false;
+    oauthDeviceLink.href = active.verificationUri || '#';
+    oauthDeviceCode.textContent = active.userCode;
+  } else oauthDeviceWrap.hidden = true;
+  // The localhost callback usually completes on its own; the paste box stays
+  // for the case it never fires (busy port, hardened browser).
+  oauthPasteWrap.hidden = false;
+}
+
+async function pollOAuth() {
+  stopOAuthPoll();
+  if (!settingsDialog.open || !oauthActivePending()) return;
+  try {
+    const status = await api('/api/agent/oauth/status');
+    oauthInfo = status;
+    renderSubscriptions();
+    if (oauthActivePending()) {
+      oauthTimer = setTimeout(pollOAuth, 2000);
+    } else if (oauthInfo.active?.step === 'done') {
+      await refreshAgent();
+      draftSelection = currentAgent();
+      renderModelSettings();
+      renderSuggestSettings();
+      renderCredentials();
+    }
+  } catch { oauthTimer = setTimeout(pollOAuth, 5000); }
+}
+
+async function startOAuthFlow(provider, method) {
+  settingsError.textContent = '';
+  try {
+    oauthInfo = await api('/api/agent/oauth/start', {
+      method: 'POST',
+      body: JSON.stringify({ provider, method }),
+    });
+    oauthCodeEl.value = '';
+    renderSubscriptions();
+    pollOAuth();
+  } catch (error) { settingsError.textContent = error.message; }
+}
+
+async function refreshOAuth() {
+  try {
+    oauthInfo = await api('/api/agent/oauth/status');
+    renderSubscriptions();
+  } catch { /* settings already show the last known state */ }
+}
+
+oauthSendEl.addEventListener('click', async () => {
+  if (!oauthCodeEl.value.trim()) return;
+  settingsError.textContent = '';
+  try {
+    oauthInfo = await api('/api/agent/oauth/code', {
+      method: 'POST',
+      body: JSON.stringify({ code: oauthCodeEl.value }),
+    });
+    oauthCodeEl.value = '';
+    renderSubscriptions();
+    pollOAuth();
+  } catch (error) { settingsError.textContent = error.message; }
+});
+oauthCancelEl.addEventListener('click', async () => {
+  try {
+    oauthInfo = await api('/api/agent/oauth/cancel', { method: 'POST' });
+    renderSubscriptions();
+    pollOAuth();
+  } catch (error) { settingsError.textContent = error.message; }
+});
 
 // A failure here is only reported when the writer asks for something:
 // `ensureAgent()` retries the call and names the missing setup then.
@@ -1384,8 +1638,9 @@ async function suggestFetch(manual = false) {
 
   const version = suggestVersion;
   if (manual && !await ensureAgent()) return;
-  if (version !== suggestVersion || (!manual && !view.hasFocus) || !currentAgent()) return;
-  const agent = currentAgent();
+  const suggestAgent = activeSuggestAgent() ?? currentAgent();
+  if (version !== suggestVersion || (!manual && !view.hasFocus) || !suggestAgent) return;
+  const agent = suggestAgent;
 
   const job = startJob({ background: !manual });
   suggestAbort = job;
@@ -1393,7 +1648,7 @@ async function suggestFetch(manual = false) {
     && !loadingDocument && !savePaused && !document.hidden && (manual || view.hasFocus) && !view.composing
     && !view.state.readOnly && (manual || autoSuggestOn)
     && view.state.doc === state.doc && view.state.selection.eq(state.selection)
-    && JSON.stringify(currentAgent()) === JSON.stringify(agent);
+    && JSON.stringify(activeSuggestAgent() ?? currentAgent()) === JSON.stringify(agent);
   if (manual) setReviewStatus('Suggesting…', undefined, 'suggest');
 
   try {
@@ -1498,7 +1753,7 @@ async function runIdeaExpansion(view, line) {
     if (!answer.trim()) throw new Error('The model returned no passage');
     bubble.remove();
     // Single option, same cards path — no Try again when there is nothing to repeat.
-    showVariants([answer], null, target, null);
+    showVariants([answer.trim()], null, target, null);
   } catch (error) {
     bubble.title = error.message;
     bubble.textContent = (answer ? answer + '\n\n' : '')
@@ -3476,15 +3731,20 @@ async function importFile(file) {
   }
   try {
     const text = await file.text();
-    replaceDraft(text, `Imported ${file.name}`); refreshFileList();
+    // Hard-wrapped imports open flowing, same as sidebar files — the Undo in
+    // the notice puts the exact bytes back.
+    const opened = unwrapProse(text);
+    replaceDraft(opened.text, opened.joined > 0 ? `Imported ${file.name} — ${opened.joined} wrapped lines joined` : `Imported ${file.name}`);
+    refreshFileList();
   } catch (error) { notify('Import failed: ' + error.message, { sticky: true }); }
 }
 // ─── File sidebar ────────────────────────────────────────────────────────────
 //
 //  The header toggle owns the sidebar; every file action lives inside it.
-//  Rows name the workspace Markdown and text files — opening one replaces
-//  the draft outright (the click is the intent; the previous text is kept
-//  in History), so the single-draft CAS never learns about a second writer.
+//  Rows name the workspace Markdown and text files — opening one switches the
+//  single active document (and its saves) onto that file, so what is on screen
+//  is always what is being saved. Each file keeps its own browser copy, chat
+//  and findings, which come back when it is opened again.
 const sidebar = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
 const sidebarToggleSide = document.getElementById('sidebar-toggle-side');
@@ -3578,7 +3838,7 @@ function renderFileList() {
     // window the overlay gets out of the way of the draft it just replaced.
     row.addEventListener('click', () => {
       if (sidebarIsOverlay()) setSidebar(false);
-      openWorkspaceFile(file.name);
+      switchDocument(file.name);
     });
     item.append(row);
     fileList.append(item);
@@ -3591,22 +3851,90 @@ async function refreshFileList() {
   } catch { sidebarFiles = []; }
   renderFileList();
 }
-async function openWorkspaceFile(name) {
-  let text;
-  try { ({ text } = await api(`/file?name=${encodeURIComponent(name)}`)); }
-  catch (error) { notify(`Could not open ${name}: ${error.message}`, { sticky: true }); return; }
-  // No confirm: the click is the intent, and loadFromDisk snapshots the
-  // current text into History before replacing it. Clicking the file that
-  // is already open does nothing at all.
-  if (name === documentName && text === workView.state.doc.toString()) { workView.focus(); return; }
-  loadFromDisk(text);
-  // The choice owns the highlight: documentName is otherwise set once at
-  // startup, leaving the mark stuck on the draft while another file's text
-  // is open. Render first from the cached list so the click answers
-  // instantly; the refresh below only corrects age and excerpt.
-  documentName = name;
-  renderFileList();
-  save(); refreshFileList();
+// Opening a file switches the single active document — and its saves — onto
+// it. The previous file is untouched: its disk copy keeps whatever was last
+// saved, and its browser copy, chat and findings wait under their own storage
+// key until it is opened again.
+async function switchDocument(name) {
+  if (loadingDocument || name === documentName) { workView.focus(); return; }
+  // Flush pending edits to the current file before the server retargets:
+  // after POST /draft/open every save lands on the new file.
+  try {
+    clearTimeout(diskTimer);
+    if (!savePaused && !diskHold) await flushSave();
+    saveChat(); saveFindings(); saveKeptStyle();
+    saveSnapshot('Before switching document');
+  } catch {}
+  let current;
+  try {
+    current = await api('/draft/open', { method: 'POST', body: JSON.stringify({ name }) });
+  } catch (error) { notify(`Could not open ${name}: ${error.message}`, { sticky: true }); return; }
+  loadingDocument = true;
+  for (const job of jobs) job.abort();
+  cancelSuggestion();
+  // Per-document UI bound to the old text goes; the old file's own state was
+  // stored under its key above and is restored when it is opened again.
+  detach();
+  reviewState = 'idle'; reviewNotice = ''; keptStyle = []; removeLocalFinding();
+  chatEditCards.clear();
+  scoreDetails.hidePopover();
+  clearNotice('undo');
+  clearNotice('disk');
+  discardFindingCards();
+  for (const stale of document.querySelectorAll('.chat-variants')) stale.remove();
+  clearPlainPreview();
+  reviewFindings = [];
+  focusedFindingId = null; jumpFrom = -1;
+  checkedSentences.clear();
+  chatHistory = []; chatStream.replaceChildren();
+  setChatOpen(false);   // the stream was just emptied — don't leave × over nothing
+  hideDriftBanner(); diskHold = false;
+  // Retarget storage and the disk baseline onto the new file first: every
+  // restore below reads under the new key.
+  documentKey = 'litura:' + current.id + ':';
+  documentName = current.path.split(/[\\/]/).pop();
+  // Captured before the baseline below is rewritten: it tells a reopen
+  // with unsaved work apart from a file that moved while we were away.
+  const driftBase = lastDiskBaseline();
+  noteDiskBaseline(current.text, current.revision);
+  const cached = docStorage.getItem('wa-working');
+  // Hard-wrapped prose opens flowing: a lone newline inside a paragraph is a
+  // Markdown soft break, so join wrapped lines back and keep real paragraph
+  // breaks and structure. A cached copy was already unwrapped when saved.
+  const opened = cached === null ? unwrapProse(current.text) : { text: cached, joined: 0 };
+  workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: opened.text } });
+  workView.dispatch({ effects: setReviewFx.of([]) });
+  markVariantTarget(null);
+  loadingDocument = false;
+  // The text that was already here is not something the writer just
+  // finished. Opening spends no model call, same as at startup: auditing the
+  // whole document is what `Check for slop` is for.
+  for (const paragraph of reviewParagraphs(workView.state.doc.toString())) checkedSentences.add(paragraph.key);
+  syncReviewLabel();
+  try {
+    const kept = JSON.parse(docStorage.getItem('wa-kept-wording') || 'null');
+    if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
+  } catch {}
+  workView.dispatch({ effects: refreshStyleFx.of(null) });
+  restoreFindings(); restoreChat(); syncStyleScore(); renderFileList();
+  // A reopen with unsaved work is not a conflict when the disk stood
+  // still — only a disk that moved while we were away earns the banner.
+  if (cached !== null) {
+    const verdict = resolveDrift(workView.state.doc.toString(), current.text, driftBase?.text);
+    if (verdict === 'fast-forward') adoptDiskText(current);
+    else if (verdict === 'diverged') showDriftBanner(current);
+  }
+  else clearNotice('disk');
+  refreshFileList();
+  if (opened.joined > 0) {
+    notifyUndo(`Opened ${documentName} — ${opened.joined} wrapped ${opened.joined === 1 ? 'line' : 'lines'} joined into paragraphs. Saves go to this file.`, () => {
+      workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: current.text } });
+      save();
+    });
+  } else {
+    notify(`Opened ${documentName}. Saves go to this file.`);
+  }
+  workView.focus();
 }
 const toggleSidebar = () => { setSidebar(sidebar.classList.contains('is-closed')); workView.focus(); };
 sidebarToggle.addEventListener('click', toggleSidebar);

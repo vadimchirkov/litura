@@ -43,7 +43,7 @@ The current product has one working-document pane and a file sidebar. There is n
 
 One row, and nothing in it spends a model call. Everything about the file lives in the sidebar behind the sidebar toggle, and the local score sits at the far end. The header is the frame the draft is read in — it carries no file name and no status line of its own.
 
-- Sidebar toggle opening the file sidebar: the list of Markdown and text files next to the draft, a filter, and `New`, `Open a file…`, `Save as new…`, `History`. Opening a listed file replaces the workspace draft at once — the click is the intent, and the previous text is kept in History.
+- Sidebar toggle opening the file sidebar: the list of Markdown and text files next to the draft, a filter, and `New`, `Open a file…`, `Save as new…`, `History`. Opening a listed file switches the single active document onto it — the click is the intent, and saves go to the open file from then on. Each file keeps its own browser copy, chat and findings, which return when it is opened again.
 - Save trouble — a save error, or disk writes waiting on an unresolved divergence — is named where the writer is already reading. Routine saves are silent.
 - Local style signals, labelled `Style` with a count of marked passages, when the draft is predominantly Latin script. Hidden otherwise.
 - Settings button.
@@ -223,6 +223,18 @@ The settings dialog:
 - offers provider and model as searchable comboboxes: a trigger naming the current choice, and a popover holding a search box and the matching rows, each naming one model. Typing still matches a model's id as well as its name — the writer who knows the id finds the row, and the row still reads as a name. Six hundred models do not fit a `select`, and a native `datalist` cannot stand in — its popup never reaches the top layer above a modal dialog, and a field already holding an answer filters the writer's typing against it. The popover API still supplies the top layer, light dismiss and `Escape`; `↑` `↓` walk the list and `Enter` takes the highlighted row;
 - lists authenticated providers and their available models;
 - exposes only thinking levels supported by the selected model;
+- offers a separate suggestion model as provider and model comboboxes, with no
+  reasoning control: continuations always spend the least reasoning the model
+  allows. It defaults to the cheapest authenticated model that both ranks
+  well and switches reasoning off (currently GPT-6 Luna first), falls back to
+  the default model when none of those is authenticated, and re-resolves when
+  the catalog changes. Review, rewrite, chat, and /idea always use the default
+  model above, never the suggestion one;
+- offers ChatGPT Plus/Pro sign-in (Codex OAuth) next to API keys, with the
+  quota warning inline: subscriptions count messages, and the automatic
+  checks send hundreds of small requests a day. Claude subscriptions are
+  deliberately not offered — Anthropic restricts them to Claude Code and
+  claude.ai;
 - saves the active provider/model/thinking selection to local storage;
 - adds and removes Pi API-key credentials;
 - does not offer removal for credentials supplied by environment variables;
@@ -240,8 +252,9 @@ Document-specific browser keys use the prefix `litura:<id>:`, where `id` is the 
 | State | Location | Lifetime |
 |---|---|---|
 | Working document | `wa-working` and `wa-working:<tabId>` in local storage; tab ID in session storage | Until browser storage is cleared |
-| Working document mirror | `DRAFT_FILE` (default `<cwd>/draft.md`) | Until the file is deleted |
+| Working document mirror | the active file (starts as `DRAFT_FILE`, follows the sidebar) | Until the file is deleted |
 | Agent selection | `localStorage["wa-agent"]` | Until browser storage is cleared |
+| Suggestion model | `localStorage["wa-suggest"]`, auto-defaulted to the cheapest capable model | Until browser storage is cleared |
 | Chat history | `wa-chat`, last 20 turns | Until document replacement or browser storage is cleared |
 | Findings | `wa-findings`, with the reviewed document text | Replaced by a successful full review; cleared on document replacement |
 | Dismissed findings | `dismissed`, last 100, tied to exact document text | Until document replacement or browser storage is cleared |
@@ -264,7 +277,7 @@ Save errors remain visible and pause autosave until the writer retries. A failed
 
 Findings are restored only when their stored document text exactly matches the loaded draft, then their quotes are re-anchored. Chat restores messages, not finding cards or rewrite previews. Replacing the document clears findings, dismissed findings and chat, and keeps a browser checkpoint of the previous text. Keeping an AI replacement also creates a checkpoint. Rewrite previews alone change neither stored copy.
 
-`Cmd/Ctrl+S` requests an immediate disk save, respecting any paused conflict or error. `Export a copy` downloads the current text using the workspace draft's filename. `Open a file…` and drag-and-drop accept `.md`, `.markdown` and `.txt` files up to 1 MiB and import without asking. Import replaces the current workspace draft's contents; it does not switch the server to the imported file's path. History restores a previous version at once while keeping a checkpoint of the current text. `New`, import and restore never ask first: the replaced text goes to History, and the notice offers `Undo` for a few seconds.
+`Cmd/Ctrl+S` requests an immediate disk save, respecting any paused conflict or error. `Export a copy` downloads the current text using the workspace draft's filename. `Open a file…` and drag-and-drop accept `.md`, `.markdown` and `.txt` files up to 1 MiB and replace the active document's contents without switching files. Opening a sidebar file switches the active document instead and opens hard-wrapped prose flowing: lone newlines inside a paragraph are Markdown soft breaks, so wrapped lines are joined back into paragraphs while blank-line breaks, lists, headings, quotes, fences and tables keep theirs. `New`, import and restore never ask first: the replaced text goes to History, and the notice offers `Undo` for a few seconds.
 
 Everything the app reports outside the conversation — save and load trouble, model errors, confirmations with `Undo` — appears in one notice at the bottom-left, one at a time. Passing notices fade after six seconds; problems stay until their action or `×`. A chat answer never shows the raw edit list: a response that drops the `<litura-edits>` tags still yields edit cards.
 
@@ -346,6 +359,7 @@ All bodies and non-streaming responses are JSON unless noted.
 | `GET` | `/style.css`, `/app.js`, `/fonts/*` | Static assets |
 | `GET` | `/draft` | `{ text, path, id, exists, revision }`; a missing file has empty text and revision `missing` |
 | `PUT` | `/draft` | Save `{ text, revision }`; returns `{ saved: true, text, path, id, exists, revision }`, or `409` with `{ error, current }` when the revision differs |
+| `POST` | `/draft/open` | Switch the active document to workspace file `{ name }` (basename, Markdown or text); further `/draft` reads and writes target it. Returns the same shape as `GET /draft` |
 | `GET` | `/draft/history` | `{ snapshots }`, latest 20 disk backups with `text`, `at` and `revision` |
 | `GET` | `/files` | `{ files }`: Markdown and text files next to the draft, each with `name`, `size`, `mtime` and a markup-stripped `excerpt` (first meaningful prose, ~160 chars) for the card preview, sorted by name |
 | `GET` | `/file?name=` | `{ name, text }` for one workspace file by basename; `400` for anything that is not a plain Markdown or text name, `404` when it is gone, `413` past 1 MB |
@@ -396,6 +410,20 @@ data: [DONE]
 ```
 
 An SSE error is emitted as `{"error":"..."}` when headers have already been sent.
+
+### MCP server
+
+`mcp-server.mjs` exposes the same operations as seven stdio tools for agent
+hosts (Codex CLI, Claude Code): `draft_read`, `draft_write`, `review`,
+`rewrite`, `suggest`, `chat`, `idea`. Prompts are shared with the HTTP routes
+through `tasks.js` — `index.js` cannot be imported (it listens on import), so
+anything both entry points need lives there. Document arguments default to the
+live draft; only `draft_write` modifies anything, under the same
+revision guard as `PUT /draft`. Per-call `agent` overrides take
+`{ provider, model, thinkingLevel }`; omitted, the server resolves the model
+exactly like the HTTP routes. `npm run test:mcp` drives the handshake, tool
+list, draft read/write, and the revision guard over raw JSON-RPC without
+model calls.
 
 ## 7. Prompt and style handling
 
@@ -477,7 +505,7 @@ The model checks are regression tests, not an independent accuracy benchmark. Se
 Litura currently supports one browser-local plain-text document. It does not include:
 
 - a separate reference/context editor;
-- a document picker or multiple documents — the mirror file is one fixed path, and import and export are a drop and a download;
+- multiple documents side by side — the sidebar switches one active document within the folder, and import and export are a drop and a download;
 - document history or versioning beyond CodeMirror's current-session undo stack;
 - accounts, collaboration, or cloud sync;
 - a language-specific local score outside English/Latin-script heuristics.

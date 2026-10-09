@@ -109,6 +109,128 @@ export async function removeProviderApiKey(providerId) {
   await rt.logout(providerId);
 }
 
+// ─── Subscription sign-in (OAuth) ──────────────────────────────────────────
+// Allowlist, not every OAuth provider Pi knows. Anthropic is deliberately
+// absent: since February 2026 Anthropic restricts Pro/Max OAuth tokens to
+// Claude Code and claude.ai, and routing them through Litura would violate
+// their terms. OpenAI tolerates Codex OAuth in third-party tools, so only
+// the ChatGPT Plus/Pro subscription is offered here.
+//
+// The flow is driven by Pi's CLI-oriented login: a `select` prompt picks the
+// method, a notify carries the auth URL (or device code), and a `manual_code`
+// prompt stays pending as the paste fallback when the localhost callback
+// (fixed port 1455) never fires. The browser UI mirrors each step over three
+// small endpoints; the login itself runs in the background.
+const OAUTH_PROVIDERS = ['openai-codex'];
+const OAUTH_METHODS = ['browser', 'device_code'];
+
+let oauthSession = null;
+
+const oauthSnapshot = session => !session ? null : {
+  provider: session.provider,
+  method: session.method,
+  step: session.step,
+  ...(session.url ? { url: session.url } : {}),
+  ...(session.userCode ? { userCode: session.userCode } : {}),
+  ...(session.verificationUri ? { verificationUri: session.verificationUri } : {}),
+  ...(session.error ? { error: session.error } : {}),
+};
+
+const oauthError = (status, message) => Object.assign(new Error(message), { status });
+
+export async function getOAuthStatus() {
+  const rt = await runtime();
+  const supported = [];
+  for (const id of OAUTH_PROVIDERS) {
+    const provider = rt.getProvider(id);
+    if (!provider) continue;
+    let configured = false;
+    try { configured = !!rt.getProviderAuthStatus(id)?.configured; } catch {}
+    supported.push({
+      id,
+      name: provider.name ?? id,
+      ...(provider.auth?.oauth && typeof provider.auth.oauth.name === 'string' ? { label: provider.auth.oauth.name } : {}),
+      isSubscription: true,
+      configured,
+    });
+  }
+  return { supported, active: oauthSnapshot(oauthSession) };
+}
+
+export async function startOAuth(providerId, method = 'browser') {
+  if (!OAUTH_PROVIDERS.includes(providerId)) {
+    throw oauthError(400, providerId === 'anthropic'
+      ? 'Claude Pro/Max sign-in is not offered: Anthropic restricts subscription tokens to Claude Code and claude.ai.'
+      : `Sign-in is not offered for provider ${providerId}`);
+  }
+  if (!OAUTH_METHODS.includes(method)) throw oauthError(400, `Unknown sign-in method ${method}`);
+  if (oauthSession && oauthSession.step !== 'done' && oauthSession.step !== 'error') {
+    throw oauthError(409, 'A sign-in is already in progress');
+  }
+  const controller = new AbortController();
+  const session = oauthSession = { provider: providerId, method, step: 'starting', controller, resolveManual: null };
+  const interaction = {
+    signal: controller.signal,
+    prompt: async request => {
+      if (request?.type === 'select') return method;
+      if (request?.type === 'manual_code') {
+        return new Promise((resolve, reject) => { session.resolveManual = { resolve, reject }; });
+      }
+      throw new Error(`Unsupported prompt type ${request?.type}`);
+    },
+    notify: async note => {
+      if (oauthSession !== session) return;
+      if (note?.type === 'auth_url' && note.url) {
+        session.step = 'url';
+        session.url = String(note.url);
+      } else if (note?.type === 'device_code') {
+        session.step = 'device';
+        session.userCode = String(note.userCode ?? '');
+        session.verificationUri = String(note.verificationUri ?? '');
+      }
+    },
+  };
+  (async () => {
+    try {
+      const rt = await runtime();
+      await rt.login(providerId, 'oauth', interaction);
+      if (oauthSession === session) session.step = 'done';
+    } catch (error) {
+      if (oauthSession !== session) return;
+      session.step = 'error';
+      session.error = controller.signal.aborted ? 'Sign-in cancelled' : (error?.message || String(error));
+    } finally {
+      session.resolveManual = null;
+    }
+  })();
+  // The auth URL usually arrives within a second; wait for it briefly so the
+  // caller can open it at once, and let status polling cover the slow path.
+  const deadline = Date.now() + 10_000;
+  while (session.step === 'starting' && Date.now() < deadline && !controller.signal.aborted) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return { supported: (await getOAuthStatus()).supported, active: oauthSnapshot(session) };
+}
+
+export async function submitOAuthCode(code) {
+  const text = String(code ?? '').trim();
+  if (!text || text.length > 10_000) throw oauthError(400, 'Pasted code is empty or too long');
+  const session = oauthSession;
+  if (!session || !session.resolveManual) throw oauthError(409, 'No sign-in is waiting for a code');
+  session.resolveManual.resolve(text);
+  session.resolveManual = null;
+  return { active: oauthSnapshot(session) };
+}
+
+export async function cancelOAuth() {
+  const session = oauthSession;
+  if (!session || session.step === 'done' || session.step === 'error') return { active: oauthSnapshot(session) };
+  session.controller.abort();
+  session.resolveManual?.reject(new Error('Sign-in cancelled'));
+  session.resolveManual = null;
+  return { active: oauthSnapshot(oauthSession) };
+}
+
 async function resolveModel(selection) {
   const rt = await runtime();
   if (!selection && process.env.PI_PROVIDER && process.env.PI_MODEL) {

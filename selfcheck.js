@@ -6,7 +6,7 @@ import { clampThinkingLevel } from '@earendil-works/pi-ai';
 import { getAgentStatus } from './pi.js';
 import { renderMarkdown } from './markdown.js';
 import { spellingMarkers, noteSpellingAdded } from './spellcheck.js';
-import { clampBubble, resolveDrift, wordDiff } from './editing.js';
+import { clampBubble, resolveDrift, unwrapProse, wordDiff } from './editing.js';
 import { chatVisibleText, parseChatResponse } from './chat-edits.js';
 import {
   completedSentences, findingContext, isLatinScript, locateFindings, markSelection, mergeReviewFindings,
@@ -108,6 +108,27 @@ import {
   assert.throws(() => parseVariants('["a","b"]'), /Expected exactly 3/);
   for (const raw of ['[null,"b","c"]', '[{},"b","c"]', '["","b","c"]', '["a","b","c","d"]']) assert.throws(() => parseVariants(raw));
   assert.throws(() => parseVariants('no array here'), /No JSON array/);
+  // Edge whitespace from the model never reaches the draft as stray breaks.
+  assert.deepEqual(parseVariants('[" a\\n","\\n\\nb ","c\\n\\n"]'), ['a', 'b', 'c']);
+}
+
+// ── Prose unwrap ──
+// Hard-wrapped paragraphs open as flowing text; structure keeps its breaks.
+{
+  const wrapped = 'Write so the text reads like a person wrote it, not a chatbot. Never change what\nthe text claims. Never add a fact, name, number, date, quote, or citation that\nis not already in the draft.\n\nNext paragraph here.';
+  const opened = unwrapProse(wrapped);
+  assert.equal(opened.joined, 2);
+  assert.equal(opened.text,
+    'Write so the text reads like a person wrote it, not a chatbot. Never change what the text claims. Never add a fact, name, number, date, quote, or citation that is not already in the draft.\n\nNext paragraph here.');
+  const structured = '# Title\n\n- one\n- two\n\n```\ncode\nline\n```\n\n> quote\ncontinued\n\n1. first\nsecond';
+  assert.equal(unwrapProse(structured).joined, 0);
+  assert.equal(unwrapProse(structured).text, structured);
+  // An explicit hard break (two trailing spaces) is the writer's, not a wrap.
+  assert.equal(unwrapProse('line one  \nline two').joined, 0);
+  // Already-flowed text comes back byte-identical, so opening never dirties it.
+  assert.equal(unwrapProse('One line.\n\nAnother.').joined, 0);
+  assert.equal(unwrapProse('One line.\n\nAnother.').text, 'One line.\n\nAnother.');
+  assert.deepEqual(unwrapProse(''), { text: '', joined: 0 });
 }
 
 // ── Markdown ──

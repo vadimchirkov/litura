@@ -262,7 +262,10 @@ export function parseVariants(raw) {
   if (!match) throw new Error('No JSON array in response');
   const variants = JSON.parse(match[0]);
   if (!Array.isArray(variants) || variants.length !== 3 || variants.some(text => typeof text !== 'string' || !text.trim())) throw new Error('Expected exactly 3 non-empty strings');
-  return variants;
+  // A variant replaces the marked span in place: leading/trailing blank lines
+  // from the model would land in the draft as stray paragraph breaks, and show
+  // as empty space at the card's edges. Edge whitespace is never the wording.
+  return variants.map(text => text.trim());
 }
 
 // Models restate the last words before continuing ("…the queue" → "queue began

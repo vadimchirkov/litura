@@ -45,13 +45,15 @@ const source = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8'
 function harness(text = 'A sufficiently long draft') {
   const timers = new Map(), requests = [], statuses = [], jobs = new Set();
   let timerId = 0, saves = 0;
+  const agentStub = () => ({ provider: 'fixture', model: 'test' });
   const view = { hasFocus: true, composing: false };
   const reviewStatus = { dataset: {}, textContent: '' };
   const context = vm.createContext({
     EditorState, StateField, StateEffect, EditorView, Decoration, WidgetType,
     workView: view, document: { hidden: false }, reviewStatus,
     autoSuggestOn: true, loadingDocument: false, savePaused: false, queueMicrotask,
-    currentAgent: () => ({ provider: 'fixture', model: 'test' }), ensureAgent: async () => true,
+    currentAgent: agentStub, ensureAgent: async () => true,
+    activeSuggestAgent: agentStub,
     setTimeout: fn => { timers.set(++timerId, fn); return timerId; },
     clearTimeout: id => timers.delete(id),
     startJob: () => { const job = new AbortController(); jobs.add(job); return job; },
@@ -111,7 +113,7 @@ for (const change of ['selection', 'away-and-back', 'blur', 'edit', 'off', 'hidd
   if (change === 'hidden') h.context.document.hidden = true;
   if (change === 'cancel') h.context.cancelSuggestion();
   if (change === 'readonly') h.view.dispatch({ effects: StateEffect.appendConfig.of(EditorState.readOnly.of(true)) });
-  if (change === 'model') h.context.currentAgent = () => ({ provider: 'other', model: 'other' });
+  if (change === 'model') h.context.currentAgent = h.context.activeSuggestAgent = () => ({ provider: 'other', model: 'other' });
   h.answer(0); await pending;
   assert.equal(h.ghost(), null, change);
   assert.equal(h.jobs.size, 0);

@@ -1,7 +1,6 @@
 # Changelog
 
-Litura follows [semantic versioning](https://semver.org). Until 1.0 the minor
-number carries breaking changes.
+Litura follows [semantic versioning](https://semver.org). Until 1.0 the minor number carries breaking changes.
 
 ## Unreleased
 

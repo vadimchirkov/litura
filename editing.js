@@ -89,3 +89,49 @@ export function clampBubble(x, y, size, area) {
   if (top + size.h > area.bottom) top = Math.max(area.top, area.bottom - size.h);
   return { left, top };
 }
+
+// A source line that is plain prose, not Markdown structure. Anything
+// structural — headings, lists, quotes, fences, tables, rules, HTML, indented
+// code, or an explicit hard break (two trailing spaces, backslash) — keeps its
+// line breaks; only wrapped prose paragraphs are joined.
+function isProseLine(line) {
+  if (/ {2}$/.test(line) || /\\$/.test(line)) return false;
+  if (/^ {4}|\t/.test(line)) return false;
+  if (/^\s*(#{1,6}\s|>\s?|[-*+]\s+|\d+[.)]\s+|\||---|\*\*\*|___|<[A-Za-z/!])/.test(line)) return false;
+  return true;
+}
+
+// Hard-wrapped prose (one visual line per source line, e.g. 80-column wraps)
+// reads in the editor exactly as it sits in the file: every wrap is a visible
+// break mid-sentence. Markdown treats a lone newline as a space, so join the
+// lines of plain multi-line paragraphs back into flowing text. Blank-line
+// paragraph breaks and every structural block stay untouched.
+// Returns { text, joined } — joined counts the line breaks that were removed.
+// When nothing joins, text is the input unchanged (line endings included), so
+// already-flowed files are never marked dirty by opening them.
+export function unwrapProse(source) {
+  const input = String(source ?? '');
+  const lines = input.split('\n');
+  const out = [];
+  let joined = 0;
+  let para = [];
+  let inFence = false;
+  const flush = () => {
+    if (!para.length) return;
+    if (para.length > 1 && para.every(isProseLine)) {
+      out.push(para.map(line => line.replace(/\r$/, '').trimEnd()).join(' '));
+      joined += para.length - 1;
+    } else {
+      out.push(...para);
+    }
+    para = [];
+  };
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) { flush(); inFence = !inFence; out.push(line); continue; }
+    if (inFence) { out.push(line); continue; }
+    if (!line.trim()) { flush(); out.push(line); continue; }
+    para.push(line);
+  }
+  flush();
+  return { text: joined ? out.join('\n') : input, joined };
+}

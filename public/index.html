@@ -230,6 +230,41 @@
       </section>
 
       <section>
+        <h3>Suggestion model</h3>
+        <!-- Continuations are the most frequent and the cheapest task: a few
+             words, no deliberation. They use this model; everything else uses
+             the default above. No reasoning control: the server always spends
+             the least reasoning the model allows. -->
+        <div class="settings-grid">
+          <div class="settings-field">
+            <span class="settings-label" id="suggest-provider-label">Provider</span>
+            <button type="button" class="combo-trigger" id="suggest-provider" popovertarget="suggest-provider-combo" aria-haspopup="listbox" aria-labelledby="suggest-provider-label suggest-provider">
+              <span class="combo-value"></span>
+            </button>
+          </div>
+          <div class="settings-field">
+            <span class="settings-label" id="suggest-model-label">Model</span>
+            <button type="button" class="combo-trigger" id="suggest-model" popovertarget="suggest-model-combo" aria-haspopup="listbox" aria-labelledby="suggest-model-label suggest-model">
+              <span class="combo-value"></span>
+            </button>
+          </div>
+        </div>
+        <div class="combo" id="suggest-provider-combo" popover>
+          <input type="search" class="combo-search" aria-label="Search providers" placeholder="Search providers" autocomplete="off" spellcheck="false">
+          <p class="combo-count" aria-live="polite"></p>
+          <div class="combo-list" role="listbox" aria-label="Providers"></div>
+          <p class="combo-empty" hidden>Nothing matches</p>
+        </div>
+        <div class="combo" id="suggest-model-combo" popover>
+          <input type="search" class="combo-search" aria-label="Search models" placeholder="Search models" autocomplete="off" spellcheck="false">
+          <p class="combo-count" aria-live="polite"></p>
+          <div class="combo-list" role="listbox" aria-label="Models"></div>
+          <p class="combo-empty" hidden>Nothing matches</p>
+        </div>
+        <p class="settings-hint" id="suggest-hint"></p>
+      </section>
+
+      <section>
         <h3>API keys</h3>
         <div class="key-entry">
           <select id="key-provider" aria-label="API key provider"></select>
@@ -241,6 +276,24 @@
         </div>
         <div class="configured-keys" id="configured-keys"></div>
         <p class="settings-error" id="settings-error" role="alert"></p>
+      </section>
+
+      <section>
+        <h3>Subscriptions</h3>
+        <p class="settings-hint">Sign in with a ChatGPT Plus or Pro subscription instead of an API key. Counts messages, not tokens: automatic paragraph checks and suggestions send hundreds of small requests a day and can exhaust a weekly allowance — API keys stay cheaper and quota-free for heavy writing. Claude subscriptions are not offered: Anthropic restricts them to Claude Code and claude.ai.</p>
+        <div class="configured-keys" id="oauth-providers"></div>
+        <div id="oauth-flow" hidden>
+          <p class="settings-hint" id="oauth-status" role="status"></p>
+          <p class="settings-hint" id="oauth-url-wrap" hidden>Open this link to finish signing in: <a id="oauth-url" href="#" target="_blank" rel="noopener">sign-in link</a></p>
+          <p class="settings-hint" id="oauth-device-wrap" hidden>At <a id="oauth-device-link" href="#" target="_blank" rel="noopener">the verification page</a> enter code <strong id="oauth-device-code"></strong></p>
+          <div class="key-entry" id="oauth-paste-wrap" hidden>
+            <div class="key-input-wrap">
+              <input id="oauth-code" type="text" placeholder="Paste the redirect URL or code" autocomplete="off" spellcheck="false" aria-label="Pasted authorization redirect or code">
+            </div>
+            <button type="button" id="oauth-send">Send</button>
+            <button type="button" id="oauth-cancel">Cancel</button>
+          </div>
+        </div>
       </section>
 
       <section>

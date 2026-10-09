@@ -21,13 +21,17 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "litura": "index.js"
+    "litura": "index.js",
+    "litura-mcp": "mcp-server.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "files": [
     "index.js",
+    "mcp-server.mjs",
+    "tasks.js",
+    "chat-edits.js",
     "pi.js",
     "markdown.js",
     "review.js",
@@ -37,6 +41,7 @@
     "editing.js",
     "suggestions.js",
     "public",
+    "skills/litura/SKILL.md",
     "style.md",
     "SPEC.md",
     "CHANGELOG.md"
@@ -51,7 +56,9 @@
     "desktop:build": "tauri build",
     "tauri": "tauri",
     "smoke:desktop": "node scripts/smoke-desktop.mjs",
-    "check": "node --check index.js && node --check pi.js && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js && node tests/suggestions.mjs && node safetycheck.js",
+    "check": "node --check index.js && node --check pi.js && node --check tasks.js && node --check mcp-server.mjs && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js && node tests/suggestions.mjs && node tests/mcp.mjs && node tests/oauth.mjs && node safetycheck.js",
+    "test:mcp": "node tests/mcp.mjs",
+    "mcp": "node mcp-server.mjs",
     "test:browser": "node tests/browser-fixture.mjs",
     "check:suggestions": "node tests/suggestions.mjs",
     "eval:suggestions": "node scripts/evaluate-suggestions.mjs",
@@ -60,7 +67,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.87.1",
-    "@earendil-works/pi-coding-agent": "^0.87.1"
+    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.5",

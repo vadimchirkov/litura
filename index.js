@@ -13,7 +13,8 @@ import fs    from 'fs';
 import path  from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { completeText, getAgentStatus, removeProviderApiKey, saveProviderApiKey, streamText } from './pi.js';
+import { cancelOAuth, completeText, getAgentStatus, getOAuthStatus, removeProviderApiKey, saveProviderApiKey, startOAuth, streamText, submitOAuthCode } from './pi.js';
+import { buildSystemPrompt, completeVariants, readStyle, NO_SLOP, STYLE_FILE } from './tasks.js';
 import {
   markSelection, parseVariants, selectionSlot, variantLimit,
   SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
@@ -103,19 +104,19 @@ const PUBLIC = path.join(ROOT, 'public');
 // bundled style.md is the fallback when the folder has none of its own.
 const CWD        = process.cwd();
 const DRAFT_FILE = process.env.DRAFT_FILE || path.join(CWD, 'draft.md');
-const draftStore = documentStore(DRAFT_FILE);
-const STYLE_FILE = process.env.STYLE_FILE
-  || [path.join(CWD, 'style.md'), path.join(ROOT, 'style.md')].find(p => fs.existsSync(p))
-  || path.join(CWD, 'style.md');
+// One active document at a time. It starts as the draft and follows the file
+// the writer opens in the sidebar — saves always go to the open file, never
+// to a copy left behind in draft.md.
+let draftStore = documentStore(DRAFT_FILE);
 
 // ─── Workspace files ───────────────────────────────────────────────────────
 // The sidebar lists the Markdown and text files sitting next to the draft,
-// so the writer can pull one into the workspace without leaving the page.
-// The anchor is the draft's own folder, not the process working directory:
-// DRAFT_FILE may point elsewhere, and the listing must follow the draft.
-// Listing and reading only: writing stays with the draft CAS. Names are
-// basenames with an approved extension, resolved inside that folder —
-// anything else is a 400, never a filesystem walk.
+// so the writer can switch between them without leaving the page.
+// The anchor is the initial draft's own folder, not the process working
+// directory: DRAFT_FILE may point elsewhere, and the listing must follow the
+// draft. Names are basenames with an approved extension, resolved inside that
+// folder — anything else is a 400, never a filesystem walk. Opening a file
+// retargets the single active document (and its saves) onto it.
 const WORKSPACE_EXTENSIONS = new Set(['.md', '.markdown', '.txt']);
 const FILES_DIR = path.dirname(path.resolve(DRAFT_FILE));
 function workspaceFile(name) {
@@ -163,71 +164,8 @@ function cardExcerpt(text) {
 }
 
 // ─── Style guide ───────────────────────────────────────────────────────────
-let styleWarnedOnce = false;
-
-function readStyle() {
-  try {
-    return fs.readFileSync(STYLE_FILE, 'utf8').trim();
-  } catch {
-    if (!styleWarnedOnce) {
-      console.warn(`[style] No style.md found at ${STYLE_FILE} — proceeding without style guide`);
-      styleWarnedOnce = true;
-    }
-    return null;
-  }
-}
-
-// The same patterns /review flags. Every route that generates prose gets these,
-// so the app never writes what it is about to underline.
-const NO_SLOP =
-  'Never produce throat-clearing, vague attribution ("experts agree", "studies show"), empty puffery, ' +
-  'faux insight, generic filler, "not just X, but Y" contrasts, robotic parallel rhythm, ' +
-  'dramatic one-word fragments, stacked hedging, or decorative emphasis. Prefer concrete, specific wording over general claims. ' +
-  'Do not give tools or abstractions human understanding or intent. Never invent evidence, sources, numbers or quotations. Preserve factual uncertainty. ';
-
-// A variant several times the length of the selection is the whole-document
-// rewrite failure, not a stylistic choice. Name it once and take the retry.
-// A malformed answer is retried the same way review retries: an occasional bad
-// response should cost a second call, not show the writer a parser error.
-const REWRITE_ATTEMPTS = 3;
-
-async function completeVariants({ system, user, body }) {
-  const selected = String(body.selected ?? '');
-  const limit = variantLimit(selected);
-  let prompt = user;
-  for (let attempt = 1; ; attempt++) {
-    const raw = await completeText({
-      systemPrompt: system,
-      userPrompt: prompt,
-      selection: body.agent,
-      // Shared with reasoning tokens: at 1500 a thinking model spends the whole
-      // budget deliberating and returns an empty string. Three short strings
-      // cost nothing, so give it the same room /review has.
-      maxTokens: 4000,
-      signal: body.signal,
-    });
-    let variants;
-    try {
-      variants = parseVariants(raw);
-    } catch (error) {
-      if (attempt >= REWRITE_ATTEMPTS) throw error;
-      console.warn(`[/rewrite] ${error.message} — retrying (${attempt}/${REWRITE_ATTEMPTS}); model said: ${JSON.stringify(raw.slice(0, 200))}`);
-      continue;
-    }
-    if (!variants.some(variant => variant.length > limit)) return variants;
-    if (attempt >= REWRITE_ATTEMPTS) throw new Error('Rewrites exceeded the selected scope. Try a more specific instruction.');
-    console.warn('[/rewrite] out-of-scope variants — retrying with the selection restated');
-    prompt = `${user}\n\n---\n\nYour previous answer rewrote text outside the selection. ` +
-      `Replace only ${SELECT_OPEN}${selected}${SELECT_CLOSE}, keep every other word of the sentence untouched, ` +
-      `and stay under ${limit} characters per variant.`;
-  }
-}
-
-function buildSystemPrompt(task) {
-  const style = readStyle();
-  const stylePart = style ? `Follow this writing style guide:\n\n${style}\n\n---\n\n` : '';
-  return stylePart + task;
-}
+// readStyle, NO_SLOP, completeVariants and buildSystemPrompt live in tasks.js,
+// shared with the MCP server (mcp-server.mjs).
 
 // ─── Static file serving ───────────────────────────────────────────────────
 const MIME = {
@@ -278,7 +216,7 @@ function readBody(req) {
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected a JSON object');
-        for (const key of ['text', 'revision', 'document', 'selected', 'target', 'context', 'idea', 'instruction', 'selection', 'provider', 'apiKey']) {
+        for (const key of ['text', 'revision', 'document', 'selected', 'target', 'context', 'idea', 'instruction', 'selection', 'provider', 'apiKey', 'name', 'method', 'code']) {
           if (body[key] !== undefined && typeof body[key] !== 'string') throw new Error(`${key} must be a string`);
         }
         if (body.document && Buffer.byteLength(body.document) > MAX_DOCUMENT_BYTES) throw new Error('Document exceeds 1 MB');
@@ -360,6 +298,39 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // Subscription sign-in (OAuth) mirrors Pi's CLI login over HTTP: start
+  // begins it in the background and usually returns the auth URL at once;
+  // status is polled; code feeds the manual-paste fallback; cancel aborts.
+  // Only allowlisted providers are offered — see pi.js.
+  if (req.method === 'GET' && url.pathname === '/api/agent/oauth/status') {
+    try { sendJson(res, 200, await getOAuthStatus()); }
+    catch (error) { sendJson(res, 500, { error: error.message }); }
+    return;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/agent/oauth/start') {
+    try {
+      const body = await readBody(req);
+      sendJson(res, 200, await startOAuth(String(body.provider ?? '').trim(), String(body.method ?? 'browser').trim()));
+    } catch (error) {
+      sendJson(res, error.status || 400, { error: error.message });
+    }
+    return;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/agent/oauth/code') {
+    try {
+      const body = await readBody(req);
+      sendJson(res, 200, await submitOAuthCode(body.code));
+    } catch (error) {
+      sendJson(res, error.status || 400, { error: error.message });
+    }
+    return;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/agent/oauth/cancel') {
+    try { sendJson(res, 200, await cancelOAuth()); }
+    catch (error) { sendJson(res, 500, { error: error.message }); }
+    return;
+  }
+
   // ── Draft file
   //
   //  One local Markdown file is the durable copy of the working document.
@@ -426,6 +397,29 @@ async function handleRequest(req, res) {
     }
     if (Buffer.byteLength(text) > MAX_DOCUMENT_BYTES) { sendJson(res, 413, { error: 'File exceeds the 1 MB editing limit.' }); return; }
     sendJson(res, 200, { name: path.basename(file), text });
+    return;
+  }
+  // POST /draft/open — switch the single active document (and its saves) to
+  // another workspace file. The previous file is untouched: whatever was in
+  // the editor for it stays in its own browser copy and on its own disk path.
+  if (req.method === 'POST' && url.pathname === '/draft/open') {
+    try {
+      const body = await readBody(req);
+      const file = workspaceFile(String(body.name ?? ''));
+      if (!file) { sendJson(res, 400, { error: 'Open a Markdown or text file by name.' }); return; }
+      let text;
+      try { text = fs.readFileSync(file, 'utf8'); }
+      catch (error) {
+        const missing = error.code === 'ENOENT';
+        sendJson(res, missing ? 404 : 500, { error: missing ? 'File no longer exists.' : fsErrorMessage(error) });
+        return;
+      }
+      if (Buffer.byteLength(text) > MAX_DOCUMENT_BYTES) { sendJson(res, 413, { error: 'File exceeds the 1 MB editing limit.' }); return; }
+      draftStore = documentStore(file);
+      sendJson(res, 200, draftStore.read());
+    } catch (error) {
+      sendJson(res, error.status || 500, { error: fsErrorMessage(error) });
+    }
     return;
   }
 
