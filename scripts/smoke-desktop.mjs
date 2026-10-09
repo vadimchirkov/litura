@@ -55,18 +55,11 @@ const draft = 'Smoke draft: a sentence the app must hand back.\n';
 fs.mkdirSync(workspace);
 fs.writeFileSync(path.join(workspace, 'draft.md'), draft);
 
-// The app stores the chosen folder under the user's config directory. Moving
-// HOME for this one process means the test never touches the folder the writer
-// actually picked — and never meets a folder dialog either.
-const configParent = process.platform === 'darwin' ? path.join(temp, 'Library', 'Application Support')
-  : WINDOWS ? path.join(temp, 'AppData', 'Roaming')
-  : path.join(temp, '.config');
-const configDir = path.join(configParent, 'io.github.vadimchirkov.litura');
-fs.mkdirSync(configDir, { recursive: true });
-fs.writeFileSync(path.join(configDir, 'folder.txt'), workspace);
-
+// LITURA_FOLDER names the folder outright, so the test never reads or changes
+// the folder the writer actually picked, and never meets a folder dialog.
+// Moving HOME keeps the rest of the app's state out of the writer's too.
 const app = spawn(binary, [], {
-  env: { ...process.env, HOME: temp, XDG_CONFIG_HOME: path.join(temp, '.config'), APPDATA: path.join(temp, 'AppData', 'Roaming') },
+  env: { ...process.env, LITURA_FOLDER: workspace, HOME: temp, XDG_CONFIG_HOME: path.join(temp, '.config'), APPDATA: path.join(temp, 'AppData', 'Roaming') },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 

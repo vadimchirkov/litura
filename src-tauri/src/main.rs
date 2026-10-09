@@ -32,7 +32,13 @@ fn folder_file(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn saved_folder(app: &AppHandle) -> Option<PathBuf> {
-    let path = PathBuf::from(std::fs::read_to_string(folder_file(app).ok()?).ok()?.trim());
+    // LITURA_FOLDER wins over the saved choice. The smoke test needs it: on
+    // Windows the config directory comes from the shell API, not APPDATA, so
+    // a test cannot point it elsewhere.
+    let path = match std::env::var_os("LITURA_FOLDER") {
+        Some(folder) => PathBuf::from(folder),
+        None => PathBuf::from(std::fs::read_to_string(folder_file(app).ok()?).ok()?.trim()),
+    };
     // A remembered folder is reused only while it stays readable: macOS can
     // revoke Documents consent after the fact, and serving an unreadable
     // folder is a startup of errors. Unreadable means ask again.
