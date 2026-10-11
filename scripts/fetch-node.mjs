@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = process.env.LITURA_NODE_VERSION || 'v24.21.0';
+const VERSION = (process.env.STILURA_NODE_VERSION ?? process.env.LITURA_NODE_VERSION) || 'v24.21.0';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const OUT_DIR = path.join(ROOT, 'src-tauri', 'binaries');
 
@@ -50,9 +50,9 @@ const platform = NODE_PLATFORM[triple];
 if (!platform) throw new Error(`No Node build mapped for ${triple}. Add it to scripts/fetch-node.mjs.`);
 
 const windows = platform.startsWith('win');
-const target = path.join(OUT_DIR, `litura-server-${triple}${windows ? '.exe' : ''}`);
-if (fs.existsSync(target) && !process.env.LITURA_NODE_FORCE) {
-  console.log(`[node] ${path.basename(target)} is already here — delete it or set LITURA_NODE_FORCE=1 to refetch.`);
+const target = path.join(OUT_DIR, `stilura-server-${triple}${windows ? '.exe' : ''}`);
+if (fs.existsSync(target) && !(process.env.STILURA_NODE_FORCE ?? process.env.LITURA_NODE_FORCE)) {
+  console.log(`[node] ${path.basename(target)} is already here — delete it or set STILURA_NODE_FORCE=1 to refetch.`);
   process.exit(0);
 }
 
@@ -72,7 +72,7 @@ if (!expected) throw new Error(`${archive} is not listed in SHASUMS256.txt`);
 const actual = createHash('sha256').update(blob).digest('hex');
 if (actual !== expected) throw new Error(`Checksum mismatch for ${archive}: ${actual} != ${expected}`);
 
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-node-'));
+const work = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-node-'));
 try {
   const archivePath = path.join(work, archive);
   fs.writeFileSync(archivePath, blob);

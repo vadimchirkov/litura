@@ -1,20 +1,20 @@
 ---
-name: litura
-description: Edit prose alongside the Litura writing editor. Use when the user is working in a folder with draft.md and Litura running, or asks to review, rewrite, or continue a draft in Litura's voice. Covers Litura's style rules, finding codes, and its localhost HTTP API.
+name: stilura
+description: Edit prose alongside the Stilura writing editor. Use when the user is working in a folder with draft.md and Stilura running, or asks to review, rewrite, or continue a draft in Stilura's voice. Covers Stilura's style rules, finding codes, and its localhost HTTP API.
 ---
 
-# Litura
+# Stilura
 
-Litura is a local writing editor for sharper, more human prose. The author owns
+Stilura is a local writing editor for sharper, more human prose. The author owns
 every change: the model suggests, the author applies. When you work on a draft
-that lives in Litura, follow this skill instead of improvising.
+that lives in Stilura, follow this skill instead of improvising.
 
 ## When to use
 
-- The working folder has `draft.md` and Litura is running (`node index.js` /
-  `npx litura-app` / desktop app, port 3000–3010 on `127.0.0.1`).
+- The working folder has `draft.md` and Stilura is running (`node index.js` /
+  `npx stilura` / desktop app, port 3000–3010 on `127.0.0.1`).
 - The user asks to review, rewrite, continue, or discuss that draft.
-- Otherwise: plain file editing, no Litura protocol needed.
+- Otherwise: plain file editing, no Stilura protocol needed.
 
 ## Voice rules (from `style.md`)
 
@@ -49,7 +49,7 @@ but never force essay structure onto lists, dialogue, or deliberate
 disorientation. If the user supplies their own writing sample, it outranks
 every rule here.
 
-## Finding codes (Litura review taxonomy)
+## Finding codes (Stilura review taxonomy)
 
 One code per finding, most specific wins: `level-1-whole-essay` (title
 misleads / ending doesn't resolve the opening), `level-2-introduction`
@@ -61,7 +61,7 @@ misleads / ending doesn't resolve the opening), `level-2-introduction`
 `level-7-paragraph-flow` (abrupt old-to-new break between sentences),
 `generic-prose` (any tell from the voice rules above).
 
-## Litura localhost API
+## Stilura localhost API
 
 Base: `http://127.0.0.1:<port>`, port 3000 unless taken (server walks up to
 +10). Same machine only; every non-GET needs `Content-Type: application/json`.
@@ -69,7 +69,7 @@ The `agent` field (provider/model) is optional everywhere — omit it and the
 server uses its configured default.
 
 ```bash
-PORT=3000  # adjust to the running Litura instance
+PORT=3000  # adjust to the running Stilura instance
 
 # Read the draft (also gives the revision token for writes)
 curl -s http://127.0.0.1:$PORT/draft
@@ -112,7 +112,7 @@ findings — the author reads them at a glance beside the draft.
 1. Read first: `GET /draft` (or the file) before proposing changes.
 2. Prefer `PUT /draft` with the fresh `revision`. On `409`, re-read and retry
    once against the new text — never overwrite blindly.
-3. Alternatively edit `draft.md` directly with file tools. Litura notices
+3. Alternatively edit `draft.md` directly with file tools. Stilura notices
    external changes and offers the author `Load disk` / `Keep mine` — so say
    what you changed and let them choose.
 4. Small, named edits beat rewrites. Quote the exact passage, name the code
@@ -121,7 +121,7 @@ findings — the author reads them at a glance beside the draft.
 
 ## MCP server (preferred when available)
 
-If the host connected a `litura` MCP server (`mcp-server.mjs`), use its tools
+If the host connected a `stilura` MCP server (`mcp-server.mjs`), use its tools
 instead of curl: `draft_read`, `draft_write`, `review`, `rewrite`, `suggest`,
 `chat`, `idea`. Same prompts, same revision guard on `draft_write`, and
 document arguments default to the live draft. The curl recipes above are the

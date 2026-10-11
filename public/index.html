@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Litura</title>
-  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <title>Stilura</title>
+  <link rel="icon" href="logo-mark.png" type="image/png">
+  <link rel="icon" href="logo-mark-white.png" type="image/png" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="style.css">
   <!-- The desktop shell asks for the page with ?shell=desktop. On macOS its
        window buttons float over this header, which has to leave them room —
@@ -162,13 +163,19 @@
         <button type="button" id="chat-chip-clear" aria-label="Detach selection">×</button>
       </div>
       <div class="chat-row">
-        <textarea id="chat-input" aria-label="Message or rewrite instruction" rows="1" placeholder="Ask anything" autocomplete="off" spellcheck="false"></textarea>
+        <textarea id="chat-input" aria-label="Message or rewrite instruction" rows="1" placeholder="Ask anything" autocomplete="off" spellcheck="false" aria-expanded="false"></textarea>
         <!-- Send, and while the model is working, the same button is where the
              work is shown and where it is stopped. -->
         <button type="button" class="chat-send" id="chat-send" aria-label="Send" disabled>
           <span class="ph" data-icon="arrow-up" aria-hidden="true"></span>
+          <span class="chat-stop" aria-hidden="true"></span>
         </button>
       </div>
+      <!-- Slash command menu (app.js): icon, name and one-line description per
+           command, filtered as the writer types after /. Lives in the composer
+           so it follows the field; plain div, not a popover, so typing keeps
+           focus. -->
+      <div class="slash-menu" id="slash-menu" role="listbox" aria-label="Commands" hidden></div>
     </div>
     <!-- Idle the whole chat is one pill, after Symbioen's DynamicIsland: the
          pill opens both the field and the stream. Labelled by JS — a restored
@@ -188,18 +195,27 @@
         Reading arms nothing — attaching and rewriting live here. -->
   <div id="mark-bubble" class="mark-bubble" role="toolbar" aria-label="Passage actions" hidden></div>
 
-  <dialog id="settings-dialog" class="settings-dialog">
+  <dialog id="settings-dialog" class="settings-dialog" data-tab="models">
     <!-- No method="dialog": Enter in the API-key field adds the key instead of
          closing the whole dialog. Closing is only via the × button or Escape. -->
     <form id="settings-form">
       <header>
         <div>
-          <h2>Model and access</h2>
+          <h2>Settings</h2>
+          <p class="settings-sub">Changes take effect immediately.</p>
         </div>
         <button type="button" class="dialog-close" aria-label="Close">×</button>
       </header>
 
-      <section>
+      <div class="settings-layout">
+        <nav class="settings-tabs" role="tablist" aria-orientation="vertical" aria-label="Settings sections">
+          <button type="button" role="tab" id="tab-models" data-tab="models" aria-controls="settings-panel">Models</button>
+          <button type="button" role="tab" id="tab-access" data-tab="access" aria-controls="settings-panel">Keys and sign-in</button>
+          <button type="button" role="tab" id="tab-general" data-tab="general" aria-controls="settings-panel">General</button>
+        </nav>
+        <div class="settings-panel" id="settings-panel" role="tabpanel">
+
+      <section data-tab="models">
         <h3>Default model</h3>
         <!-- Hundreds of models behind one field. A native datalist cannot do
              it: its popup never reaches the top layer over a modal dialog, and
@@ -237,7 +253,7 @@
         <p class="settings-hint" id="model-hint"></p>
       </section>
 
-      <section>
+      <section data-tab="models" class="tab-end">
         <h3>Suggestion model</h3>
         <!-- Continuations are the most frequent and the cheapest task: a few
              words, no deliberation. They use this model; everything else uses
@@ -272,7 +288,7 @@
         <p class="settings-hint" id="suggest-hint"></p>
       </section>
 
-      <section>
+      <section data-tab="access">
         <h3>API keys</h3>
         <div class="key-entry">
           <select id="key-provider" aria-label="API key provider"></select>
@@ -286,9 +302,8 @@
         <p class="settings-error" id="settings-error" role="alert"></p>
       </section>
 
-      <section>
+      <section data-tab="access" class="tab-end">
         <h3>Subscriptions</h3>
-        <p class="settings-hint">Sign in with a ChatGPT Plus or Pro subscription instead of an API key. Counts messages, not tokens: automatic paragraph checks and suggestions send hundreds of small requests a day and can exhaust a weekly allowance — API keys stay cheaper and quota-free for heavy writing. Claude subscriptions are not offered: Anthropic restricts them to Claude Code and claude.ai.</p>
         <div class="configured-keys" id="oauth-providers"></div>
         <div id="oauth-flow" hidden>
           <p class="settings-hint" id="oauth-status" role="status"></p>
@@ -304,7 +319,7 @@
         </div>
       </section>
 
-      <section>
+      <section data-tab="general">
         <h3>While you write</h3>
         <label class="settings-check">
           <input type="checkbox" id="auto-review" checked>
@@ -319,10 +334,9 @@
           <span>Actions in the margin<small>Experiment: Note and Discuss stand beside the selected line, Continue right after the caret, instead of floating over the text.</small></span>
         </label>
         <p class="settings-hint" id="suggest-shortcut">Cmd/Ctrl+Enter requests a continuation in the editor, even with automatic suggestions off. Tab accepts; Escape dismisses or cancels.</p>
-        <p class="settings-hint">All changes take effect immediately.</p>
       </section>
 
-      <section>
+      <section data-tab="general">
         <h3>Appearance</h3>
         <label class="settings-check theme-toggle">
           <input type="checkbox" id="theme-toggle">
@@ -330,15 +344,17 @@
         </label>
       </section>
 
-      <section id="settings-updates">
+      <section data-tab="general" class="tab-end" id="settings-updates">
         <h3>Updates</h3>
         <label class="settings-check">
           <input type="checkbox" id="update-check" checked>
-          <span>Ask npm about new versions<small>Once a day. The only request Litura makes to anyone but your own model provider.</small></span>
+          <span>Ask npm about new versions<small>Once a day. The only request Stilura makes to anyone but your own model provider.</small></span>
         </label>
         <p class="settings-hint" id="update-status"></p>
       </section>
 
+        </div>
+      </div>
     </form>
   </dialog>
 

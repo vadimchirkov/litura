@@ -3,13 +3,13 @@ node_modules/
 npm-debug.log*
 /tmp
 /draft.md
-/draft.md.litura-history
+/draft.md.stilura-history
 /.claude
 /dist
 # Generated bundles: rebuilt by `npm run build` (frontend) and
 # `npm run build:artifact` (Lens demo). Sources stay tracked.
 /public/app.js
-/artifact/litura-lens.html
+/artifact/stilura-lens.html
 /src-tauri/target
 # The Node runtime the desktop build ships: 120 MB, fetched by
 # scripts/fetch-node.mjs and checksummed against the release.
@@ -23,3 +23,5 @@ npm-debug.log*
 /.ignore
 /.mcp.json
 /opencode.json
+/*.litura-history
+/artifact/litura-lens.html

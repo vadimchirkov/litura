@@ -1,4 +1,4 @@
-// Litura desktop shell.
+// Stilura desktop shell.
 //
 // The editor is the same Node server the npm package runs; this process picks
 // the writing folder, starts that server on a free port, points a window at it,
@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -21,7 +23,12 @@ use tauri_plugin_updater::UpdaterExt;
 /// The running server. Killed when the app exits so a crash-and-restart does
 /// not leave a second one holding the draft's lock file.
 #[derive(Default)]
-struct Server(Mutex<Option<CommandChild>>);
+struct Server {
+    child: Mutex<Option<CommandChild>>,
+    url: Mutex<Option<String>>,
+    exit_allowed: AtomicBool,
+    closing: AtomicBool,
+}
 
 /// Which folder holds the writing. One line of text next to the app's own
 /// config — a file the writer can read, and delete to be asked again.
@@ -32,10 +39,11 @@ fn folder_file(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn saved_folder(app: &AppHandle) -> Option<PathBuf> {
-    // LITURA_FOLDER wins over the saved choice. The smoke test needs it: on
+    // STILURA_FOLDER wins over the saved choice. The smoke test needs it: on
     // Windows the config directory comes from the shell API, not APPDATA, so
-    // a test cannot point it elsewhere.
-    let path = match std::env::var_os("LITURA_FOLDER") {
+    // a test cannot point it elsewhere. LITURA_FOLDER still honored.
+    let path = match std::env::var_os("STILURA_FOLDER")
+        .or_else(|| std::env::var_os("LITURA_FOLDER")) {
         Some(folder) => PathBuf::from(folder),
         None => PathBuf::from(std::fs::read_to_string(folder_file(app).ok()?).ok()?.trim()),
     };
@@ -68,10 +76,10 @@ fn pick_folder(app: &AppHandle, next: impl FnOnce(Option<PathBuf>) + Send + 'sta
 fn fatal(app: &AppHandle, message: &str) {
     // Said twice: once to whoever is looking at the window, once to whoever is
     // reading the output of a build or a smoke run.
-    eprintln!("[litura] {message}");
+    eprintln!("[stilura] {message}");
     app.dialog()
         .message(message)
-        .title("Litura could not start")
+        .title("Stilura could not start")
         .blocking_show();
     app.exit(1);
 }
@@ -89,26 +97,28 @@ async fn start_server(app: &AppHandle, folder: &Path) -> Result<String, String> 
     }
 
     let env = HashMap::<String, String>::from([
-        ("LITURA_SIDECAR".into(), "1".into()),
-        ("LITURA_OFFLINE_MODELS".into(), "1".into()),
+        ("STILURA_SIDECAR".into(), "1".into()),
+        ("STILURA_OFFLINE_MODELS".into(), "1".into()),
         // Port 0: the operating system hands out a free one, so a second copy
-        // of Litura — or anything else on 3456 — is not a startup failure.
+        // of Stilura — or anything else on 3456 — is not a startup failure.
         ("PORT".into(), "0".into()),
-        ("LITURA_ROOT".into(), resources.to_string_lossy().into_owned()),
+        ("STILURA_ROOT".into(), resources.to_string_lossy().into_owned()),
+        ("STILURA_STATE_DIR".into(), std::env::var_os("STILURA_STATE_DIR").map(PathBuf::from)
+            .unwrap_or(app.path().app_data_dir().map_err(|e| e.to_string())?.join("editor-state")).to_string_lossy().into_owned()),
         ("DRAFT_FILE".into(), folder.join("draft.md").to_string_lossy().into_owned()),
         ("STYLE_FILE".into(), folder.join("style.md").to_string_lossy().into_owned()),
     ]);
 
     let (mut rx, child) = app
         .shell()
-        .sidecar("litura-server")
+        .sidecar("stilura-server")
         .map_err(|e| e.to_string())?
         .args([server_js.to_string_lossy().to_string()])
         .envs(env)
         .spawn()
         .map_err(|e| e.to_string())?;
 
-    app.state::<Server>().0.lock().unwrap().replace(child);
+    app.state::<Server>().child.lock().unwrap().replace(child);
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -117,7 +127,8 @@ async fn start_server(app: &AppHandle, folder: &Path) -> Result<String, String> 
                 // Forwarded rather than swallowed: it is how a smoke test
                 // outside the app learns which port to talk to.
                 print!("{line}");
-                if let Some(url) = line.trim().strip_prefix("LITURA_READY ") {
+                if let Some(url) = line.trim().strip_prefix("STILURA_READY ") {
+                    *app.state::<Server>().url.lock().unwrap() = Some(url.to_string());
                     // The page reads the marker to leave room for the window
                     // buttons. It is a query string rather than a header so
                     // that it survives a reload the writer triggers.
@@ -147,6 +158,27 @@ async fn start_server(app: &AppHandle, folder: &Path) -> Result<String, String> 
     Err("The server stopped before it was ready".into())
 }
 
+async fn editor_request(app: &AppHandle, action: &str) -> Result<(), String> {
+    let url = app.state::<Server>().url.lock().unwrap().clone().ok_or("The editor is not ready.")?;
+    let response = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(25))
+        .build().map_err(|e| e.to_string())?
+        .post(format!("{url}/api/desktop/{action}"))
+        .header("Content-Type", "application/json").body("{}")
+        .send().await.map_err(|e| e.to_string())?;
+    if response.status().is_success() { return Ok(()); }
+    let body = response.text().await.unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    Err(value["error"].as_str().unwrap_or("The editor could not save.").to_string())
+}
+
+async fn save_before_exit(app: &AppHandle) -> bool {
+    if let Err(error) = editor_request(app, "flush").await {
+        app.dialog().message(error).title("Not saved — app kept open").blocking_show();
+        return false;
+    }
+    true
+}
+
 /// Ask, download, install, restart. Called on launch and from the menu; only
 /// the menu wants to hear that there is nothing to install.
 async fn update(app: AppHandle, announce_current: bool) {
@@ -173,7 +205,7 @@ async fn update(app: AppHandle, announce_current: bool) {
     let Some(update) = found else {
         if announce_current {
             app.dialog()
-                .message(format!("Litura {} is the current version.", app.package_info().version))
+                .message(format!("Stilura {} is the current version.", app.package_info().version))
                 .title("No update")
                 .blocking_show();
         }
@@ -183,7 +215,7 @@ async fn update(app: AppHandle, announce_current: bool) {
     let accepted = app
         .dialog()
         .message(format!(
-            "Litura {} is available. Install it and restart?\n\nYour draft is saved to disk before the restart.",
+            "Stilura {} is available. Install it and restart?\n\nYour draft is saved to disk before the restart.",
             update.version
         ))
         .title("Update available")
@@ -193,11 +225,23 @@ async fn update(app: AppHandle, announce_current: bool) {
         return;
     }
 
-    match update.download_and_install(|_, _| {}, || {}).await {
-        // The installed bundle carries a new server and a new runtime, so the
-        // whole process is replaced rather than the window reloaded.
-        Ok(()) => app.restart(),
+    let bytes = match update.download(|_, _| {}, || {}).await {
+        Ok(bytes) => bytes,
         Err(error) => {
+            app.dialog().message(error.to_string()).title("Update failed").blocking_show();
+            return;
+        }
+    };
+    // Windows may exit during installation, so confirm the save first.
+    if !save_before_exit(&app).await { return; }
+    app.state::<Server>().exit_allowed.store(true, Ordering::SeqCst);
+    match update.install(bytes) {
+        Ok(()) => {
+            app.restart();
+        }
+        Err(error) => {
+            app.state::<Server>().exit_allowed.store(false, Ordering::SeqCst);
+            let _ = editor_request(&app, "resume").await;
             app.dialog().message(error.to_string()).title("Update failed").blocking_show();
         }
     }
@@ -244,7 +288,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     // and Linux the same two items are the tail of File.
     let app_menu = Submenu::with_items(
         app,
-        "Litura",
+        "Stilura",
         true,
         &[
             &PredefinedMenuItem::about(app, None, None)?,
@@ -270,7 +314,7 @@ fn main() {
             // dialog and the server start take a moment, and a writer who
             // double-clicked an icon should see the app, not the desktop.
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("Litura")
+                .title("Stilura")
                 .inner_size(1200.0, 820.0)
                 .min_inner_size(640.0, 480.0);
             // The draft's own header is the title bar. macOS can drop its bar
@@ -308,10 +352,12 @@ fn main() {
                 let app = app.clone();
                 pick_folder(&app.clone(), move |folder| {
                     if let Some(folder) = folder {
-                        save_folder(&app, &folder);
-                        // A different draft means a different server: restart
-                        // rather than teach the server to switch files.
-                        app.restart();
+                        tauri::async_runtime::spawn(async move {
+                            if !save_before_exit(&app).await { return; }
+                            save_folder(&app, &folder);
+                            app.state::<Server>().exit_allowed.store(true, Ordering::SeqCst);
+                            app.restart();
+                        });
                     }
                 });
             }
@@ -320,13 +366,37 @@ fn main() {
             }
             _ => {}
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                window.app_handle().exit(0);
+            }
+        })
         .build(tauri::generate_context!())
-        .expect("Litura failed to start")
+        .expect("Stilura failed to start")
         .run(|app, event| {
+            if let RunEvent::ExitRequested { api, code, .. } = &event {
+                let server = app.state::<Server>();
+                if !server.exit_allowed.load(Ordering::SeqCst) && server.url.lock().unwrap().is_some() {
+                    api.prevent_exit();
+                    if !server.closing.swap(true, Ordering::SeqCst) {
+                        let app = app.clone();
+                        let code = code.unwrap_or(0);
+                        tauri::async_runtime::spawn(async move {
+                            if save_before_exit(&app).await {
+                                app.state::<Server>().exit_allowed.store(true, Ordering::SeqCst);
+                                app.exit(code);
+                            } else {
+                                app.state::<Server>().closing.store(false, Ordering::SeqCst);
+                            }
+                        });
+                    }
+                }
+            }
             // Exit and restart both come through here, and both must take the
             // server with them.
             if matches!(event, RunEvent::Exit) {
-                if let Some(child) = app.state::<Server>().0.lock().unwrap().take() {
+                if let Some(child) = app.state::<Server>().child.lock().unwrap().take() {
                     let _ = child.kill();
                 }
             }

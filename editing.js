@@ -1,9 +1,12 @@
 // Each result owns its source document and span. Never retarget an old answer
 // to whatever happens to be selected now. Conservative invalidation is explicit.
+// An empty span is an insertion point (used by composer /idea): it stays
+// valid only while the document is untouched, like any other span.
 export function replacementTarget(document, target) {
-  return target && document === target.document && Number.isInteger(target.from)
-    && target.from >= 0 && target.to > target.from
-    && document.slice(target.from, target.to) === target.text;
+  if (!target || document !== target.document || !Number.isInteger(target.from)
+    || target.from < 0 || target.to < target.from) return false;
+  if (target.to === target.from) return target.text === '';
+  return document.slice(target.from, target.to) === target.text;
 }
 
 export function newerVersion(latest, current) {

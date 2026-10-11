@@ -17,10 +17,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // In the npm package the server sits next to its own assets. In the desktop
 // build it is a single bundled file and the assets are Tauri resources, so the
 // shell says where they are.
-const ROOT = process.env.LITURA_ROOT || __dirname;
+const ROOT = (process.env.STILURA_ROOT ?? process.env.LITURA_ROOT) || __dirname;
 
-// Draft and style live in the folder Litura was started from, not inside the
-// install directory — `npx litura` in a notes folder edits that folder. The
+// Draft and style live in the folder Stilura was started from, not inside the
+// install directory — `npx stilura` in a notes folder edits that folder. The
 // bundled style.md is the fallback when the folder has none of its own.
 const CWD = process.cwd();
 export const STYLE_FILE = process.env.STYLE_FILE

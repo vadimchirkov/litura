@@ -5,8 +5,10 @@ import { createHash, randomUUID } from 'node:crypto';
 const hash = text => createHash('sha256').update(text).digest('hex');
 export const MAX_DOCUMENT_BYTES = 1024 * 1024;
 
-// A lock coordinates Litura processes. External editors do not participate;
+// A lock coordinates Stilura processes. External editors do not participate;
 // recheck immediately before rename and retain the previous disk copy.
+// (History and lock file names keep the .litura- infix: renaming them would
+// strand existing backups. The product name changed; on-disk formats did not.)
 export function documentStore(filename) {
   const resolved = path.resolve(filename);
   const file = fs.existsSync(resolved) ? fs.realpathSync(resolved) : path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
@@ -16,7 +18,7 @@ export function documentStore(filename) {
     try { text = fs.readFileSync(file, 'utf8'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (text !== undefined && Buffer.byteLength(text) > MAX_DOCUMENT_BYTES) {
-      throw new Error('Draft exceeds the 1 MB editing limit. Open a smaller document.');
+      throw Object.assign(new Error('Draft exceeds the 1 MB editing limit. Open a smaller document.'), { status: 413 });
     }
     return { text: text ?? '', exists: text !== undefined, revision: text === undefined ? 'missing' : hash(text), path: file, id: hash(file) };
   }
@@ -42,7 +44,7 @@ export function documentStore(filename) {
     let fd;
     try { fd = fs.openSync(lock, 'wx', 0o600); }
     catch (error) {
-      if (error.code === 'EEXIST') throw Object.assign(new Error(`Another save is active. If Litura crashed, close its processes and remove ${lock}.`), { status: 423 });
+      if (error.code === 'EEXIST') throw Object.assign(new Error(`Another save is active. If Stilura crashed, close its processes and remove ${lock}.`), { status: 423 });
       throw error;
     }
     const temp = `${file}.${randomUUID()}.tmp`;

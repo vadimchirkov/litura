@@ -14,6 +14,15 @@ export function suggestionPrompts({ document = '', cursor = document.length, con
   const silence = manual
     ? 'Return an empty text when the author\'s intent is unclear or continuing would require inventing a fact, source, number, experience or intention. A finished sentence is not itself a reason for silence — the writer asked for the next move.'
     : 'Return an empty text when the thought is complete, the author\'s intent is unclear, or continuing would require inventing a fact, source, number, experience or intention. Silence is better than filler.';
+  // After a finished sentence many openings are equally possible, so the
+  // automatic rule below would abstain every time. An explicit press asked for
+  // one: take the likeliest, kept to what the draft already carries.
+  const atSentenceEnd = /[.!?…]["”’')\]]*\s*$/u.test(document.slice(0, cursor));
+  const choice = manual
+    ? (atSentenceEnd
+      ? 'The sentence before the cursor is finished and the writer asked for the next one. Do not return NONE. Return only its first two to six words: a connective or a noun the draft already names, which commits to no new claim and leaves the point to the author. Example after "We rolled back within five minutes." → TEXT: The migration.'
+      : 'If several completions are possible, take the one the draft most directly supports.')
+    : 'If materially different completions are equally possible, abstain.';
   return {
     systemPrompt: [
       style ? `Follow this writing style guide:\n\n${style}` : '',
@@ -21,7 +30,7 @@ export function suggestionPrompts({ document = '', cursor = document.length, con
 Match the draft's language, voice, vocabulary, rhythm and factual uncertainty. ${thought}
 Let the continuation's length follow how well the material supports it, up to 15 words: a word or punctuation when that finishes the thought, a full clause or sentence when the draft or context clearly carries it further.
 ${silence}
-Complete grammar, punctuation, an unfinished word, or a consequence directly supported by the supplied facts. Never choose a decision or next event for the author. If materially different completions are equally possible, abstain.
+Complete grammar, punctuation, an unfinished word, or a consequence directly supported by the supplied facts. Never choose a decision or next event for the author. ${choice}
 Specific wording must come from the supplied material. Reuse the objects actually named by the author; do not introduce a more specific type of an object or an unstated way it works. When the existing words in a quotation form a complete phrase, close the quotation instead of inventing more quoted words.
 Do not invent evidence or claims, restate the draft, add generic conclusions, or repeat or contradict the text after the cursor.
 Return one line using exactly one of these formats, without commentary or Markdown fences:
@@ -48,9 +57,10 @@ export function parseSuggestion(prefix, raw) {
   const match = /^(TEXT|WORD):[ \t]*(.+)$/u.exec(raw.trim());
   if (!match) throw new Error('Expected TEXT:, WORD:, or NONE from the continuation model');
   let text = match[2].trim();
-  if ((text.match(/\S+/gu) ?? []).length > 15) {
-    throw new Error('Continuation must be one line of at most 15 words');
-  }
+  // A model that runs past the limit has still said something usable at its
+  // start; the ghost text keeps the first 15 words rather than failing the press.
+  const words = text.match(/\S+/gu) ?? [];
+  if (words.length > 15) text = words.slice(0, 15).join(' ');
   if (match[1] === 'WORD') {
     if (!/[\p{L}\p{N}\p{M}]$/u.test(prefix) || !/^[\p{L}\p{N}\p{M}]/u.test(text)) {
       throw new Error('Word continuation does not meet an unfinished word');

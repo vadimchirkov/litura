@@ -1,6 +1,13 @@
 # Changelog
 
-Litura follows [semantic versioning](https://semver.org). Until 1.0 the minor number carries breaking changes.
+Stilura (renamed from Litura) follows [semantic versioning](https://semver.org). Until 1.0 the minor number carries breaking changes.
+
+## Unreleased
+
+- Fixed cross-document Undo and saves from concurrent tabs. File writes now keep revision checks and history; workspace APIs reject symbolic links.
+- Desktop state survives server port changes. Closing, changing folders, and installing updates wait for confirmed saves. Partial brief answers survive reloads, and Save as falls back to a download where the system file-picker API is unavailable.
+
+- Renamed Litura → Stilura (*stilus*, the pen, + *litura*, the correction): npm package `stilura`, commands `stilura` / `stilura-mcp`, desktop app, skill (`skills/stilura`), and all user-facing strings. `STILURA_*` environment variables replace `LITURA_*` (old spellings still honored). The GitHub repo, release URLs, and the Tauri bundle identifier move with the name — reinstall the desktop app from the new releases page; its saved folder choice does not carry over. Browser drafts, `style.md`, and disk history (`.litura-history`, `litura:` storage keys, `<litura-edits>` tags) are untouched and keep working.
 
 ## 0.6.0 — 2026-10-09
 
@@ -15,6 +22,10 @@ Litura follows [semantic versioning](https://semver.org). Until 1.0 the minor nu
 - Notes in the margin no longer overlap: the rail cards were positioned relative to their normal place instead of the rail, and now also restack when a note grows. The conversation island sits 16px higher.
 - Experiment, Settings → While you write → Actions in the margin: `Note` and `Discuss` stand in the notes rail beside the selected line, and `Continue` sits right after the caret with its `⌘↵` hint, instead of floating over the text. Falls back to the floating bubble where there is no rail.
 - With a conversation open, the turns and the field now stand inside one opaque panel (near-black in dark mode) instead of floating over the draft, and the fade behind the island is gone. Notes in the margin no longer get cut at the header: the rail reaches the window top like the draft's lines do.
+- The text column now narrows (down to 52 characters) before margin notes give up their rail, so notes stay beside their lines on a 1100px pane instead of dropping into the chat.
+- The delete `×` on a margin note stands right after its last word instead of a box corner, and the paragraph `+` shows on a freshly loaded page without waiting for a resize.
+- A notice now takes over the whole island: the turns, finding cards and `×` above it are put away while it stands and come back when it goes, instead of hanging over an alert.
+- The draft no longer slides left when it grows past the window and a scrollbar appears (for instance when a note is added): the gutter is reserved on both edges.
 - Margin notes, slice 1: select a passage and press `Note` in the bubble to pin your own remark beside the line — plain text on the margin, no card chrome, blur commits and `Escape` drops, no Save/Cancel. Hover the empty margin beside a paragraph for its `+` (a paragraph note, never drifts); select all and press `Note` for the whole draft (pinned at the rail top, no mark). Notes stand in the margin rail on wide windows and stack in the chat stream on narrow ones. Create, edit, delete with Undo; notes persist per file. Notes go to the model with chat and rewrite requests as labeled scope context. No threads yet.
 
 ## 0.5.0 — 2026-09-27

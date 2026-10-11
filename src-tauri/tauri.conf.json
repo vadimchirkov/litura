@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Litura",
+  "productName": "Stilura",
   "version": "../package.json",
-  "identifier": "io.github.vadimchirkov.litura",
+  "identifier": "io.github.vadimchirkov.stilura",
   "build": {
     "frontendDist": "shell",
     "beforeDevCommand": "npm run desktop:prepare",
@@ -28,7 +28,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/litura-server"],
+    "externalBin": ["binaries/stilura-server"],
     "resources": {
       "../dist/server.mjs": "server.mjs",
       "../package.json": "package.json",
@@ -47,7 +47,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/vadimchirkov/litura/releases/latest/download/latest.json"
+        "https://github.com/vadimchirkov/stilura/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc2MjBFRkUxREJCNTBCNDMKUldSREM3WGI0ZThnZGh2UERFazFpRlNBUm5tVzVscmttMmxaL2o0Q2FYTGh3eGFHU1Y1S3RDb0cK"
     }

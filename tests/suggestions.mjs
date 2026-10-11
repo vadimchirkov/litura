@@ -29,9 +29,10 @@ for (const [before, text, word, after] of [
 ]) assert.equal(before + parseSuggestion(before, raw(text, word)), after);
 assert.equal(trimOverlap('skill', 'illustrates'), 'illustrates');
 assert.equal(trimOverlap('A skill', 'skillful'), 'skillful');
-for (const bad of ['plain commentary', 'TEXT:', 'NONE plus commentary', 'null', '[]', '{"text":"hello"}', raw('word '.repeat(16)), raw('one\ntwo')]) {
+for (const bad of ['plain commentary', 'TEXT:', 'NONE plus commentary', 'null', '[]', '{"text":"hello"}', raw('one\ntwo')]) {
   assert.throws(() => parseSuggestion('Draft', bad));
 }
+assert.equal(parseSuggestion('Draft', raw('word '.repeat(16))), ' ' + 'word '.repeat(15).trim());
 assert.throws(() => parseSuggestion('word ', raw('ing', true)));
 assert.throws(() => parseSuggestion('word', raw('.', true)));
 const prompts = suggestionPrompts({ document: 'Before\n\nAfter', cursor: 6, style: 'Keep my voice.', context: 'Known facts.' });

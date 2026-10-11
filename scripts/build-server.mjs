@@ -21,7 +21,7 @@ await build({
   // Provider SDKs reach for CommonJS at runtime (cross-spawn asks for
   // child_process this way). An ESM bundle has no require of its own, so give
   // it one rather than rewriting dependencies.
-  banner: { js: "import{createRequire as __litura_require}from'node:module';const require=__litura_require(import.meta.url);" },
+  banner: { js: "import{createRequire as __stilura_require}from'node:module';const require=__stilura_require(import.meta.url);" },
   // index.js imports esbuild only to rebuild the frontend from src/, which the
   // desktop build does not ship. Bundling it would carry a wrapper looking for
   // a binary that is not there.

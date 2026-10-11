@@ -7,7 +7,7 @@ import path from 'node:path';
 // Drive mcp-server.mjs over stdio with raw JSON-RPC (one message per line,
 // the framing StdioServerTransport speaks). Model-backed tools are exercised
 // only where they answer without a model call.
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-mcp-'));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-mcp-'));
 const draftFile = path.join(dir, 'draft.md');
 fs.writeFileSync(draftFile, 'Seeded draft for MCP tests.\n');
 
@@ -59,10 +59,10 @@ try {
     params: {
       protocolVersion: '2025-03-26',
       capabilities: {},
-      clientInfo: { name: 'litura-mcp-test', version: '0.0.0' },
+      clientInfo: { name: 'stilura-mcp-test', version: '0.0.0' },
     },
   });
-  assert.equal(init.result.serverInfo.name, 'litura');
+  assert.equal(init.result.serverInfo.name, 'stilura');
   assert(init.result.capabilities.tools, 'server must advertise tools');
   notify('notifications/initialized', {});
 

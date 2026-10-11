@@ -16,10 +16,10 @@ const FALLBACK_MODELS = [
 // added to OpenRouter after the dependency was published cannot be selected at
 // all, because `resolveModel` refuses what the catalog does not know. Asking a
 // provider what it offers is a call to the provider the writer has already
-// pointed the app at, so it is allowed by default. `LITURA_OFFLINE_MODELS=1`
-// stops Litura from asking, and Pi falls back to the list it already has —
+// pointed the app at, so it is allowed by default. `STILURA_OFFLINE_MODELS=1`
+// stops Stilura from asking, and Pi falls back to the list it already has —
 // bundled, or cached from an earlier refresh.
-const OFFLINE_MODELS = Boolean(process.env.LITURA_OFFLINE_MODELS);
+const OFFLINE_MODELS = Boolean(process.env.STILURA_OFFLINE_MODELS ?? process.env.LITURA_OFFLINE_MODELS);
 let runtimePromise;
 const runtime = () => runtimePromise ??= ModelRuntime.create({ allowModelNetwork: !OFFLINE_MODELS })
   .catch(error => {
@@ -112,7 +112,7 @@ export async function removeProviderApiKey(providerId) {
 // ─── Subscription sign-in (OAuth) ──────────────────────────────────────────
 // Allowlist, not every OAuth provider Pi knows. Anthropic is deliberately
 // absent: since February 2026 Anthropic restricts Pro/Max OAuth tokens to
-// Claude Code and claude.ai, and routing them through Litura would violate
+// Claude Code and claude.ai, and routing them through Stilura would violate
 // their terms. OpenAI tolerates Codex OAuth in third-party tools, so only
 // the ChatGPT Plus/Pro subscription is offered here.
 //
@@ -275,17 +275,27 @@ const options = (selection, maxTokens, signal) => ({
   ...(selection.thinkingLevel === 'off' ? {} : { reasoning: selection.thinkingLevel }),
 });
 
+// Some endpoints reject `reasoning: off` outright ("Reasoning is mandatory…")
+// though the model list says it can be switched off. Remember which, and give
+// those models the least reasoning they accept with room to finish.
+const reasoningRequired = new Set();
+const mandatoryReasoning = response => /reasoning is mandatory/i.test(response.errorMessage ?? '');
+
 export async function completeText({ systemPrompt, userPrompt, selection, maxTokens = 1500, signal, continuation = false }) {
   const resolved = await resolveModel(selection);
+  const modelKey = `${resolved.model.provider}/${resolved.model.id}`;
   // Typing suggestions need the least reasoning the model supports, regardless
   // of the author's review settings. Mandatory-reasoning models need headroom.
-  const effectiveSelection = continuation ? selectionFor(resolved.model, 'off') : resolved.selection;
-  const budget = continuation ? (effectiveSelection.thinkingLevel === 'off' ? 256 : 2048) : maxTokens;
-  const response = await resolved.rt.completeSimple(
-    resolved.model,
-    request(systemPrompt, userPrompt),
-    options(effectiveSelection, budget, signal),
-  );
+  const ask = async level => {
+    const effectiveSelection = continuation ? selectionFor(resolved.model, level) : resolved.selection;
+    const budget = continuation ? (effectiveSelection.thinkingLevel === 'off' ? 256 : 2048) : maxTokens;
+    return resolved.rt.completeSimple(resolved.model, request(systemPrompt, userPrompt), options(effectiveSelection, budget, signal));
+  };
+  let response = await ask(reasoningRequired.has(modelKey) ? 'minimal' : 'off');
+  if (continuation && !reasoningRequired.has(modelKey) && response.stopReason === 'error' && mandatoryReasoning(response)) {
+    reasoningRequired.add(modelKey);
+    response = await ask('minimal');
+  }
   if (response.stopReason === 'error' || response.stopReason === 'aborted') {
     throw new Error(response.errorMessage ?? 'Pi request failed');
   }

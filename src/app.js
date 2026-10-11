@@ -1,4 +1,4 @@
-// src/app.js — Litura frontend (CodeMirror 6)
+// src/app.js — Stilura frontend (CodeMirror 6)
 
 import {
   EditorView,
@@ -9,6 +9,7 @@ import {
 } from '@codemirror/view';
 import {
   EditorState,
+  Transaction,
   StateField,
   StateEffect,
   Compartment,
@@ -21,11 +22,19 @@ import {
 } from '@codemirror/commands';
 import { findingContext, isLatinScript, locateFindings, styleMarkers, styleScore } from '../review.js';
 import { renderMarkdown } from '../markdown.js';
-import { clampBubble, replacementTarget, newerVersion, resolveDrift, unwrapProse } from '../editing.js';
+import { clampBubble, replacementTarget, newerVersion, resolveDrift, unwrapProse, wordDiff } from '../editing.js';
 import { EDITS_OPEN, chatVisibleText, locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
 import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
-import { hydrateIcons } from './icons.js';
+import { hydrateIcons, icon } from './icons.js';
+import { openStorage } from './storage.js';
+
+async function main() {
+const desktop = new URLSearchParams(location.search).get('shell') === 'desktop';
+const localStorage = await openStorage({
+  desktop,
+  onError: error => window.dispatchEvent(new CustomEvent('stilura-storage-error', { detail: error.message })),
+});
 
 // Static markup names Tabler icons with <span class="ph" data-icon="…">;
 // this fills them from the single map in icons.js.
@@ -90,7 +99,10 @@ function setTheme(theme, persist = true) {
   if (persist) localStorage.setItem('wa-theme', theme);
 }
 setTheme(currentTheme, false);
-themeToggleEl.addEventListener('change', () => setTheme(themeToggleEl.checked ? 'dark' : 'light'));
+themeToggleEl.addEventListener('change', () => {
+  themeToggleEl.classList.add('is-init'); // transitions-dev toggle: arm the bounce after mount
+  setTheme(themeToggleEl.checked ? 'dark' : 'light');
+});
 
 // How much of the editor the floating panel covers. Measured, because the
 // panel grows with its content: a fixed guess leaves the line being typed —
@@ -104,11 +116,18 @@ let diskRevision = null;
 let diskText = null;
 let diskTimer = null;
 let saving = false;
+let savePromise = null;
+let switchingDocument = false;
+let desktopSaving = false;
 let savePaused = true;
 // A disk conflict pauses disk writes only: the draft, the suggestions and
 // the assistant keep working on the local copy. savePaused above is the
 // heavier brake — save errors and loading — which still gates everything.
 let diskHold = false;
+// Deleting the open file holds autosave only: recreating it 800 ms later
+// would undo the delete behind the writer's back. An explicit save still
+// goes through and brings the file back; Undo restores it at once.
+let autosaveHold = false;
 let loadingDocument = true;
 let editVersion = 0;
 // ─── Notices ───
@@ -218,7 +237,15 @@ function setReviewStatus(text, detail, from = 'review') {
   if (from === 'review') { reviewNotice = text; syncReviewPanel(); }
   // Progress ("Suggesting…") stays on this line; anything to read is a notice.
   const progress = text.endsWith('…');
+  // transitions-dev thinking states: keep the shimmer copy in sync and
+  // replay the rise-in swap when the line changes (reflow re-arms it).
+  if (reviewStatus.textContent !== (progress ? text : '')) {
+    reviewStatus.classList.remove('swap');
+    void reviewStatus.offsetWidth;
+    reviewStatus.classList.add('swap');
+  }
   reviewStatus.textContent = progress ? text : '';
+  reviewStatus.dataset.text = progress ? text : '';
   reviewStatus.title = progress ? text : '';
   reviewStatus.dataset.from = progress ? from : '';
   syncPill();
@@ -251,14 +278,24 @@ function modelError(error) {
   const detail = error?.message ?? String(error);
   console.error('[model]', detail);
   if (/failed to fetch|networkerror|load failed/i.test(detail)) {
-    return { say: 'Litura stopped answering.', act: 'retry', detail };
+    return { say: 'Stilura stopped answering.', act: 'retry', detail };
   }
   const status = Number(/^(?:HTTP |Server error )?([45]\d\d)\b/.exec(detail)?.[1]);
+  // Providers say how long to wait ("try again in 14.16s"); that number is the
+  // one useful thing in a rate-limit payload.
+  const waitMatch = status === 429 ? /try again in (\d+(?:\.\d+)?)\s*(ms|s|m)\b/i.exec(detail) : null;
+  const wait = waitMatch ? Math.max(1, Math.ceil(Number(waitMatch[1]) * { ms: .001, s: 1, m: 60 }[waitMatch[2].toLowerCase()])) : 0;
+  const unusable = /^Expected TEXT:|^Continuation must be/.test(detail);
   return {
-    say: MODEL_ERRORS[status] ?? 'The model could not answer.',
+    say: wait ? `The model is rate-limited. Try again in ${wait} s.`
+      : unusable ? 'The model\'s answer was unusable.'
+      : MODEL_ERRORS[status] ?? 'The model could not answer.',
     // Retrying a rejected key, a missing model or an oversized draft only
     // fails again; all but the draft are fixed in settings.
     act: [401, 402, 403, 404].includes(status) ? 'settings' : status === 413 ? null : 'retry',
+    // Where the fix is: a rejected or unfunded key is under access, a model
+    // the key cannot use or that does not exist is picked under models.
+    tab: status === 401 || status === 402 ? 'access' : 'models',
     detail,
   };
 }
@@ -268,11 +305,30 @@ function modelError(error) {
 // beside it is a button for a problem that was never named.
 // A retry that rejects puts the way out back.
 function notifyProblem(problem, retry = null, label = 'Try again', key = '') {
-  const act = problem.act === 'settings' ? { action: openSettings, label: 'Open settings' }
+  const act = problem.act === 'settings' ? { action: () => openSettings(problem.tab), label: 'Open settings' }
     : problem.act === 'retry' && retry
       ? { action: () => Promise.resolve().then(retry).catch(() => notifyProblem(problem, retry, label, key)), label }
       : {};
   notify(problem.say, { ...act, sticky: true, detail: problem.detail, key, icon: 'alert', tone: 'error' });
+}
+// A failed check says what broke and, for a key or a missing model, offers the
+// settings that fix it. The key keeps a run of automatic checks to one notice.
+function reviewFailed(error, label, retry = null) {
+  const problem = modelError(error);
+  setReviewStatus(`${label} failed. ${problem.say}`, error.message);
+  notifyProblem(problem, retry, 'Try again', 'review-error');
+}
+// A failed suggestion is about the model, not the text: report it even when
+// the writer has typed on since. Background retries fire at every pause, so a
+// passing failure is shown once per half minute; one only settings can fix
+// stays until it is dealt with.
+let lastSuggestFailure = 0;
+function reportSuggestFailure(problem, manual) {
+  if (!manual && problem.act !== 'settings' && Date.now() - lastSuggestFailure < 30_000) return;
+  lastSuggestFailure = Date.now();
+  const say = `Suggestions: ${problem.say}`;
+  if (problem.act === 'settings') notifyProblem({ ...problem, say }, null, 'Try again', 'suggest-error');
+  else notify(say, { detail: problem.detail, key: 'suggest-error', icon: 'alert', tone: 'error' });
 }
 let tabId;
 try {
@@ -615,13 +671,13 @@ function renderCredentials() {
     chip.className = 'key-chip';
     const dot = document.createElement('i');
     const name = document.createElement('span');
-    name.textContent = `${provider.name} · ${provider.source === 'environment' ? 'environment' : 'configured'}`;
+    name.textContent = provider.source === 'environment' ? `${provider.name} · environment` : provider.name;
     chip.append(dot, name);
     if (provider.source !== 'environment') {
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '×';
-      remove.title = `Remove ${provider.name} key`;
+      remove.title = remove.ariaLabel = `Remove ${provider.name} key`;
       remove.addEventListener('click', () => removeProviderKey(provider.id));
       chip.append(remove);
     }
@@ -666,7 +722,35 @@ async function refreshAgent() {
   return agentInfo;
 }
 
-async function openSettings() {
+const settingsTabs = [...settingsDialog.querySelectorAll('.settings-tabs [role="tab"]')];
+function showSettingsTab(name, focus = false) {
+  settingsDialog.dataset.tab = name;
+  for (const tab of settingsTabs) {
+    const on = tab.dataset.tab === name;
+    tab.setAttribute('aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+    if (on && focus) tab.focus();
+  }
+  document.getElementById('settings-panel').setAttribute('aria-labelledby', `tab-${name}`);
+  document.getElementById('settings-panel').scrollTop = 0;
+}
+for (const tab of settingsTabs) {
+  tab.addEventListener('click', () => showSettingsTab(tab.dataset.tab));
+  tab.addEventListener('keydown', event => {
+    const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? settingsTabs.length - 1
+      : step ? (settingsTabs.indexOf(tab) + step + settingsTabs.length) % settingsTabs.length : -1;
+    if (index < 0) return;
+    event.preventDefault();
+    showSettingsTab(settingsTabs[index].dataset.tab, true);
+  });
+}
+showSettingsTab(settingsDialog.dataset.tab);
+
+// `tab` picks the tab to land on; a click passes its event, which is ignored
+// and leaves the tab the writer was last on.
+async function openSettings(tab) {
+  if (typeof tab === 'string') showSettingsTab(tab);
   settingsError.textContent = '';
   try { await refreshAgent(); } catch (error) { settingsError.textContent = error.message; }
   await refreshOAuth();
@@ -682,7 +766,19 @@ async function openSettings() {
 }
 
 settingsOpen.addEventListener('click', openSettings);
-settingsDialog.querySelector('.dialog-close').addEventListener('click', () => settingsDialog.close());
+// transitions-dev modal close (06-modal.md): play .is-closing (150ms) before
+// .close() so exit mirrors enter; Escape stays instant (native), class is
+// cleaned on 'close'. Timing reads --modal-close-dur to stay in sync with CSS.
+function closeSettingsAnimated() {
+  if (!settingsDialog.open || settingsDialog.classList.contains('is-closing')) return;
+  const closeMs = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--modal-close-dur')
+  ) || 150;
+  settingsDialog.classList.add('is-closing');
+  setTimeout(() => settingsDialog.close(), closeMs);
+}
+settingsDialog.addEventListener('close', () => settingsDialog.classList.remove('is-closing'));
+settingsDialog.querySelector('.dialog-close').addEventListener('click', closeSettingsAnimated);
 
 // Without a model every AI action fails in the console and the editor just
 // looks broken. Send the writer to the one place that fixes it instead.
@@ -743,7 +839,12 @@ const keyToggleEl = document.getElementById('key-toggle');
 function syncKeyAdd() {
   keyAddEl.disabled = !apiKeyEl.value.trim();
 }
-apiKeyEl.addEventListener('input', syncKeyAdd);
+apiKeyEl.addEventListener('input', () => {
+  syncKeyAdd();
+  // transitions-dev error shake: typing clears the error at once.
+  if (apiKeyEl._revertTimer) { clearTimeout(apiKeyEl._revertTimer); apiKeyEl._revertTimer = null; }
+  apiKeyEl.classList.remove('is-error');
+});
 apiKeyEl.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !keyAddEl.disabled) { event.preventDefault(); keyAddEl.click(); }
 });
@@ -769,10 +870,35 @@ async function addProviderKey() {
     renderModelSettings();
     renderSuggestSettings();
     renderCredentials();
-  } catch (error) { settingsError.textContent = error.message; }
+  } catch (error) {
+    settingsError.textContent = error.message;
+    showKeyError();
+  }
   finally { syncKeyAdd(); }
 }
 keyAddEl.addEventListener('click', addProviderKey);
+
+// transitions-dev error state shake (12-error-state-shake.md): replay the
+// shake from a clean baseline, hold the border long enough to read the
+// message, then fade back to neutral. Timer tracks the latest call.
+function showKeyError() {
+  const cs = getComputedStyle(document.documentElement);
+  const ms = (name, fb) => {
+    const v = parseFloat(cs.getPropertyValue(name));
+    return Number.isFinite(v) ? v : fb;
+  };
+  apiKeyEl.classList.add('is-error');
+  apiKeyEl.classList.remove('is-shaking');
+  void apiKeyEl.offsetWidth; // flush the rest state so the shake replays
+  apiKeyEl.classList.add('is-shaking');
+  const shakeMs = ms('--shake-dur-a', 80) * 2 + ms('--shake-dur-b', 60) * 2;
+  setTimeout(() => apiKeyEl.classList.remove('is-shaking'), shakeMs + 20);
+  if (apiKeyEl._revertTimer) clearTimeout(apiKeyEl._revertTimer);
+  apiKeyEl._revertTimer = setTimeout(() => {
+    apiKeyEl._revertTimer = null;
+    apiKeyEl.classList.remove('is-error');
+  }, shakeMs + ms('--revert-hold', 3000));
+}
 
 async function removeProviderKey(provider) {
   settingsError.textContent = '';
@@ -894,12 +1020,20 @@ async function pollOAuth() {
       renderModelSettings();
       renderSuggestSettings();
       renderCredentials();
+      // The chip reads oauthInfo.supported: re-read it, or the just-signed-in
+      // subscription keeps showing "not connected / Sign in" until reopen.
+      await refreshOAuth();
     }
   } catch { oauthTimer = setTimeout(pollOAuth, 5000); }
 }
 
 async function startOAuthFlow(provider, method) {
   settingsError.textContent = '';
+  // Popup blockers only honour windows opened inside the click itself, and
+  // the auth URL arrives after a round-trip — so park a blank tab now and
+  // navigate it once the URL lands. If it never lands, the link in the flow
+  // box below takes over as the manual fallback.
+  const authTab = method === 'browser' ? window.open('about:blank', '_blank') : null;
   try {
     oauthInfo = await api('/api/agent/oauth/start', {
       method: 'POST',
@@ -908,7 +1042,15 @@ async function startOAuthFlow(provider, method) {
     oauthCodeEl.value = '';
     renderSubscriptions();
     pollOAuth();
-  } catch (error) { settingsError.textContent = error.message; }
+    const url = oauthInfo.active?.url;
+    if (authTab) {
+      if (url) authTab.location.href = url;
+      else authTab.close();
+    }
+  } catch (error) {
+    try { authTab?.close(); } catch {}
+    settingsError.textContent = error.message;
+  }
 }
 
 async function refreshOAuth() {
@@ -961,19 +1103,10 @@ class GhostWidget extends WidgetType {
   eq(other) { return other.text === this.text; }
 
   toDOM() {
-    const panel = document.createElement('div');
-    panel.className = 'cm-suggest';
-
-    const body = document.createElement('span');
-    body.className   = 'cm-suggest-text';
-    body.textContent = this.text;
-
-    const hint = document.createElement('span');
-    hint.className   = 'cm-suggest-hint';
-    hint.textContent = 'Tab';
-
-    panel.append(body, hint);
-    return panel;
+    const span = document.createElement('span');
+    span.className   = 'cm-suggest';
+    span.textContent = this.text;
+    return span;
   }
 
   ignoreEvent() { return true; }
@@ -996,21 +1129,20 @@ const ghostField = StateField.define({
     return val;
   },
 
-  // Render as a block panel below the line — never inside the writer's sentence
+  // Inline after the caret, as faded text. Suggestions only fire at a
+  // paragraph end, so nothing of the writer's is pushed aside.
   provide: f => EditorView.decorations.from(f, ghost => {
     if (!ghost) return Decoration.none;
-    const w = Decoration.widget({ widget: new GhostWidget(ghost.text), side: 1, block: true });
-    return Decoration.set([w.range(ghost.line)]);
+    const w = Decoration.widget({ widget: new GhostWidget(ghost.text), side: 1 });
+    return Decoration.set([w.range(ghost.pos)]);
   }),
 });
 
 function ghostShow(view, text) {
   const pos = view.state.selection.main.head;
-  const line = view.state.doc.lineAt(pos).to;
   view.dispatch({
-    // The panel is a block below the line, so reserve its own height on top of
-    // the strip the chat already covers — otherwise it opens out of sight.
-    effects: [setGhostFx.of({ text, pos, line }), EditorView.announce.of(`Suggestion: ${text.trim()}. Tab to accept; Escape to dismiss.`), EditorView.scrollIntoView(line, { y: 'nearest', yMargin: 72 })],
+    // The margin keeps the continuation clear of the chat strip.
+    effects: [setGhostFx.of({ text, pos }), EditorView.announce.of(`Suggestion: ${text.trim()}. Tab to accept; Escape to dismiss.`), EditorView.scrollIntoView(pos, { y: 'nearest', yMargin: 72 })],
   });
 }
 
@@ -1218,8 +1350,28 @@ function currentRanges() {
 function syncReviewLabel() {
   const count = workView.state.field(reviewField).size;
   reviewButton.classList.toggle('has-findings', count > 0);
-  reviewButton.textContent = reviewButton.disabled ? 'Checking…' : 'Slop';
+  swapRecipeLabel(reviewButton.disabled ? 'Checking…' : 'Slop');
   syncStyleScore();
+}
+// transitions-dev text states swap (04-text-states-swap.md): three-phase
+// label swap — exit up through blur, swap text, enter from below.
+function swapRecipeLabel(next) {
+  if (reviewButton.textContent === next) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    reviewButton.textContent = next;
+    return;
+  }
+  const dur = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--text-swap-dur')
+  ) || 150;
+  reviewButton.classList.add('swap-text', 'is-exit');
+  setTimeout(() => {
+    reviewButton.textContent = next;
+    reviewButton.classList.remove('is-exit');
+    reviewButton.classList.add('is-enter-start');
+    void reviewButton.offsetHeight; // flush the below-rest state
+    reviewButton.classList.remove('is-enter-start');
+  }, dur);
 }
 let jumpFrom = -1;
 function jumpToNextFinding(direction = 1) {
@@ -1374,8 +1526,12 @@ async function runReview() {
   try {
     const result = await reviewRequest({ document }, true);
     if (result.complete) for (const paragraph of reviewParagraphs(document)) checkedSentences.add(paragraph.key);
+    // Missing problem, cost or point in the opening is the symptom of a
+    // missing brief — nudge once, the marks stay the result either way.
+    if (reviewFindings.some(finding => finding.code === 'level-1-whole-essay' || finding.code === 'level-2-introduction')) maybeNudgeBrief();
   } catch (error) {
-    setReviewStatus(error.name === 'AbortError' ? 'Slop check stopped — findings kept' : `Slop check failed. ${modelError(error).say}`, error.message);
+    if (error.name === 'AbortError') setReviewStatus('Slop check stopped — findings kept', error.message);
+    else reviewFailed(error, 'Slop check', runReview);
   } finally { reviewButton.disabled = false; syncReviewLabel(); }
 }
 reviewButton.addEventListener('click', () => { workView.focus(); runReview(); });
@@ -1424,7 +1580,7 @@ autoReviewEl.addEventListener('change', () => {
 });
 
 // ─── Update check ──────────────────────────────────────────────────────────
-// Off unless the writer turns it on. Every other request Litura sends is one
+// Off unless the writer turns it on. Every other request Stilura sends is one
 // they started, and a background call to npm on every launch would quietly
 // make that untrue. Once a day is generous for a package that `npx` already
 // updates on its own — the badge is for the globally installed case.
@@ -1444,7 +1600,7 @@ function renderUpdate({ current, latest, error, managed }) {
   updateBadge.hidden = !stale;
   if (stale) {
     updateBadge.textContent = `${latest} available`;
-    updateBadge.title = 'Copy npx litura-app to update';
+    updateBadge.title = 'Copy npx stilura to update';
   }
   updateStatus.textContent =
     error  ? `Running ${current} — npm could not be reached.` :
@@ -1455,7 +1611,7 @@ function renderUpdate({ current, latest, error, managed }) {
 
 updateBadge.addEventListener('click', async () => {
   if (updateBadge.hidden) return;
-  const command = 'npx litura-app';
+  const command = 'npx stilura';
   try {
     await navigator.clipboard.writeText(command);
     updateBadge.textContent = `Copied: ${command}`;
@@ -1623,7 +1779,8 @@ async function autoReviewRun() {
     if (complete) for (const paragraph of pending) checkedSentences.add(paragraph.key);
     syncReviewLabel();
   } catch (error) {
-    setReviewStatus(error.name === 'AbortError' ? 'Automatic slop check stopped' : `Automatic slop check failed. ${modelError(error).say}`, error.message);
+    if (error.name === 'AbortError') setReviewStatus('Automatic slop check stopped', error.message);
+    else reviewFailed(error, 'Automatic slop check');
   } finally {
     autoReviewBusy = false;
     reviewButton.classList.remove('is-busy');
@@ -1752,7 +1909,7 @@ async function suggestFetch(manual = false) {
         else if (parsed.error) errorMsg = typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error);
       } catch {}
       const problem = modelError(new Error(errorMsg));
-      if (isCurrent()) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
+      if (suggestAbort === job && !job.signal.aborted) { setReviewStatus('', undefined, 'suggest'); reportSuggestFailure(problem, manual); }
       return;
     }
 
@@ -1774,7 +1931,7 @@ async function suggestFetch(manual = false) {
       else if (parsed.message) errorMsg = parsed.message;
     } catch {}
     const problem = modelError(new Error(errorMsg));
-    if (isCurrent()) setReviewStatus(`Suggestions failed. ${problem.say}`, problem.detail, 'suggest');
+    if (suggestAbort === job && !job.signal.aborted) { setReviewStatus('', undefined, 'suggest'); reportSuggestFailure(problem, manual); }
   } finally {
     finishJob(job);
     if (suggestAbort === job) suggestAbort = null;
@@ -1807,15 +1964,22 @@ function handleEnter(view) {
 }
 
 async function runIdeaExpansion(view, line) {
-  const target = { from: line.from, to: line.to, text: line.text, document: view.state.doc.toString() };
+  const document = view.state.doc.toString();
+  await expandIdea(line.text.slice(5).trim(), { from: line.from, to: line.to, text: line.text, document });
+}
+
+async function expandIdea(ideaText, target) {
   if (!await ensureAgent()) return;
+  // A short draft with no brief is entry C of the positioning-brief skill:
+  // nudge once, but still expand — blocking would punish the ask.
+  if (target.document.replace(/\s+/g, ' ').trim().length < 200) maybeNudgeBrief();
   const job = startJob();
   const bubble = chatAdd(chatEl('div', 'chat-entry is-agent', 'Expanding idea… Your draft is unchanged.'));
   let answer = '';
   try {
     const res = await fetch('/idea', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: job.signal,
-      body: JSON.stringify({ document: target.document, idea: line.text.slice(5).trim(), agent: currentAgent() }),
+      body: JSON.stringify({ document: target.document, idea: ideaText, agent: currentAgent(), context: combinedContext() || undefined }),
     });
     if (!res.ok) throw new Error('Could not expand idea');
     for await (const chunk of sseChunks(res)) {
@@ -2053,8 +2217,9 @@ function changeChatEdit(edit, undo = false) {
 const rail = document.getElementById('rail');
 const railAnchors = new Map();   // node → () => document position | null
 const railHomes = new Map();     // node → where it lives when there is no rail
-const RAIL_WIDTH = 220, RAIL_GUTTER = 24;   // .rail width in style.css
+const RAIL_WIDTH = 220, RAIL_GUTTER = 24;   // .rail width in style.css; the editor padding in the theme below assumes 2 × (RAIL_WIDTH + RAIL_GUTTER)
 let railOn = false;
+let railPaneLeft = 0;   // rail's left edge in pane coordinates (for notePlus and docked bubbles, which live outside the scroller)
 
 // The rail lives in the margin the centred text column leaves empty, so it is
 // available exactly when that margin can hold a note card and a gutter.
@@ -2066,11 +2231,14 @@ function syncRail() {
   const fits = margin >= RAIL_WIDTH + RAIL_GUTTER;
   if (fits) {
     // Beside the text, not against the window: the note belongs to the line.
-    // Measured against the pane, which is the rail's containing block — the
-    // rail's own offsetParent is null while it is still hidden.
+    // The rail rides inside the editor's scroller (see the append below), so
+    // its own left is in scroller coordinates; railPaneLeft keeps the pane
+    // coordinates for the overlays that stayed outside.
     const box = workView.contentDOM.getBoundingClientRect();
+    const scroller = workView.scrollDOM.getBoundingClientRect();
     const pane = document.getElementById('pane-work').getBoundingClientRect();
-    rail.style.left = `${box.right - margin - pane.left + RAIL_GUTTER}px`;
+    rail.style.left = `${box.right - margin - scroller.left + RAIL_GUTTER}px`;
+    railPaneLeft = box.right - margin - pane.left + RAIL_GUTTER;
   }
   if (fits === railOn) {
     rail.hidden = !fits || rail.children.length === 0;
@@ -2109,28 +2277,35 @@ function railAdd(node, anchor, home = chatStream) {
 function layoutRail() {
   syncRail();
   if (!railOn || !rail.children.length) return;
-  const top = rail.getBoundingClientRect().top;
+  const scroller = workView.scrollDOM;
+  // The rail spans the whole document and scrolls with it, so card tops are
+  // document coordinates: constant across scrolls, recomputed only on edits,
+  // resizes and card changes — never per scroll event, where JS repositioning
+  // lagged a frame behind composited text on momentum scrolling.
+  rail.style.height = `${scroller.scrollHeight}px`;
+  const scrollerTop = scroller.getBoundingClientRect().top;
+  const scrollTop = scroller.scrollTop;
   const placed = [...rail.children]
     .map(node => {
       const position = railAnchors.get(node)?.();
       const coords = position == null ? null : workView.coordsAtPos(position);
       // −3 to stand exactly where the paragraph "+" stands (see moveNotePlus).
-      return { node, at: coords && coords.top - top - 3 };
+      return { node, at: coords && coords.top - scrollerTop + scrollTop - 3 };
     })
     .filter(item => item.at !== null && item.at !== undefined)
     .sort((a, b) => a.at - b.at);
   for (const node of rail.children) node.style.visibility = 'hidden';
-  // Cards whose passage scrolled out of view go with it: above the edge they
-  // keep a negative top and slide away like the text (overflow clips them),
-  // fully-out ones stay hidden. Clamping to zero instead pinned them to the
-  // rail's top edge, where they sat while the draft scrolled underneath.
-  const railHeight = rail.clientHeight;
+  // Tops are always set fresh — an offscreen card keeps a correct top for
+  // when it scrolls back, since scrolling no longer re-runs this. Only
+  // visibility is culled to the viewport window; overflow clips the rest.
+  const viewTop = scrollTop;
+  const viewBottom = scrollTop + scroller.clientHeight;
   let floor = -Infinity;
   for (const item of placed) {
     const height = item.node.offsetHeight;
     const at = Math.max(item.at, floor);
-    if (at + height <= 0 || at >= railHeight) continue;
     item.node.style.top = `${at}px`;
+    if (at + height <= viewTop || at >= viewBottom) continue;
     item.node.style.visibility = 'visible';
     floor = at + height + 8;
   }
@@ -2531,14 +2706,16 @@ function renderNoteCard(note, card = noteCards.get(note.id)) {
   if (inStream || note.para === null) card.append(chatEl('div', 'note-quote', note.para === null ? scope : `“${scope}”`));
   const body = chatEl('div', 'note-text', note.text);
   body.addEventListener('click', event => { event.stopPropagation(); editNoteCard(note.id); });
-  card.append(body);
-  if (note.drifted) card.append(chatEl('div', 'note-meta', 'text changed — pinned to the paragraph'));
+  // The × stands inline, right after the last word: it is where the eye
+  // finishes reading, instead of a corner of a box that has no visible edge.
   const del = chatEl('button', 'note-del', '×');
   del.type = 'button';
   del.setAttribute('aria-label', 'Delete note');
   del.title = 'Delete note';
   del.addEventListener('click', event => { event.stopPropagation(); deleteNote(note.id); });
-  card.append(del);
+  body.append(del);
+  card.append(body);
+  if (note.drifted) card.append(chatEl('div', 'note-meta', 'text changed — pinned to the paragraph'));
 }
 
 function editNoteCard(id) {
@@ -2658,7 +2835,7 @@ function addNote({ para, quote, off = 0 }) {
 const notePlus = document.createElement('button');
 notePlus.type = 'button';
 notePlus.className = 'note-plus';
-notePlus.textContent = '+';
+notePlus.innerHTML = icon('plus');
 notePlus.title = 'Note on this paragraph';
 notePlus.setAttribute('aria-label', 'Add a note on this paragraph');
 notePlus.hidden = true;
@@ -2700,6 +2877,11 @@ function moveNotePlus(event) {
   const clientY = event.clientY;
   plusRaf = requestAnimationFrame(() => {
     plusRaf = 0;
+    // Measured now, not remembered: the rail's fit was last judged whenever a
+    // card or a resize last asked, and on a fresh load with no notes that was
+    // before the column had its final padding — the "+" never showed until
+    // the window was resized.
+    syncRail();
     // The "+" belongs to the rail: no rail, no plus. Hidden while dragging or
     // holding a selection (its bubble already offers Note) and before the
     // draft loads. An open bubble does not hide it: the Continue bubble after
@@ -2743,7 +2925,7 @@ function moveNotePlus(event) {
       const box = card.getBoundingClientRect();
       return coords.top >= box.top - 4 && coords.top <= box.bottom;
     })) { hideNotePlus(); return; }
-    const railLeft = parseFloat(rail.style.left) || 0;
+    const railLeft = railPaneLeft;
     if (!coords || !railLeft) { hideNotePlus(); return; }
     if (plusHideTimer) { clearTimeout(plusHideTimer); plusHideTimer = null; }
     const pane = document.getElementById('pane-work').getBoundingClientRect();
@@ -2821,6 +3003,162 @@ function notesBrief() {
     return `- On "${(live || note.quote).slice(0, 200)}": ${note.text}`;
   });
   return `WRITER'S MARGIN NOTES (the author's own remarks — weigh them, do not quote them back):\n${lines.join('\n')}`;
+}
+
+// ── Positioning brief (lite) ────────────────────────────────────────────────
+// Four questions from the positioning-brief skill (step 2: reader, goal,
+// awareness, scope). Static options, no model call — the writer picks or
+// types their own. Stored per-document as wa-brief, browser only. Sent with
+// chat, rewrites and ideas; never with review (it must judge the prose
+// unbiased) and never with suggestions (they fire on every pause).
+const BRIEF_STEPS = [
+  { key: 'reader', label: 'Reader', question: 'Who is this for?', options: ['Newcomer deciding if it fits', 'Practitioner getting something done', 'Existing user going deeper'] },
+  { key: 'goal', label: 'Goal', question: 'What should the page make them do?', options: ['Try it', 'Understand if it fits', 'Get started fast'] },
+  { key: 'awareness', label: 'Awareness', question: 'What do they already know?', options: ['Knows the problem, not solutions', 'Compares solutions', 'Knows us, needs how-to'] },
+  { key: 'scope', label: 'Scope', question: 'What are we writing?', options: ['One page', 'Landing + tutorial', 'README only'] },
+];
+let positionBrief = null;   // { reader, goal, awareness, scope, updatedAt, nudged }
+let briefSession = null;    // { step, answers, card } while the interview runs
+
+function saveBrief() {
+  if (positionBrief) docStorage.setItem('wa-brief', JSON.stringify(positionBrief));
+  else docStorage.removeItem('wa-brief');
+}
+function restoreBrief() {
+  const saved = safeJson(docStorage.getItem('wa-brief'), null);
+  positionBrief = saved && typeof saved === 'object' ? saved : null;
+  briefSession = null;
+}
+function briefComplete() {
+  return BRIEF_STEPS.every(step => typeof positionBrief?.[step.key] === 'string' && positionBrief[step.key].trim());
+}
+function briefContext() {
+  if (!briefComplete()) return '';
+  const lines = BRIEF_STEPS.map(step => `- ${step.label}: ${positionBrief[step.key]}`);
+  return `POSITIONING BRIEF (the author's answers about audience and goal — use it to judge fit, never to excuse weak prose):\n${lines.join('\n')}`;
+}
+function combinedContext() {
+  return [notesBrief(), briefContext()].filter(Boolean).join('\n\n');
+}
+
+function startBrief() {
+  dismissPassingNotice();
+  openIsland();
+  if (briefSession) { renderBriefQuestion(); chatInput.focus(); return; }
+  if (briefComplete()) { renderBriefSummary(); return; }
+  const answers = {};
+  for (const step of BRIEF_STEPS) {
+    if (typeof positionBrief?.[step.key] === 'string' && positionBrief[step.key].trim()) answers[step.key] = positionBrief[step.key];
+  }
+  const step = BRIEF_STEPS.findIndex(item => !answers[item.key]);
+  briefSession = { step: step === -1 ? 0 : step, answers, card: null };
+  renderBriefQuestion();
+  chatInput.focus();
+}
+
+function renderBriefQuestion() {
+  if (!briefSession) return;
+  briefSession.card?.remove();
+  const step = BRIEF_STEPS[briefSession.step];
+  const card = chatEl('div', 'chat-entry is-agent brief-card');
+  const head = chatEl('div', 'brief-head');
+  head.append(chatEl('span', 'brief-kicker', 'Positioning brief'));
+  head.append(chatEl('span', 'brief-step', `${briefSession.step + 1} of ${BRIEF_STEPS.length}`));
+  card.append(head);
+  card.append(chatEl('p', 'brief-question', step.question));
+  const options = chatEl('div', 'brief-options');
+  options.setAttribute('role', 'group');
+  options.setAttribute('aria-label', step.question);
+  for (const option of step.options) {
+    const pick = chatEl('button', 'brief-option', option);
+    pick.type = 'button';
+    pick.addEventListener('click', () => answerBriefStep(option));
+    options.append(pick);
+  }
+  card.append(options);
+  const foot = chatEl('div', 'brief-foot');
+  foot.append(chatEl('span', 'variant-hint', 'Or type your own answer below.'));
+  const skip = chatEl('button', 'brief-skip', 'Skip for now');
+  skip.type = 'button';
+  skip.addEventListener('click', () => cancelBrief());
+  foot.append(skip);
+  card.append(foot);
+  briefSession.card = chatAdd(card);
+}
+
+function answerBriefStep(text) {
+  if (!briefSession) return;
+  const clean = String(text ?? '').trim();
+  if (!clean) return;
+  const step = BRIEF_STEPS[briefSession.step];
+  briefSession.answers[step.key] = clean.slice(0, 200);
+  positionBrief = { ...(positionBrief || {}), ...briefSession.answers, nudged: true };
+  saveBrief();
+  briefSession.card?.remove();
+  briefSession.card = null;
+  if (briefSession.step < BRIEF_STEPS.length - 1) {
+    briefSession.step += 1;
+    renderBriefQuestion();
+    return;
+  }
+  finishBrief();
+}
+
+function finishBrief() {
+  positionBrief = { ...briefSession.answers, updatedAt: Date.now(), nudged: true };
+  briefSession = null;
+  saveBrief();
+  renderBriefSummary();
+  notify('Brief saved — rewrites, chat and ideas now use it.');
+}
+
+function renderBriefSummary() {
+  const card = chatEl('div', 'chat-entry is-agent brief-card');
+  const head = chatEl('div', 'brief-head');
+  head.append(chatEl('span', 'brief-kicker', 'Positioning brief'));
+  if (positionBrief.updatedAt) head.append(chatEl('span', 'brief-step', new Date(positionBrief.updatedAt).toLocaleDateString()));
+  card.append(head);
+  const rows = chatEl('div', 'brief-rows');
+  for (let index = 0; index < BRIEF_STEPS.length; index++) {
+    const step = BRIEF_STEPS[index];
+    const row = chatEl('div', 'brief-row');
+    row.append(chatEl('span', 'brief-label', step.label));
+    row.append(chatEl('span', 'brief-value', positionBrief[step.key]));
+    const edit = chatEl('button', 'brief-edit', 'Edit');
+    edit.type = 'button';
+    edit.setAttribute('aria-label', `Edit ${step.label.toLowerCase()}`);
+    edit.addEventListener('click', () => {
+      briefSession = { step: index, answers: { ...positionBrief }, card: null };
+      card.remove();
+      renderBriefQuestion();
+      chatInput.focus();
+    });
+    row.append(edit);
+    rows.append(row);
+  }
+  card.append(rows);
+  const meta = 'Used for rewrites, chat and ideas — never for review. Type /brief to review.';
+  card.append(chatEl('p', 'variant-hint', meta));
+  chatAdd(card);
+}
+
+function cancelBrief() {
+  if (!briefSession) return;
+  briefSession.card?.remove();
+  // Keep partial answers so /brief resumes where it stopped.
+  positionBrief = { ...(positionBrief || {}), ...briefSession.answers, nudged: true };
+  briefSession = null;
+  saveBrief();
+}
+
+// One passing notice per document: the writer did not ask, so it fades.
+function maybeNudgeBrief() {
+  if (briefComplete() || positionBrief?.nudged) return;
+  positionBrief = { ...(positionBrief || {}), nudged: true };
+  saveBrief();
+  notify('Who is this for? Answer 4 quick questions so rewrites aim at your reader.', {
+    action: () => startBrief(), label: 'Answer 4 questions', key: 'brief', icon: 'info',
+  });
 }
 
 // Clicking a note's mark reads the note: the editor scrolls the passage into
@@ -2997,7 +3335,7 @@ function placeDockedBubble(pos, dock) {
   markBubble.hidden = false;
   const h = markBubble.getBoundingClientRect().height;
   const pane = document.getElementById('pane-work').getBoundingClientRect();
-  const x = dock === 'margin' ? pane.left + (parseFloat(rail.style.left) || 0) : coords.left + 12;
+  const x = dock === 'margin' ? pane.left + railPaneLeft : coords.left + 12;
   const y = (coords.top + coords.bottom) / 2 - h / 2;
   placeBubble(x, y, { pos, dx: x - coords.left, dy: y - coords.top, dock }, dock);
   return true;
@@ -3631,7 +3969,7 @@ async function requestVariants(instruction, existingTarget = null, card = null) 
         from:        range.from,   // exact span, so the server marks the right occurrence
         instruction,
         agent:       currentAgent(),
-        context:     notesBrief() || undefined,
+        context:     combinedContext() || undefined,
       }),
     });
     const data = await res.json();
@@ -3739,12 +4077,154 @@ function collapseStreamBehind(card) {
   chatClear.title = 'Show the conversation';
 }
 
+// ── Slash commands ──────────────────────────────────────────────────────────
+//
+//  Granola-style menu over the composer: icon, name and one line of
+//  description per row, filtered as the writer types after /. ↑↓ move,
+//  Enter/Tab runs, Esc closes. Picking a command that takes text with none
+//  typed yet fills the field so the writer finishes the thought there.
+//  The menu only lives while the field holds a bare /name — once arguments
+//  follow, Enter runs instead of picking.
+const SLASH_COMMANDS = [
+  {
+    name: 'idea', icon: 'bulb', title: 'Expand idea',
+    desc: 'Turn a rough thought into a passage at the caret',
+    takesArgs: true,
+    run(args) {
+      if (!args.trim()) { notify('Write the idea after /idea.'); return; }
+      const head = workView.state.selection.main.head;
+      expandIdea(args.trim(), { from: head, to: head, text: '', document: workView.state.doc.toString() }).catch(console.error);
+    },
+  },
+  {
+    name: 'brief', icon: 'target', title: 'Positioning brief',
+    desc: 'Answer 4 questions about reader and goal',
+    takesArgs: false,
+    run() {
+      if (briefSession) {
+        briefSession.card?.remove();
+        // Keep partial answers so the fresh interview resumes where it stopped.
+        positionBrief = { ...(positionBrief || {}), ...briefSession.answers, nudged: true };
+        briefSession = null;
+        saveBrief();
+      }
+      clearNotice('brief');
+      startBrief();
+    },
+  },
+];
+
+const slashMenu = document.getElementById('slash-menu');
+let slashActive = -1;     // index into the current filtered rows
+let slashDismissed = '';  // field value Esc dismissed the menu for
+
+// A bare /name with nothing after it; null once arguments follow or the
+// field is anything else.
+function slashQuery() {
+  const match = chatInput.value.match(/^\/([A-Za-z]*)$/);
+  return match ? match[1].toLowerCase() : null;
+}
+function slashMatches() {
+  const query = slashQuery();
+  if (query === null) return [];
+  return SLASH_COMMANDS.filter(item => item.name.startsWith(query));
+}
+function setSlashActive(index) {
+  slashActive = index;
+  const rows = [...slashMenu.querySelectorAll('.slash-item')];
+  rows.forEach((row, at) => {
+    const on = at === index;
+    row.classList.toggle('is-active', on);
+    row.setAttribute('aria-selected', String(on));
+  });
+  if (rows[index]) {
+    rows[index].scrollIntoView({ block: 'nearest' });
+    chatInput.setAttribute('aria-activedescendant', rows[index].id);
+  } else chatInput.removeAttribute('aria-activedescendant');
+}
+function pickSlash(item) {
+  slashMenu.hidden = true;
+  chatInput.removeAttribute('aria-activedescendant');
+  if (item.takesArgs) {
+    // Leave the thought to the writer: fill the command and hand back focus.
+    chatInput.value = `/${item.name} `;
+    chatResize();
+    chatInput.focus();
+    return;
+  }
+  chatInput.value = '';
+  chatResize();
+  item.run('');
+}
+function renderSlashMenu() {
+  const query = slashQuery();
+  if (query === null || chatInput.value === slashDismissed || document.activeElement !== chatInput) {
+    slashMenu.hidden = true;
+    chatInput.setAttribute('aria-expanded', 'false');
+    chatInput.removeAttribute('aria-activedescendant');
+    return;
+  }
+  const matched = slashMatches();
+  slashMenu.replaceChildren();
+  if (!matched.length) {
+    slashMenu.append(chatEl('p', 'slash-empty', 'No matching command — try /idea or /brief.'));
+  } else {
+    if (slashActive < 0 || slashActive >= matched.length) slashActive = 0;
+    matched.forEach((item, index) => {
+      const row = chatEl('button', 'slash-item' + (index === slashActive ? ' is-active' : ''));
+      row.type = 'button';
+      row.id = `slash-item-${index}`;
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', String(index === slashActive));
+      const badge = chatEl('span', 'slash-icon', '');
+      badge.innerHTML = icon(item.icon);
+      badge.setAttribute('aria-hidden', 'true');
+      const text = chatEl('span', 'slash-text', '');
+      const name = chatEl('span', 'slash-name', item.title + ' ');
+      name.append(chatEl('span', 'slash-cmd', `/${item.name}`));
+      text.append(name, chatEl('span', 'slash-desc', item.desc));
+      row.append(badge, text);
+      // Mousedown would blur the composer and hide the menu before the click
+      // lands; the click then reads as leaving the field. Hold focus instead.
+      row.addEventListener('mousedown', event => event.preventDefault());
+      row.addEventListener('click', () => pickSlash(item));
+      row.addEventListener('mousemove', () => { if (slashActive !== index) setSlashActive(index); });
+      slashMenu.append(row);
+    });
+    chatInput.setAttribute('aria-activedescendant', `slash-item-${slashActive}`);
+  }
+  slashMenu.hidden = false;
+  chatInput.setAttribute('aria-expanded', 'true');
+}
+chatInput.addEventListener('input', () => { slashDismissed = ''; slashActive = -1; renderSlashMenu(); });
+chatInput.addEventListener('focus', renderSlashMenu);
+chatInput.addEventListener('blur', () => { slashMenu.hidden = true; });
+
 // ── Conversation ──
 
 async function chatSend() {
   // Sealed while the writer's own work runs — Stop first, then ask.
   if ([...jobs].some(job => !job.background)) return;
+  slashMenu.hidden = true;
   const text = chatInput.value.trim();
+  const slash = text.match(/^\/([A-Za-z]+)\s*([\s\S]*)$/);
+  if (slash) {
+    const command = SLASH_COMMANDS.find(item => item.name === slash[1].toLowerCase());
+    if (!command) { notify('No such command — try /idea or /brief.'); return; }
+    chatInput.value = '';
+    chatResize();
+    command.run(slash[2] || '');
+    return;
+  }
+  // While the brief interview runs the composer is its answer field.
+  if (briefSession) {
+    if (!text) return;
+    chatInput.value = '';
+    chatResize();
+    streamAppend(chatEl('div', 'chat-entry is-user', text));
+    answerBriefStep(text);
+    return;
+  }
   if (!text) return;
   if (!await ensureAgent()) return;
   chatInput.value = '';
@@ -3783,7 +4263,7 @@ async function streamReply(reply) {
         messages: chatHistory.map(({ role, content, edits }) => ({ role, content: content + (edits?.length ? `\n${EDITS_OPEN}${JSON.stringify(edits.map(({ label, quote, replacement, state }) => ({ label, quote, replacement, state })))}</litura-edits>` : '') })),
         document: request.document, selection: request.selection?.text,
         selectionRange: request.selection && { from: request.selection.from, to: request.selection.to }, agent: currentAgent(),
-        context: notesBrief() || undefined,
+        context: combinedContext() || undefined,
       }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Server error ${res.status}`);
@@ -3861,7 +4341,33 @@ syncSend();
 chatInput.addEventListener('input', chatResize);
 
 chatInput.addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); chatSend(); }
+  const menuOpen = !slashMenu.hidden;
+  if (menuOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    const matched = slashMatches();
+    if (matched.length) {
+      event.preventDefault();
+      const at = slashActive < 0 ? 0 : slashActive;
+      setSlashActive((at + (event.key === 'ArrowDown' ? 1 : -1) + matched.length) % matched.length);
+    }
+    return;
+  }
+  if (menuOpen && event.key === 'Tab') {
+    const matched = slashMatches();
+    if (matched.length) {
+      event.preventDefault();
+      pickSlash(matched[slashActive] ?? matched[0]);
+    }
+    return;
+  }
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    if (menuOpen) {
+      const matched = slashMatches();
+      if (matched.length) { pickSlash(matched[slashActive] ?? matched[0]); return; }
+      slashMenu.hidden = true;
+    }
+    chatSend();
+  }
   else if (event.key === 'Escape') {
     // Escape belongs to the composer only while it has something to give up.
     // A key with two owners is claimed by the inner one: stopPropagation, so
@@ -3869,6 +4375,18 @@ chatInput.addEventListener('keydown', event => {
     // nothing above can act on the same press. With nothing attached and no
     // request running, the key is left alone to reach the sidebar overlay.
     if (chatAbort && !chatAbort.signal.aborted) { chatAbort.abort(); event.stopPropagation(); return; }
+    if (menuOpen) {
+      slashDismissed = chatInput.value;
+      slashMenu.hidden = true;
+      chatInput.removeAttribute('aria-activedescendant');
+      event.stopPropagation();
+      return;
+    }
+    if (briefSession) {
+      cancelBrief();
+      event.stopPropagation();
+      return;
+    }
     if (attached) {
       detach();
       workView.focus();
@@ -4014,12 +4532,19 @@ const editorTheme = EditorView.theme({
     fontSize:   '17px',
     lineHeight: '1.75',
     overflowY:  'auto',
+    // Reserved on both edges, always: a draft that grows past the window (a
+    // note, a longer paragraph) brings a scrollbar, and without the gutter
+    // that took 8px from the right and slid the centred column left.
+    scrollbarGutter: 'stable both-edges',
   },
 
   // Editable content area — generous padding, centred like the old textarea
   '.cm-content': {
-    // The measure is set in characters, so it holds if the size changes.
-    padding:    '28px max(32px, calc((100% - 68ch) / 2))',
+    // The measure is set in characters, so it holds if the size changes. It
+    // gives way before the notes do: between 52ch and 68ch the column shrinks
+    // so the margin keeps room for the rail (RAIL_WIDTH + RAIL_GUTTER a side).
+    // Only below 52ch do notes fall back to the chat stream.
+    padding:    '28px max(32px, calc((100% - clamp(52ch, 100% - 2 * 244px, 68ch)) / 2))',
     caretColor: 'var(--accent)',
     color:      'var(--text)',
     minHeight:  '100%',
@@ -4039,45 +4564,16 @@ const editorTheme = EditorView.theme({
     background: 'color-mix(in srgb, var(--accent) 22%, transparent) !important',
   },
 
-  // ── Suggestion panel ───────────────────────────────────────────────────────
+  // ── Suggestion ─────────────────────────────────────────────────────────────
   //
-  //  A block widget below the current line, never inside the writer's own
-  //  sentence — nothing is added to the document until Tab is pressed.
-  //  Tab accepts, Escape dismisses.
+  //  Continuation text after the caret, same face as the draft but fainter.
+  //  Nothing is added to the document until Tab; accepted text is plain
+  //  document text, so it simply loses this class. Escape dismisses.
   //
   '.cm-suggest': {
-    display:       'flex',
-    alignItems:    'baseline',
-    gap:           '10px',
-    margin:        '4px 0 2px',
-    padding:       '6px 10px',
-    // Sits between two lines of the writer's own prose. It is an inset strip
-    // of the draft — not a floating chat card, which is what --overlay plus a
-    // shadow reads as — so it takes the sunken surface and no shadow. The
-    // accent edge is what names it as model-suggested.
-    border:        '1px solid var(--border-subtle)',
-    borderLeft:    '2px solid var(--accent)',
-    borderRadius:  '0 var(--r-sm) var(--r-sm) 0',
-    background:    'var(--surface-2)',
-    color:         'var(--text-2)',
+    opacity:       '0.45',
     pointerEvents: 'none',
     userSelect:    'none',
-  },
-
-  '.cm-suggest-text': { flex: '1' },
-
-  '.cm-suggest-hint': {
-    flexShrink:    '0',
-    padding:       '1px 6px',
-    borderRadius:  'var(--r-xs)',
-    background:    'var(--surface-3)',
-    // --text-2, not --muted: this chip sits on --surface-3, where --muted is
-    // 3.83:1 and misses AA at 11px. One step down from --text is still the
-    // quietest ink that passes.
-    color:         'var(--text-2)',
-    fontFamily:    'var(--ui-font)',
-    fontSize:      '11px',
-    letterSpacing: '.02em',
   },
 
   // The attached passage. Survives losing focus, unlike a native selection —
@@ -4167,13 +4663,14 @@ const editorTheme = EditorView.theme({
 
 // ─── Editor setup ──────────────────────────────────────────────────────────────
 
+const historyComp = new Compartment();
 const workView = new EditorView({
   state: EditorState.create({
     doc: '',
 
     extensions: [
       // Undo/redo
-      history(),
+      historyComp.of(history()),
 
       // ── Keymaps (highest priority first) ──────────────────────────────────
       //
@@ -4385,6 +4882,13 @@ const workView = new EditorView({
   parent: editorWrap,
 });
 
+// The rail rides inside the editor's scroller so note cards composite with
+// the text instead of chasing it per scroll event (see layoutRail).
+workView.scrollDOM.appendChild(rail);
+// Content reflow (font arrival, zoom, wrap change) moves anchors without an
+// edit: the rail's tops are document coordinates, so follow the content.
+new ResizeObserver(() => layoutRail()).observe(workView.contentDOM);
+
 // The dictionary is a couple hundred KB; fetch it once in the background and
 // mark whatever is already on the page as soon as it lands.
 loadSpellDictionary().then(spell => {
@@ -4438,6 +4942,7 @@ function dialog(title) {
 }
 function loadFromDisk(text) {
   loadingDocument = true;
+  autosaveHold = false;   // the document is replaced — no delete to guard
   reviewState = 'idle'; reviewNotice = ''; keptStyle = []; removeLocalFinding();
   chatEditCards.clear();
   scoreDetails.hidePopover();
@@ -4450,6 +4955,9 @@ function loadFromDisk(text) {
   clearReview();
   discardNoteCards();
   docStorage.removeItem('wa-notes');
+  docStorage.removeItem('wa-brief');
+  positionBrief = null;
+  if (briefSession) { briefSession.card?.remove(); briefSession = null; }
   chatHistory = []; chatStream.replaceChildren(); findingCards.clear();
   docStorage.removeItem('wa-chat');
   docStorage.removeItem('wa-kept-wording');
@@ -4467,19 +4975,33 @@ function replaceDraft(text, message) {
 }
 function saveToDisk() {
   clearTimeout(diskTimer);
-  if (savePaused || loadingDocument || diskHold) return;
+  if (savePaused || loadingDocument || diskHold || autosaveHold) return;
   // Routine saves are silent: autosave is expected to work, and a Saved /
   // Unsaved flicker on every pause reports nothing the writer can act on.
   // The header speaks only when attention is needed (error, conflict).
   diskTimer = setTimeout(flushSave, 800);
 }
-async function flushSave() {
-  if (saving || savePaused || loadingDocument || diskHold) return;
+function draftUrl(suffix = '') {
+  return `/draft${suffix}` + (documentName ? `?name=${encodeURIComponent(documentName)}` : '');
+}
+function openDocumentText(text) {
+  // Drop the previous file's undo stack before installing the new text.
+  workView.dispatch({ effects: historyComp.reconfigure([]) });
+  workView.dispatch({
+    changes: { from: 0, to: workView.state.doc.length, insert: text },
+    effects: historyComp.reconfigure(history()),
+    annotations: Transaction.addToHistory.of(false),
+  });
+}
+function flushSave() {
+  if (saving) return savePromise;
+  if (savePaused || loadingDocument || diskHold) return;
   const text = workView.state.doc.toString();
   if (text === diskText && diskRevision !== 'missing') return;
   saving = true;
+  savePromise = (async () => {
   try {
-    const response = await fetch('/draft', {
+    const response = await fetch(draftUrl(), {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, revision: diskRevision }),
     });
@@ -4487,6 +5009,7 @@ async function flushSave() {
     if (response.status === 409) { handleFreshDisk(data.current); return; }
     if (!response.ok) throw new Error(data.error || 'Save failed');
     noteDiskBaseline(text, data.revision);
+    autosaveHold = false;   // any successful save resumes the schedule
     // A recovered save clears a previous error line, then goes quiet again.
     clearNotice('disk');
   } catch (error) {
@@ -4499,8 +5022,11 @@ async function flushSave() {
       () => { savePaused = false; saveToDisk(); }, 'Retry saving', 'disk');
   } finally {
     saving = false;
+    savePromise = null;
     if (!savePaused && workView.state.doc.toString() !== diskText) saveToDisk();
   }
+  })();
+  return savePromise;
 }
 function save() {
   docStorage.setItem('wa-working', workView.state.doc.toString());
@@ -4543,7 +5069,7 @@ function adoptDiskText(current, announce = false) {
   workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: current.text } });
   noteDiskBaseline(current.text, current.revision);
   diskHold = false; hideDriftBanner(); save();
-  if (announce) notify('Reloaded from disk — it changed outside Litura.');
+  if (announce) notify('Reloaded from disk — it changed outside Stilura.');
 }
 function showDriftBanner(current) {
   driftCurrent = current;
@@ -4603,14 +5129,14 @@ document.getElementById('drift-keep').addEventListener('click', () => {
 async function initializeDocument() {
   try {
     const current = await api('/draft');
-    documentKey = 'litura:' + current.id + ':';
-    documentName = current.path.split(/[\\/]/).pop();
+    documentKey = 'litura:' + current.id + ':';   // stable prefix: renaming it would strand browser drafts
+    documentName = current.name ?? current.path.split(/[\\/]/).pop();
     // Captured before the baseline below is rewritten: it tells a reopen
     // with unsaved work apart from a file that moved while we were away.
     const driftBase = lastDiskBaseline();
     noteDiskBaseline(current.text, current.revision);
     const cached = docStorage.getItem('wa-working');
-    workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: cached ?? current.text } });
+    openDocumentText(cached ?? current.text);
     loadingDocument = false;
     editorSetReadonly(workView, false);
     // The text that was already here is not something the writer just
@@ -4626,7 +5152,7 @@ async function initializeDocument() {
       if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
     } catch {}
     workView.dispatch({ effects: refreshStyleFx.of(null) });
-    restoreFindings(); restoreChat(); restoreNotes(); syncStyleScore(); renderFileList();
+    restoreFindings(); restoreChat(); restoreNotes(); restoreBrief(); syncStyleScore(); renderFileList();
     // A reopen with unsaved work is not a conflict when the disk stood
     // still — only a disk that moved while we were away earns the banner.
     if (cached !== null) {
@@ -4635,22 +5161,27 @@ async function initializeDocument() {
       else if (verdict === 'diverged') showDriftBanner(current);
     }
     else clearNotice('disk');
+    saveToDisk();
     const legacy = localStorage.getItem('wa-working');
     if (legacy !== null && legacy !== current.text && !docStorage.getItem('legacy-offered')) {
-      notify('A draft from the previous Litura version was found.', {
+      notify('A draft from the previous Stilura version was found.', {
         action: () => { exportText(legacy, 'legacy-draft.md'); docStorage.setItem('legacy-offered', 'yes'); },
         label: 'Export', sticky: true,
       });
     }
   } catch (error) {
-    notifyProblem({ say: 'Litura could not open the draft.', act: 'retry', detail: error.message }, initializeDocument, 'Retry', 'disk');
+    // The try also covers restoring saved state, so a failure here is not always the network.
+    console.error('[open draft]', error);
+    notifyProblem({ say: 'Stilura could not open the draft.', act: 'retry', detail: error.message }, initializeDocument, 'Retry', 'disk');
   }
 }
 initializeDocument();
 async function checkDiskDrift() {
-  if (loadingDocument || saving) return;
+  if (loadingDocument || switchingDocument || saving || autosaveHold) return;
+  const key = documentKey;
   try {
-    const current = await api('/draft');
+    const current = await api(draftUrl());
+    if (key !== documentKey || switchingDocument) return;
     if (current.revision !== diskRevision) handleFreshDisk(current);
   } catch (error) { notify('Cannot check disk: ' + error.message, { sticky: true, key: 'disk' }); }
 }
@@ -4667,16 +5198,23 @@ document.getElementById('file-new').addEventListener('click', () => {
   workView.focus();
 });
 document.getElementById('file-export').addEventListener('click', async () => {
-  const handle = await showSaveFilePicker({
+  try {
+  if (typeof window.showSaveFilePicker !== 'function') {
+    exportText(workView.state.doc.toString(), documentName);
+    return;
+  }
+  const handle = await window.showSaveFilePicker({
     suggestedName: documentName,
     types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.markdown'], 'text/plain': ['.txt'] } }],
-  }).catch(() => null);
-  if (!handle) return;
+  });
   const writable = await handle.createWritable();
   await writable.write(workView.state.doc.toString());
   await writable.close();
   refreshFileList();
   workView.focus();
+  } catch (error) {
+    if (error.name !== 'AbortError') notify(`Could not export: ${error.message}`, { sticky: true });
+  }
 });
 document.addEventListener('keydown', event => {
   if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return;
@@ -4815,15 +5353,22 @@ async function refreshFileList() {
 // saved, and its browser copy, chat and findings wait under their own storage
 // key until it is opened again.
 async function switchDocument(name) {
-  if (loadingDocument || name === documentName) { workView.focus(); return; }
-  // Flush pending edits to the current file before the server retargets:
-  // after POST /draft/open every save lands on the new file.
+  if (loadingDocument || switchingDocument || desktopSaving || name === documentName) { workView.focus(); return; }
+  switchingDocument = true;
+  editorSetReadonly(workView, true);
+  for (const job of jobs) job.abort();
+  cancelSuggestion();
+  try {
+  // Finish both the in-flight save and any newer keystrokes before switching.
   try {
     clearTimeout(diskTimer);
-    if (!savePaused && !diskHold) await flushSave();
-    saveChat(); saveFindings(); saveKeptStyle(); saveNotes();
+    if (!savePaused && !diskHold && !autosaveHold) await flushSave();
+    if (!savePaused && !diskHold && !autosaveHold) await flushSave();
+    clearTimeout(diskTimer);
+    saveChat(); saveFindings(); saveKeptStyle(); saveNotes(); saveBrief();
     saveSnapshot('Before switching document');
   } catch {}
+  autosaveHold = false;   // moving on ends the deleted-file episode
   let current;
   try {
     current = await api('/draft/open', { method: 'POST', body: JSON.stringify({ name }) });
@@ -4842,6 +5387,8 @@ async function switchDocument(name) {
   discardFindingCards();
   discardNoteCards();
   for (const stale of document.querySelectorAll('.chat-variants')) stale.remove();
+  positionBrief = null;
+  briefSession = null;
   clearPlainPreview();
   reviewFindings = [];
   focusedFindingId = null; jumpFrom = -1;
@@ -4852,7 +5399,7 @@ async function switchDocument(name) {
   hideDriftBanner(); diskHold = false;
   // Retarget storage and the disk baseline onto the new file first: every
   // restore below reads under the new key.
-  documentKey = 'litura:' + current.id + ':';
+  documentKey = 'litura:' + current.id + ':';   // stable prefix: renaming it would strand browser drafts
   documentName = current.path.split(/[\\/]/).pop();
   // Captured before the baseline below is rewritten: it tells a reopen
   // with unsaved work apart from a file that moved while we were away.
@@ -4863,10 +5410,11 @@ async function switchDocument(name) {
   // Markdown soft break, so join wrapped lines back and keep real paragraph
   // breaks and structure. A cached copy was already unwrapped when saved.
   const opened = cached === null ? unwrapProse(current.text) : { text: cached, joined: 0 };
-  workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: opened.text } });
+  openDocumentText(opened.text);
   workView.dispatch({ effects: setReviewFx.of([]) });
   markVariantTarget(null);
   loadingDocument = false;
+  savePaused = false;
   // The text that was already here is not something the writer just
   // finished. Opening spends no model call, same as at startup: auditing the
   // whole document is what `Check for slop` is for.
@@ -4877,7 +5425,7 @@ async function switchDocument(name) {
     if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
   } catch {}
   workView.dispatch({ effects: refreshStyleFx.of(null) });
-  restoreFindings(); restoreChat(); restoreNotes(); syncStyleScore(); renderFileList();
+  restoreFindings(); restoreChat(); restoreNotes(); restoreBrief(); syncStyleScore(); renderFileList();
   // A reopen with unsaved work is not a conflict when the disk stood
   // still — only a disk that moved while we were away earns the banner.
   if (cached !== null) {
@@ -4896,6 +5444,11 @@ async function switchDocument(name) {
     notify(`Opened ${documentName}. Saves go to this file.`);
   }
   workView.focus();
+  } finally {
+    switchingDocument = false;
+    editorSetReadonly(workView, false);
+    saveToDisk();
+  }
 }
 const toggleSidebar = () => { setSidebar(sidebar.classList.contains('is-closed')); workView.focus(); };
 sidebarToggle.addEventListener('click', toggleSidebar);
@@ -4961,7 +5514,7 @@ document.getElementById('file-history').addEventListener('click', async () => {
   }
   search.addEventListener('input', renderHistory);
   try {
-    const { snapshots } = await api('/draft/history');
+  const { snapshots } = await api(draftUrl('/history'));
     const local = safeJson(docStorage.getItem('snapshots'), []);
     if (!Array.isArray(local)) throw new Error('Local history is corrupt');
     for (let i = 0; i < localStorage.length; i++) {
@@ -4980,6 +5533,52 @@ document.getElementById('file-history').addEventListener('click', async () => {
 
 // ─── Initial focus ─────────────────────────────────────────────────────────────
 
-workView.scrollDOM.addEventListener('scroll', () => { layoutRail(); hideNotePlus(); reanchorBubble(); }, { passive: true });
+workView.scrollDOM.addEventListener('scroll', () => { hideNotePlus(); reanchorBubble(); }, { passive: true });
 workView.focus();
 syncStyleScore();
+
+window.addEventListener('stilura-storage-error', event => {
+  notify(event.detail, { sticky: true, key: 'backup', action: () => localStorage.flush().catch(error => notify(error.message)), label: 'Retry saving' });
+});
+if (desktop) {
+  const events = new EventSource('/api/desktop/events');
+  function resumeDesktop() {
+    if (!desktopSaving) return;
+    desktopSaving = false;
+    document.body.inert = false;
+    editorSetReadonly(workView, loadingDocument || switchingDocument);
+  }
+  events.onerror = resumeDesktop;
+  events.onmessage = async event => {
+    const message = JSON.parse(event.data);
+    if (message.type === 'resume') { resumeDesktop(); return; }
+    if (message.type !== 'flush') return;
+    let error = '';
+    try {
+      if (loadingDocument || switchingDocument) throw new Error('Wait for the document to finish opening.');
+      document.activeElement?.blur();
+      desktopSaving = true;
+      document.body.inert = true;
+      editorSetReadonly(workView, true);
+      stopJobs();
+      clearTimeout(diskTimer);
+      if (savePaused || diskHold) throw new Error('Resolve the draft save error or disk conflict before closing.');
+      await flushSave();
+      // A save already in flight may have contained the previous keystroke.
+      if (!savePaused && !diskHold) await flushSave();
+      if (savePaused || diskHold || workView.state.doc.toString() !== diskText) throw new Error('The draft has not been saved.');
+      await localStorage.flush();
+    } catch (cause) { error = cause.message; resumeDesktop(); }
+    try {
+      await api('/api/desktop/flushed', { method: 'POST', body: JSON.stringify({ id: message.id, ok: !error, error }) });
+    } catch (cause) { resumeDesktop(); notify(cause.message, { sticky: true }); }
+  };
+}
+}
+main().catch(error => {
+  console.error(error);
+  const notice = document.createElement('p');
+  notice.textContent = `Stilura could not open: ${error.message} Reload to retry.`;
+  notice.setAttribute('role', 'alert');
+  document.body.prepend(notice);
+});

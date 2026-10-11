@@ -1,8 +1,8 @@
-# Litura - Product and Technical Specification
+# Stilura - Product and Technical Specification
 
 ## 1. Product
 
-Litura is a standalone local writing editor. It helps an author find generic prose, discuss a draft, and try alternative wording while keeping every document change under explicit user control.
+Stilura is a standalone local writing editor. It helps an author find generic prose, discuss a draft, and try alternative wording while keeping every document change under explicit user control. The name joins Latin *stilus* (the pen, the author's hand) and *litura* (the correction in a manuscript): writing as creating by cutting.
 
 The product does not claim to determine whether text was written by AI. Its review identifies named writing patterns only.
 
@@ -11,6 +11,7 @@ The product does not claim to determine whether text was written by AI. Its revi
 - The document stays central; assistant UI floats above it instead of replacing it.
 - Detection must name a concrete, checkable problem.
 - The model may suggest text but never edits the document autonomously.
+- Subtractive editing: the job is sharper prose, not more prose — buried points, broken promises, filler, and vague attribution go; the author's facts and voice stay.
 - Specific facts, unusual details, uncertainty, humor, and the author's voice should survive a rewrite.
 - Empty output is better than a low-quality suggestion.
 - Local analysis should avoid model calls when it can confidently do so.
@@ -54,7 +55,7 @@ Actions that spend a model call are not here: they live with the assistant, abov
 
 ### Rail
 
-The rail floats in the margin the centred text column already leaves empty, so the draft sits exactly where it sat before any card existed. It appears when that margin can hold a 300-pixel card and a gutter — measured from the text column's own padding, not assumed at a breakpoint.
+The rail floats in the margin the centred text column already leaves empty, so the draft sits exactly where it sat before any card existed. It appears when that margin can hold a 300-pixel card and a gutter — measured from the text column's own padding, not assumed at a breakpoint. The rail spans the document inside the editor scroller, so cards move with the text instead of being repositioned on every scroll event.
 
 - A remark about a place in the draft lives there: the focused finding card, with its rewrite options opening inside it while they are being tried on. Without a rail the focused card lives in the panel instead.
 - Only one card stands in the rail at a time. The marks in the draft are the overview and the navigation: clicking one focuses its card, and `F8` and `Shift+F8` step through them in document order. The focused card names its place (`2 of 5`) with `‹` `›` controls.
@@ -86,7 +87,7 @@ The panel keeps what is about the draft as a whole: typed messages, replies, `Re
 - A row of actions sits between the stream and the field: `Review draft` and one line of review status truncated to the leftover width. The rewrite strip joins that row only when the rail is not in the layout.
 - There is no findings list. The marks in the draft are the navigation: clicking one opens its card, and `F8` and `Shift+F8` step through them in document order.
 - An attached passage is named by a small chip, not quoted: the passage itself stays highlighted in the draft.
-- One field, no mode control. What the message does is decided by what is attached: a passage the writer selected is a rewrite target, a finding is something to ask about, and nothing attached is a conversation about the draft. The placeholder says which of the three is active.
+- One field, no mode control. What the message does is decided by what is attached: a passage the writer selected is a rewrite target, a finding is something to ask about, and nothing attached is a conversation about the draft. The placeholder says which of the three is active. Typing `/` opens the command menu — icon, name, and one line of description per row, filtered as the writer types; `↑` `↓` move, `Enter`/`Tab` runs, `Esc` closes.
 - `Enter` sends; `Shift+Enter` inserts a newline.
 - `Escape` cancels an active request or detaches the current selection.
 - Idle the whole chat is one pill, after Symbioen's DynamicIsland: a compact `Ask anything` (`Conversation • N` with a restored history) morphing into the full panel with a rise-and-unblur on the same ease as everything else. The pill opens both the field and the stream. A single control closes what the assistant is showing and opens it again: a `×` badge straddling the panel's top corner while open, `Conversation` over a closed one — and closing an empty, unstarted chat folds the whole island back into the pill. One press puts away both the turns and the finding cards standing in the rail — two `×` in two places for one idea is two presses to get a clean screen. `Escape` in an empty composer and clicking away from an unstarted chat fold it back too; a scroll never does.
@@ -210,7 +211,7 @@ A failed continuation says so in the notice; the next successful request clears 
 
 ### 3.7 `/idea` expansion
 
-Typing `/idea <instruction>` on a line and pressing `Enter` streams the expansion into the assistant panel, then offers it as a single option card — the same cards as a rewrite, with one option and no `Try again`. The command line is replaced only if the writer keeps it.
+Typing `/idea <instruction>` on a line and pressing `Enter` streams the expansion into the assistant panel, then offers it as a single option card — the same cards as a rewrite, with one option and no `Try again`. The command line is replaced only if the writer keeps it. `/idea <instruction>` in the composer does the same at the caret: keeping the option inserts the passage there. An empty span is a valid replacement scope for this path only.
 
 If the request fails or is stopped, whatever arrived stays in the panel as text and the command line is untouched.
 
@@ -219,7 +220,7 @@ If the request fails or is stopped, whatever arrived stays in the panel as text 
 The settings dialog:
 
 - discovers Pi credentials and supported provider environment variables;
-- lists the models each authenticated provider offers now, not the snapshot bundled with the Pi dependency. That snapshot ages, and a model added after it was published cannot be selected at all: Pi refuses a model its catalog does not know. Asking a provider what it offers is a call to the provider the writer already pointed the app at, so it needs no permission the app does not already have; `LITURA_OFFLINE_MODELS` stops it, and a failed refresh falls back to the list Pi already has;
+- lists the models each authenticated provider offers now, not the snapshot bundled with the Pi dependency. That snapshot ages, and a model added after it was published cannot be selected at all: Pi refuses a model its catalog does not know. Asking a provider what it offers is a call to the provider the writer already pointed the app at, so it needs no permission the app does not already have; `STILURA_OFFLINE_MODELS` stops it, and a failed refresh falls back to the list Pi already has;
 - offers provider and model as searchable comboboxes: a trigger naming the current choice, and a popover holding a search box and the matching rows, each naming one model. Typing still matches a model's id as well as its name — the writer who knows the id finds the row, and the row still reads as a name. Six hundred models do not fit a `select`, and a native `datalist` cannot stand in — its popup never reaches the top layer above a modal dialog, and a field already holding an answer filters the writer's typing against it. The popover API still supplies the top layer, light dismiss and `Escape`; `↑` `↓` walk the list and `Enter` takes the highlighted row;
 - lists authenticated providers and their available models;
 - exposes only thinking levels supported by the selected model;
@@ -230,11 +231,9 @@ The settings dialog:
   the default model when none of those is authenticated, and re-resolves when
   the catalog changes. Review, rewrite, chat, and /idea always use the default
   model above, never the suggestion one;
-- offers ChatGPT Plus/Pro sign-in (Codex OAuth) next to API keys, with the
-  quota warning inline: subscriptions count messages, and the automatic
-  checks send hundreds of small requests a day. Claude subscriptions are
-  deliberately not offered — Anthropic restricts them to Claude Code and
-  claude.ai;
+- offers ChatGPT Plus/Pro sign-in (Codex OAuth) next to API keys.
+  Claude subscriptions are deliberately not offered — Anthropic restricts
+  them to Claude Code and claude.ai;
 - saves the active provider/model/thinking selection to local storage;
 - adds and removes Pi API-key credentials;
 - does not offer removal for credentials supplied by environment variables;
@@ -253,9 +252,19 @@ The writer's own remarks on the draft. Three scopes, one rule: a selected passag
 - Clicking a note's mark focuses its card and arms nothing. Deleting offers `Undo`: a faint `×` always stands beside the note, `Delete`/`Backspace` on a focused card works too, and clearing the text deletes. Empty notes don't linger: leaving a fresh note empty removes it silently, clearing a note deletes it with `Undo`. The `+` is not offered beside a line a note's card already covers, so a second card is never stacked on the first.
 - Notes travel with chat and rewrite requests as `WRITER'S MARGIN NOTES` context, labeled by scope (passage, paragraph, whole draft). Suggestions and review stay note-free: suggestions fire on every pause, and review must judge the prose unbiased.
 
+### 3.10 Positioning brief (lite)
+
+Four questions about audience and goal — reader, goal, awareness, scope — from the positioning-brief skill. Typing `/brief` in the composer (or picking it from the command menu) starts the interview: one question at a time in the chat stream, each with three options to pick or a free-typed answer. `Escape` pauses it; partial answers are kept and `/brief` resumes. A finished brief shows a summary card with per-row `Edit`; typing `/brief` with a finished brief reopens the summary.
+
+Two nudges, each at most once per document as a passing notice: `/idea` on a draft under ~200 characters with no brief, and a full review that returns a `level-1-whole-essay` or `level-2-introduction` finding (a weak opening is the symptom of a missing brief). Both offer `Answer 4 questions` and never block the requested action. Creating, editing, and pausing the interview spends no model call.
+
+Answers travel with chat, rewrite, and idea requests as `POSITIONING BRIEF` context. Review and suggestions stay brief-free, for the same reason as notes.
+
 ## 4. State and privacy
 
-Document-specific browser keys use the prefix `litura:<id>:`, where `id` is the SHA-256 hash of the canonical draft path returned by the server. In the table below, document keys are relative to that prefix. Model and background-action settings remain shared within the browser origin.
+Document-specific browser keys use the prefix `litura:<id>:` — kept from the previous name, since renaming it would strand existing browser drafts — where `id` is the SHA-256 hash of the canonical draft path returned by the server. In the table below, document keys are relative to that prefix. Model and background-action settings remain shared within the browser origin.
+
+In the desktop app these keys also persist as atomic files in the application data directory's `editor-state` folder, independent of the HTTP port. Native close, folder changes, and update installation wait for the editor's draft and state writes to finish. Browser-only runs keep using local storage. Partial brief answers are saved after each answer. Opening a different document starts a fresh Undo history.
 
 | State | Location | Lifetime |
 |---|---|---|
@@ -266,8 +275,9 @@ Document-specific browser keys use the prefix `litura:<id>:`, where `id` is the 
 | Chat history | `wa-chat`, last 20 turns | Until document replacement or browser storage is cleared |
 | Findings | `wa-findings`, with the reviewed document text | Replaced by a successful full review; cleared on document replacement |
 | Margin notes | `wa-notes`, each with paragraph anchor and quote snapshot | Until note deletion or document replacement |
+| Positioning brief | `wa-brief`, four answers plus a nudged flag | Until document replacement or browser storage is cleared |
 | Dismissed findings | `dismissed`, last 100, tied to exact document text | Until document replacement or browser storage is cleared |
-| Disk history | `<draft>.litura-history`; latest 20 returned to the UI | No automatic deletion |
+| Disk history | `<draft>.litura-history` (name kept from the previous product name); latest 20 returned to the UI | No automatic deletion |
 | Browser checkpoints | `snapshots`, last 10; other tabs' working copies also appear in History | Checkpoints rotate; working copies remain until browser storage is cleared |
 | Automatic review setting | `localStorage["wa-autoreview"]`, on unless set to `off` | Until browser storage is cleared |
 | Continuation-suggestion setting | `localStorage["wa-autosuggest"]`, on unless set to `off` | Until browser storage is cleared |
@@ -276,19 +286,19 @@ Document-specific browser keys use the prefix `litura:<id>:`, where `id` is the 
 | Checked paragraphs | Browser memory, keyed by text, neighbours and model | Until reload or a full review reset |
 | API credentials | Pi credential storage or environment | Managed by Pi |
 
-Each edit updates the browser working copy and schedules a disk save after 800 milliseconds. Saves run one at a time. Each request includes the last known file revision; a stale revision returns `409` without overwriting the file. The server keeps the previous disk text, writes a temporary file, flushes it, rechecks the revision, and renames the temporary file over the draft. A lock coordinates saves between Litura processes; external editors do not participate in that lock.
+Each edit updates the browser working copy and schedules a disk save after 800 milliseconds. Saves run one at a time. Each request includes the last known file revision; a stale revision returns `409` without overwriting the file. The server keeps the previous disk text, writes a temporary file, flushes it, rechecks the revision, and renames the temporary file over the draft. A lock coordinates saves between Stilura processes; external editors do not participate in that lock.
 
 At startup, the editor waits for the server to identify and read the draft. It restores this tab's working copy when available, otherwise the document's shared browser copy, otherwise the disk text. An empty browser copy is distinct from a missing one. Legacy unscoped browser text is offered for export, not silently imported into another workspace.
 
-If browser and disk differ at startup, or the disk revision changes when the window regains focus or visibility, Litura never opens a modal. When the browser copy is untouched since the last confirmed save it takes the disk copy silently; when only one side moved there is nothing to decide. Only two genuinely diverged copies raise a slim banner above the draft — `Load disk`, `Keep mine`, and a `What changed` word diff — while the draft stays editable and only disk writes wait. Choosing a copy resumes revision-checked saving; another external change can raise the banner again. Nothing is merged automatically.
+If browser and disk differ at startup, or the disk revision changes when the window regains focus or visibility, Stilura never opens a modal. When the browser copy is untouched since the last confirmed save it takes the disk copy silently; when only one side moved there is nothing to decide. Only two genuinely diverged copies raise a slim banner above the draft — `Load disk`, `Keep mine`, and a `What changed` word diff — while the draft stays editable and only disk writes wait. Choosing a copy resumes revision-checked saving; another external change can raise the banner again. Nothing is merged automatically.
 
 Save errors remain visible and pause autosave until the writer retries. A failed request does not advance the recorded disk revision. The browser warns before leaving while a save is in flight or the working text differs from the last confirmed disk copy.
 
-Findings are restored only when their stored document text exactly matches the loaded draft, then their quotes are re-anchored. Chat restores messages, not finding cards or rewrite previews. Replacing the document clears findings, dismissed findings and chat, and keeps a browser checkpoint of the previous text. Keeping an AI replacement also creates a checkpoint. Rewrite previews alone change neither stored copy.
+Findings are restored only when their stored document text exactly matches the loaded draft, then their quotes are re-anchored. Chat restores messages, not finding cards or rewrite previews. Replacing the document clears findings, dismissed findings, chat, notes, and the brief, and keeps a browser checkpoint of the previous text. Keeping an AI replacement also creates a checkpoint. Rewrite previews alone change neither stored copy.
 
 `Cmd/Ctrl+S` requests an immediate disk save, respecting any paused conflict or error. `Export a copy` downloads the current text using the workspace draft's filename. `Open a file…` and drag-and-drop accept `.md`, `.markdown` and `.txt` files up to 1 MiB and replace the active document's contents without switching files. Opening a sidebar file switches the active document instead and opens hard-wrapped prose flowing: lone newlines inside a paragraph are Markdown soft breaks, so wrapped lines are joined back into paragraphs while blank-line breaks, lists, headings, quotes, fences and tables keep theirs. `New`, import and restore never ask first: the replaced text goes to History, and the notice offers `Undo` for a few seconds.
 
-Everything the app reports outside the conversation — save and load trouble, model errors, confirmations with `Undo` — takes over the conversation island, one at a time, the way an iPhone alert takes over the island: while one is up the composer, the pill and the recipes row step aside for it, buttons and all. Either input or notice, never both — summoning the composer dismisses a passing notice, a sticky problem keeps the input covered until its action or `×`, and a notice never covers a focused field (it parks until blur). Passing notices fade after eight seconds; the pointer resting on one holds it. Background progress (`Suggesting…`) shows in the pill itself while the island is folded. A chat answer never shows the raw edit list: a response that drops the `<litura-edits>` tags still yields edit cards.
+Everything the app reports outside the conversation — save and load trouble, model errors, confirmations with `Undo` — takes over the conversation island, one at a time, the way an iPhone alert takes over the island: while one is up the composer, the pill and the recipes row step aside for it, buttons and all. Either input or notice, never both — summoning the composer dismisses a passing notice, a sticky problem keeps the input covered until its action or `×`, and a notice never covers a focused field (it parks until blur). Passing notices fade after eight seconds; the pointer resting on one holds it. Background progress (`Suggesting…`) shows in the pill itself while the island is folded. A chat answer never shows the raw edit list: a response that drops the `<litura-edits>` tags (wire format, name kept) still yields edit cards.
 
 Every model-backed action sends the current full document to the selected provider. Rewrite and review requests additionally send the relevant selection or target passages.
 
@@ -311,11 +321,11 @@ The server is a Tauri sidecar: an official Node binary, fetched and checksummed 
 
 Three pieces of the contract between them are invisible from the browser, so `safetycheck.js` asserts them:
 
-- `PORT=0` lets the operating system pick, so a second copy of Litura is not a startup failure.
-- With `LITURA_SIDECAR` set the server prints `LITURA_READY <url>` on stdout. The shell waits for that line before it navigates the window, and opens no browser of its own.
+- `PORT=0` lets the operating system pick, so a second copy of Stilura is not a startup failure.
+- With `STILURA_SIDECAR` set the server prints `STILURA_READY <url>` on stdout. The shell waits for that line before it navigates the window, and opens no browser of its own.
 - The same flag makes the server exit when its stdin closes. A shell that dies takes its server with it instead of leaving one holding the draft's lock file.
 
-`LITURA_ROOT` tells the bundled server where `public/`, `package.json`, and `style.md` are, since the single-file bundle no longer sits beside them. Nothing else about the server changes.
+`STILURA_ROOT` tells the bundled server where `public/`, `package.json`, and `style.md` are, since the single-file bundle no longer sits beside them. Nothing else about the server changes.
 
 On macOS the window has no title bar of its own: the draft's header is the title bar, and the system's window buttons are drawn over it. The shell asks for the page with `?shell=desktop`, and an inline script in `index.html` turns that into a class the header uses to leave the buttons room — a query string rather than a header, so a reload keeps it. Windows and Linux keep their frame: dropping it there means reimplementing minimise, maximise, close, and window dragging, which would need Tauri's JavaScript API inside a page that is deliberately kept free of it.
 
@@ -326,7 +336,7 @@ The folder choice is one line of text in the app's config directory (`folder.txt
 ### File structure
 
 ```text
-litura/
+stilura/
 |- README.md            product overview and setup
 |- SPEC.md              product and technical behavior
 |- index.js             build step, HTTP server, routes, and prompts
@@ -456,21 +466,23 @@ Each review pass validates diagnostic codes against its assigned levels and chec
 | `PORT` | Local HTTP port; the next free port up to +10 is used if taken | `3000` |
 | `STYLE_FILE` | Writing style guide path | `<cwd>/style.md`, else the bundled `style.md` |
 | `DRAFT_FILE` | Draft mirror path | `<cwd>/draft.md` |
-| `LITURA_NO_OPEN` | Set to skip opening the browser at startup | unset |
-| `LITURA_OFFLINE_MODELS` | Set to stop Litura refreshing provider model lists | unset |
-| `LITURA_SIDECAR` | Set by the desktop shell: ready line, no browser, exit with stdin, updates handled by the shell | unset |
-| `LITURA_ROOT` | Directory holding `public/`, `package.json`, and `style.md` | the server's own directory |
-| `LITURA_NODE_VERSION` | Node runtime the desktop build ships | `v24.21.0` |
+| `STILURA_NO_OPEN` | Set to skip opening the browser at startup | unset |
+| `STILURA_OFFLINE_MODELS` | Set to stop Stilura refreshing provider model lists | unset |
+| `STILURA_SIDECAR` | Set by the desktop shell: ready line, no browser, exit with stdin, updates handled by the shell | unset |
+| `STILURA_ROOT` | Directory holding `public/`, `package.json`, and `style.md` | the server's own directory |
+| `STILURA_NODE_VERSION` | Node runtime the desktop build ships | `v24.21.0` |
+
+Every `STILURA_*` variable also honors its old `LITURA_*` spelling (`STILURA_*` wins when both are set), so setups from before the rename keep working.
 
 ## 9. Distribution and updates
 
-Litura is published to npm as `litura-app`; the command it installs is `litura`. It runs as `npx litura-app` from the folder holding the draft. For a bare package name npm re-resolves the registry manifest on every run, so starting Litura is the update; a global install (`npm i -g`) shadows that check and has to be updated by hand.
+Stilura is published to npm as `stilura`; the command it installs is `stilura` too. It runs as `npx stilura` from the folder holding the draft. For a bare package name npm re-resolves the registry manifest on every run, so starting Stilura is the update; a global install (`npm i -g`) shadows that check and has to be updated by hand.
 
-`litura --version` prints the running version. `litura --check-update` prints the published version next to it, and reports an unpublished package rather than comparing against nothing. Neither flag ranks the two versions: a local build legitimately runs ahead of the registry, and ordering semver correctly would be a dependency.
+`stilura --version` prints the running version. `stilura --check-update` prints the published version next to it, and reports an unpublished package rather than comparing against nothing. Neither flag ranks the two versions: a local build legitimately runs ahead of the registry, and ordering semver correctly would be a dependency.
 
 The desktop app is distributed as signed bundles attached to the GitHub release for the tag: `.dmg` and `.app.tar.gz` per macOS architecture, an NSIS installer on Windows, `.deb` and `.AppImage` on Linux. `.github/workflows/desktop.yml` builds one matrix entry per target and uploads them, along with the `latest.json` the updater reads.
 
-Updates there are the shell's, not npm's. On launch and from `Litura → Check for Updates…` it asks the release endpoint; an answer is installed only after the writer accepts, is verified against a minisign public key compiled into the app, and is followed by a restart. A launch-time check that cannot reach GitHub says nothing; a check the writer asked for reports why it failed. Because a second update path would be a second wrong answer, `/api/version` returns `managed: "desktop"` under `LITURA_SIDECAR`, contacts npm for nothing, and the frontend hides the update section of settings.
+Updates there are the shell's, not npm's. On launch and from `Stilura → Check for Updates…` it asks the release endpoint; an answer is installed only after the writer accepts, is verified against a minisign public key compiled into the app, and is followed by a restart. A launch-time check that cannot reach GitHub says nothing; a check the writer asked for reports why it failed. Because a second update path would be a second wrong answer, `/api/version` returns `managed: "desktop"` under `STILURA_SIDECAR`, contacts npm for nothing, and the frontend hides the update section of settings.
 
 The signing key is not in the repository. CI reads it from `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public half lives in `tauri.conf.json`. Replacing it strands every installed copy, which will accept nothing the old key did not sign.
 
@@ -511,7 +523,7 @@ The model checks are regression tests, not an independent accuracy benchmark. Se
 
 ## 11. Current boundaries
 
-Litura currently supports one browser-local plain-text document. It does not include:
+Stilura currently supports one browser-local plain-text document. It does not include:
 
 - a separate reference/context editor;
 - multiple documents side by side — the sidebar switches one active document within the folder, and import and export are a drop and a download;

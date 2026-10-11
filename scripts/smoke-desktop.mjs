@@ -40,8 +40,8 @@ function* releaseDirs() {
 function findBinary() {
   const found = [...releaseDirs()]
     .map(dir => process.platform === 'darwin'
-      ? path.join(dir, 'bundle/macos/Litura.app/Contents/MacOS/litura')
-      : path.join(dir, WINDOWS ? 'litura.exe' : 'litura'))
+      ? path.join(dir, 'bundle/macos/Stilura.app/Contents/MacOS/stilura')
+      : path.join(dir, WINDOWS ? 'stilura.exe' : 'stilura'))
     .filter(candidate => fs.existsSync(candidate))
     .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
   if (found) return found;
@@ -49,17 +49,17 @@ function findBinary() {
 }
 
 const binary = process.argv[2] ? path.resolve(process.argv[2]) : findBinary();
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-smoke-'));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-smoke-'));
 const workspace = path.join(temp, 'writing');
 const draft = 'Smoke draft: a sentence the app must hand back.\n';
 fs.mkdirSync(workspace);
 fs.writeFileSync(path.join(workspace, 'draft.md'), draft);
 
-// LITURA_FOLDER names the folder outright, so the test never reads or changes
+// STILURA_FOLDER names the folder outright, so the test never reads or changes
 // the folder the writer actually picked, and never meets a folder dialog.
 // Moving HOME keeps the rest of the app's state out of the writer's too.
 const app = spawn(binary, [], {
-  env: { ...process.env, LITURA_FOLDER: workspace, HOME: temp, XDG_CONFIG_HOME: path.join(temp, '.config'), APPDATA: path.join(temp, 'AppData', 'Roaming') },
+  env: { ...process.env, STILURA_FOLDER: workspace, STILURA_STATE_DIR: path.join(temp, 'editor-state'), HOME: temp, XDG_CONFIG_HOME: path.join(temp, '.config'), APPDATA: path.join(temp, 'AppData', 'Roaming') },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
@@ -78,9 +78,9 @@ const fail = message => {
 // without it that kill would be reported as a startup failure.
 let ready = false;
 const url = await new Promise(resolve => {
-  const timer = setTimeout(() => fail(`No LITURA_READY line within ${READY_TIMEOUT / 1000}s.`), READY_TIMEOUT);
+  const timer = setTimeout(() => fail(`No STILURA_READY line within ${READY_TIMEOUT / 1000}s.`), READY_TIMEOUT);
   const look = () => {
-    const match = output.match(/^LITURA_READY (http:\/\/127\.0\.0\.1:\d+)$/m);
+    const match = output.match(/^STILURA_READY (http:\/\/127\.0\.0\.1:\d+)$/m);
     if (!match) return;
     ready = true;
     clearTimeout(timer);
@@ -106,6 +106,24 @@ try {
   const document = await get('/draft');
   assert.equal(document.text, draft);
   assert.equal(document.path, fs.realpathSync(path.join(workspace, 'draft.md')));
+
+  // Exercise the packaged frontend too: a running server alone cannot
+  // prove that the webview opened its state or can acknowledge a safe exit.
+  let flushed = false;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const response = await fetch(url + '/api/desktop/flush', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(25_000),
+    });
+    if (response.ok) { flushed = true; break; }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  assert(flushed, 'The webview did not confirm a saved draft and desktop state');
+  const state = await get('/api/desktop/storage');
+  assert(state.entries.some(([key, value]) => key === 'wa-schema' && value === '1'));
+  const resumed = await fetch(url + '/api/desktop/resume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  });
+  assert(resumed.ok);
 } catch (error) {
   fail(`The running app answered wrongly: ${error.message}`);
 }

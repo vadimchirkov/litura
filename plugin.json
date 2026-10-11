@@ -1,5 +1,5 @@
 {
-  "name": "litura",
+  "name": "stilura",
   "description": "AI-assisted editor for sharper, more human writing",
   "type": "webview",
   "cmd": "node",

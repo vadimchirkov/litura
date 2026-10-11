@@ -70,7 +70,7 @@ jobs:
         run: |
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
             if [ -n "${!name}" ]; then
-              printf '%s<<__LITURA_EOF__\n%s\n__LITURA_EOF__\n' "$name" "${!name}" >> "$GITHUB_ENV"
+              printf '%s<<__STILURA_EOF__\n%s\n__STILURA_EOF__\n' "$name" "${!name}" >> "$GITHUB_ENV"
             fi
           done
 
@@ -83,7 +83,7 @@ jobs:
         with:
           args: --target ${{ matrix.target }}
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: Litura ${{ github.ref_name }}
+          releaseName: Stilura ${{ github.ref_name }}
           releaseBody: See CHANGELOG.md for what changed.
           releaseDraft: false
           # The updater reads this file from the latest release; without it a

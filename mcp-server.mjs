@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Litura — MCP server (stdio) for Codex CLI, Claude Code, and other hosts.
+ * Stilura — MCP server (stdio) for Codex CLI, Claude Code, and other hosts.
  *
  * The same operations the editor UI uses, as MCP tools. Document arguments
  * default to the live draft, so an agent working in the writing folder can
@@ -13,14 +13,14 @@
  *   DRAFT_FILE=/notes/draft.md node mcp-server.mjs
  *
  * Codex (~/.codex/config.toml):
- *   [mcp_servers.litura]
+ *   [mcp_servers.stilura]
  *   command = "node"
- *   args = ["/path/to/litura/mcp-server.mjs"]
+ *   args = ["/path/to/stilura/mcp-server.mjs"]
  *   cwd = "/path/to/writing"
  *   tool_timeout_sec = 180
  *
  * Claude Code:
- *   claude mcp add --scope user litura -- node /path/to/litura/mcp-server.mjs
+ *   claude mcp add --scope user stilura -- node /path/to/stilura/mcp-server.mjs
  */
 
 import fs from 'fs';
@@ -50,7 +50,7 @@ for (const method of ['log', 'warn']) {
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = process.env.LITURA_ROOT || __dirname;
+const ROOT = (process.env.STILURA_ROOT ?? process.env.LITURA_ROOT) || __dirname;
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 const DRAFT_FILE = process.env.DRAFT_FILE || path.join(process.cwd(), 'draft.md');
@@ -96,9 +96,9 @@ function fail(error) {
 }
 
 const server = new McpServer(
-  { name: 'litura', version: MANIFEST.version },
+  { name: 'stilura', version: MANIFEST.version },
   {
-    instructions: 'Litura edits one local draft (draft.md). Suggest wording; only draft_write changes the file, and it is revision-checked. Never invent facts, sources, numbers, or quotes.',
+    instructions: 'Stilura edits one local draft (draft.md). Suggest wording; only draft_write changes the file, and it is revision-checked. Never invent facts, sources, numbers, or quotes.',
   },
 );
 

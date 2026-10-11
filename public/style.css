@@ -320,7 +320,71 @@ button:hover .ph svg { opacity: 1; }
 .recipe:hover { background: var(--surface-3); }
 .recipe.has-findings { color: var(--accent); border-color: var(--accent); }
 .recipe.is-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; padding: 5px 6px; text-align: center; }
-#review-status { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 12px; }
+/* transitions-dev text states swap (04-text-states-swap.md) on the Review
+   label (Slop ↔ Checking…): old text exits up through a blur, the new one
+   rises from below. Driven by swapRecipeLabel() in src/app.js. */
+#review-button.swap-text {
+  display: inline-block;
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+  transition:
+    transform var(--text-swap-dur) var(--text-swap-ease),
+    filter    var(--text-swap-dur) var(--text-swap-ease),
+    opacity   var(--text-swap-dur) var(--text-swap-ease);
+  will-change: transform, filter, opacity;
+}
+#review-button.swap-text.is-exit {
+  transform: translateY(calc(var(--text-swap-translate-y) * -1));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+}
+#review-button.swap-text.is-enter-start {
+  transform: translateY(var(--text-swap-translate-y));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  #review-button.swap-text { transition: none !important; }
+}
+#review-status { position: relative; flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 12px; }
+/* transitions-dev thinking states (28-thinking-states.md): a highlight band
+   sweeps the progress line while it holds; a changed line rises in through
+   a blur (.swap, re-armed in setReviewStatus). */
+#review-status:not(:empty)::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  background-image: linear-gradient(90deg,
+    transparent 0%, transparent 40%,
+    var(--think-highlight) 50%,
+    transparent 60%, transparent 100%);
+  background-size: 400% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-think-shimmer var(--think-shimmer) linear infinite;
+}
+@keyframes t-think-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+#review-status.swap { animation: t-think-in var(--think-swap) var(--think-ease); }
+@keyframes t-think-in {
+  from { transform: translateY(var(--think-distance)); filter: blur(var(--think-blur)); opacity: 0; }
+  to   { transform: translateY(0); filter: blur(0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #review-status:not(:empty)::before { display: none; }
+  #review-status.swap { animation: none; }
+}
 
 button:disabled { opacity: .5; cursor: default; }
 button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -474,6 +538,68 @@ ins.passage-preview { border-left: 2px solid var(--accent); padding-left: 8px; t
 
   --ease: cubic-bezier(.16, 1, .3, 1);
 
+  /* transitions-dev modal open / close (06-modal.md) */
+  --modal-open-dur: 250ms;
+  --modal-close-dur: 150ms;
+  --modal-scale: 0.96;
+  --modal-scale-close: 0.96;
+  --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* transitions-dev menu dropdown (05-menu-dropdown.md) */
+  --dropdown-open-dur: 250ms;
+  --dropdown-close-dur: 150ms;
+  --dropdown-pre-scale: 0.97;
+  --dropdown-closing-scale: 0.99;
+  --dropdown-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* transitions-dev tooltip (17-tooltip.md): only the out-lane applies —
+     the bubble is click-triggered, so the hover appear-delay is skipped */
+  --tt-in-dur: 150ms;
+  --tt-out-dur: 50ms;
+  --tt-in-ease: ease-out;
+  --tt-out-ease: ease-out;
+  /* transitions-dev toggle (27-toggle.md) */
+  --toggle-dur: 350ms;
+  --toggle-travel: 14px;
+  --toggle-ov1: 1px;
+  --toggle-ov2: 0px;
+  --toggle-ease: cubic-bezier(0.34, 1.35, 0.64, 1);
+  /* transitions-dev icon swap (09-icon-swap.md) */
+  --icon-swap-dur: 250ms;
+  --icon-swap-blur: 2px;
+  --icon-swap-start-scale: 0.25;
+  --icon-swap-ease: ease-in-out;
+  /* transitions-dev text states swap (04-text-states-swap.md) */
+  --text-swap-dur: 150ms;
+  --text-swap-translate-y: 4px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-in-out;
+  /* transitions-dev error state shake (12-error-state-shake.md) */
+  --shake-distance: 6px;
+  --shake-overshoot: 4px;
+  --shake-dur-a: 80ms;
+  --shake-dur-b: 60ms;
+  --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --revert-hold: 3000ms;
+  --revert-dur: 280ms;
+  /* transitions-dev toast (22-toast.md): durations+ease only — the banner
+     is in-flow, so it fades + slides 8px instead of rising + scaling */
+  --toast-open: 350ms;
+  --toast-close: 250ms;
+  --toast-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* transitions-dev skeleton reveal (14-skeleton-reveal.md): reveal side
+     only — the sheen stays indeterminate (data has no ETA), cards keep
+     their chat-in fade, the wrap un-blurs over the shared reveal clock */
+  --reveal-dur: 400ms;
+  --reveal-blur: 2px;
+  --reveal-ease: ease-in-out;
+  /* transitions-dev thinking states (28-thinking-states.md): shimmer + swap
+     side only — the line hugs its text (no sizer), swaps are rare */
+  --think-swap: 150ms;
+  --think-distance: 8px;
+  --think-blur: 2px;
+  --think-shimmer: 2000ms;
+  --think-highlight: #0d0d0d;
+  --think-ease: ease-in-out;
+
   --ui-font: 'OpenAI Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font:    'iA Writer Duo', 'Menlo', 'Monaco', 'Courier New', monospace;
 }
@@ -510,7 +636,8 @@ ins.passage-preview { border-left: 2px solid var(--accent); padding-left: 8px; t
     --ok:            #6fcf76;
     --added-tint:    color-mix(in srgb, var(--ok) 34%, transparent);
     --removed-tint:  color-mix(in srgb, var(--danger) 26%, transparent);
-
+    /* transitions-dev thinking shimmer stays visible on the dark canvas */
+    --think-highlight: #ffffff;
     /* A shadow tuned for paper is invisible on a dark canvas — the floating
        panel then reads as text sitting on top of the draft. */
     --shadow-sm: 0 1px 2px 0 #00000059;
@@ -548,6 +675,8 @@ ins.passage-preview { border-left: 2px solid var(--accent); padding-left: 8px; t
   --ok:            #6fcf76;
   --added-tint:    color-mix(in srgb, var(--ok) 34%, transparent);
   --removed-tint:  color-mix(in srgb, var(--danger) 26%, transparent);
+  /* transitions-dev thinking shimmer stays visible on the dark canvas */
+  --think-highlight: #ffffff;
   --shadow-sm: 0 1px 2px 0 #00000059;
   --shadow-md: 0 6px 20px 0 #00000080;
   --shadow-lg: 0 16px 48px 0 #000000a6;
@@ -635,12 +764,31 @@ html, body {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
+  /* The header is fixed, 48px tall and above everything (z-index 1000): a bar
+     starting at the top sat under it, unclickable, with the sidebar toggle
+     printed over its text. */
+  margin-top: 48px;
   padding: 8px 20px;
   border-bottom: 1px solid var(--border);
   border-top: 1px solid var(--border);
   background: var(--surface-2);
   font-size: 13px;
   flex-shrink: 0;
+  /* transitions-dev toast clocks (22-toast.md): in-flow bar, so fade +
+     8px slide instead of rise + scale; `display` rides allow-discrete. */
+  transition:
+    opacity var(--toast-close) var(--toast-ease),
+    translate var(--toast-close) var(--toast-ease),
+    display var(--toast-close) allow-discrete;
+}
+@starting-style {
+  .drift-banner:not([hidden]) { opacity: 0; translate: 0 -8px; }
+}
+.drift-banner:not([hidden]) {
+  transition:
+    opacity var(--toast-open) var(--toast-ease),
+    translate var(--toast-open) var(--toast-ease),
+    display var(--toast-open) allow-discrete;
 }
 .drift-banner[hidden] { display: none; }
 .drift-text { color: var(--text-2); font-weight: 500; }
@@ -688,14 +836,18 @@ html, body {
    lives in the margin the centred text column leaves empty (measured in
    syncRail, not guessed at a breakpoint), so the draft sits exactly where
    it sat before any card existed. Finding cards keep their stream
-   behavior; only margin-note cards stand here. */
+   behavior; only margin-note cards stand here.
+   The rail rides INSIDE the editor's scroller (moved there by JS) and spans
+   the whole document (height synced in layoutRail): cards sit at document
+   coordinates and composite with the text, instead of being repositioned
+   per scroll event a frame behind it. */
 /* From the very top, not under the header: the header is transparent and the
    draft's lines show through it while scrolling, so a rail clipped at its
    bottom edge cut a note in half beside a line that was still fully visible. */
 .rail {
   position: absolute;
   top: 0;
-  bottom: 0;
+  min-height: 100%;
   width: 220px;   /* RAIL_WIDTH in app.js */
   overflow: hidden;
   pointer-events: none;   /* left is set to the text column's right edge */
@@ -727,7 +879,7 @@ html, body {
   position: relative;
   /* 4px down puts the note's first baseline on the passage's (17px/1.75
      prose beside 14px/1.55 italic). */
-  padding: 4px 24px 0 0;
+  padding: 4px 0 0;
   color: var(--text-2);
   font-family: var(--ui-font);
   font-size: 14px;
@@ -778,11 +930,11 @@ html, body {
 }
 .note-card textarea::placeholder { color: var(--muted); opacity: .8; }
 .note-del {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 22px;
-  height: 22px;
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: 1px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 0;
   border-radius: var(--r-xs);
@@ -810,6 +962,8 @@ html, body {
 .note-plus {
   position: absolute;
   z-index: 6;
+  display: grid;
+  place-items: center;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -819,11 +973,10 @@ html, body {
   box-shadow: var(--shadow-sm);
   color: var(--muted);
   font: inherit;
-  font-size: 15px;
-  line-height: 1;
   cursor: pointer;
   transition: color .12s ease, border-color .12s ease;
 }
+.note-plus svg { display: block; width: 12px; height: 12px; }
 .note-plus[hidden] { display: none; }
 .note-plus:hover { color: var(--text); border-color: var(--border-strong); }
 
@@ -848,18 +1001,25 @@ html, body {
   border-radius: var(--r-pill);
   background: var(--overlay);
   box-shadow: var(--shadow-lg);
-  /* Soft in, softer out: rises 4px into place, fades away where it stood.
-     Translate only — a scale would skew the measured width placeBubble clamps.
-     `display` rides the transition (allow-discrete) so the fade-out plays. */
+  /* Soft in, instant out (tooltip 17-tooltip.md): rises 4px into place,
+     fades away where it stood in 50ms. Translate only — a scale would
+     skew the measured width placeBubble clamps. `display` rides the
+     transition (allow-discrete) so the fade-out plays. */
   transition:
-    opacity .16s ease-out,
+    opacity var(--tt-out-dur) var(--tt-out-ease),
     translate .2s var(--ease),
-    display .16s allow-discrete;
+    display var(--tt-out-dur) allow-discrete;
 }
 @starting-style {
   .mark-bubble:not([hidden]) { opacity: 0; translate: 0 4px; }
 }
-.mark-bubble[hidden] { display: none; opacity: 0; transition-duration: .12s; }
+.mark-bubble:not([hidden]) {
+  transition:
+    opacity var(--tt-in-dur) var(--tt-in-ease),
+    translate .2s var(--ease),
+    display var(--tt-in-dur) allow-discrete;
+}
+.mark-bubble[hidden] { display: none; opacity: 0; }
 /* Docked variants (Actions in the margin): quieter, they stand where the eye
    already is. The margin pill leads with the line; the inline one is a ghost. */
 .mark-bubble[data-dock="margin"] { padding: 1px; box-shadow: var(--shadow-sm); }
@@ -1404,8 +1564,13 @@ html, body {
    app.js). A resting panel is a column of turns, not a scrollable widget. */
 .chat-stream {
   scrollbar-color: transparent transparent;
-  transition: scrollbar-color .25s ease;
+  transition: scrollbar-color .25s ease, opacity .2s ease-out, display .2s allow-discrete;
 }
+/* A notice takes over the whole island, not just the field: turns and finding
+   cards left standing above an alert read as a chat that failed to close. They
+   are only put away — everything is back when the notice goes. */
+.chat.has-notice .chat-stream,
+.chat.has-notice .chat-clear { display: none; opacity: 0; }
 .chat-stream.is-scrolling { scrollbar-color: var(--border-strong) transparent; }
 .chat-stream::-webkit-scrollbar-thumb { background: transparent; }
 .chat-stream.is-scrolling::-webkit-scrollbar-thumb { background: var(--border-strong); }
@@ -1605,9 +1770,138 @@ html, body {
 .finding-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .finding-actions .chat-action { margin-top: 0; min-height: 32px; }
 
+/* ── Slash command menu ────────────────────────────────────────────────────
+   Granola-style: icon, name and one line of description per row, filtered
+   as the writer types after /. A plain positioned div rather than a popover:
+   the composer keeps focus while it is open. Anchored above the composer in
+   CSS, so it follows the field as it grows — no JS measuring. */
+.slash-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(100%, 360px);
+  z-index: 60;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-overlay);
+  background: var(--overlay);
+  box-shadow: var(--shadow-lg);
+  transform-origin: bottom center;
+}
+/* `hidden` is display:none, which a transition cannot run out of; enter as a
+   keyframe off :not([hidden]). Exit stays instant — the menu goes while the
+   writer is typing on. */
+.slash-menu:not([hidden]) { animation: t-slash-in var(--dropdown-open-dur) var(--dropdown-ease); }
+.slash-menu[hidden] { display: none; }
+@keyframes t-slash-in { from { opacity: 0; transform: scale(var(--dropdown-pre-scale)); } }
+.slash-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--r-field);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.slash-item.is-active { background: var(--surface-2); }
+.slash-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-2);
+}
+.slash-item.is-active .slash-icon { border-color: var(--border-strong); color: var(--text); }
+.slash-icon svg { width: 16px; height: 16px; }
+.slash-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.slash-name { font-size: 13px; font-weight: 600; line-height: 1.35; }
+.slash-name .slash-cmd { margin-left: 6px; color: var(--muted); font-weight: 500; }
+.slash-desc { display: block; margin-top: 1px; color: var(--text-2); font-size: 12px; line-height: 1.4; }
+.slash-empty { padding: 8px 10px; color: var(--muted); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .slash-menu { animation: none; }
+}
+
+/* ── Positioning brief cards ───────────────────────────────────────────────
+   One question per card: kicker row with the step count, the question
+   itself, full-width option rows, and a quiet foot with the free-text hint
+   and Skip. A single choice reads as a list, not as a tag cloud of pills —
+   hence rows, not the wrapping .chat-edit-actions row. */
+.brief-card { display: flex; flex-direction: column; gap: 10px; }
+.brief-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.brief-kicker { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.brief-step { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.brief-question { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; line-height: 1.4; }
+.brief-options { display: flex; flex-direction: column; gap: 6px; }
+.brief-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-field);
+  background: var(--overlay);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.brief-option:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.brief-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.brief-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.brief-skip {
+  flex-shrink: 0;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.brief-skip:hover { color: var(--text); }
+/* Summary: label–value rows with a quiet edit per row, no button clouds. */
+.brief-rows { display: flex; flex-direction: column; }
+.brief-row {
+  display: grid;
+  grid-template-columns: 82px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.brief-row:first-child { border-top: 0; padding-top: 0; }
+.brief-label { color: var(--muted); font-size: 12px; font-weight: 500; }
+.brief-value { color: var(--text); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.brief-edit {
+  flex-shrink: 0;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.brief-edit:hover { color: var(--text); }
+.brief-edit:focus-visible, .brief-skip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ── Composer ─────────────────────────────────────────── */
 
 .chat-composer {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1712,7 +2006,7 @@ html, body {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border);
   border-radius: var(--r-pill);
   background: var(--overlay);
   box-shadow: var(--shadow-lg);
@@ -1836,18 +2130,36 @@ html, body {
   cursor: default;
 }
 
-/* Working: the input gets a writing cursor while the button becomes Stop. */
-.chat-send { position: relative; }
-.chat-send .ph { display: inline-flex; }
+/* Working: the input gets a writing cursor while the button becomes Stop.
+   transitions-dev icon swap (09-icon-swap.md): both glyphs stay stacked in
+   one grid cell and cross-fade with blur + scale off the existing .is-busy
+   state — no `display: none` pop. */
+.chat-send { position: relative; display: inline-grid; place-items: center; }
+.chat-send .ph { display: inline-flex; grid-area: 1 / 1; }
 .chat-send .ph svg { width: 17px; height: 17px; }
-.chat-send.is-busy .ph { display: none; }
-.chat-send.is-busy::after {
-  content: '';
-  position: absolute;
+.chat-send .ph, .chat-send .chat-stop {
+  transition:
+    opacity   var(--icon-swap-dur) var(--icon-swap-ease),
+    filter    var(--icon-swap-dur) var(--icon-swap-ease),
+    transform var(--icon-swap-dur) var(--icon-swap-ease);
+}
+.chat-send .chat-stop {
+  grid-area: 1 / 1;
+  place-self: center;
   width: 7px;
   height: 7px;
   border-radius: 1.5px;
   background: currentColor;
+  opacity: 0;
+  filter: blur(var(--icon-swap-blur));
+  transform: scale(var(--icon-swap-start-scale));
+}
+.chat-send:not(.is-busy) .ph { opacity: 1; filter: blur(0); transform: scale(1); }
+.chat-send:not(.is-busy) .chat-stop { opacity: 0; filter: blur(var(--icon-swap-blur)); transform: scale(var(--icon-swap-start-scale)); }
+.chat-send.is-busy .ph { opacity: 0; filter: blur(var(--icon-swap-blur)); transform: scale(var(--icon-swap-start-scale)); }
+.chat-send.is-busy .chat-stop { opacity: 1; filter: blur(0); transform: scale(1); }
+@media (prefers-reduced-motion: reduce) {
+  .chat-send .ph, .chat-send .chat-stop { transition: none !important; }
 }
 
 /* Names what is attached; the passage itself stays highlighted in the draft. */
@@ -2084,6 +2396,14 @@ html, body {
 .variant-undo-row .chat-action { align-self: flex-start; }
 
 /* Loading skeletons: same shape as the cards coming, so nothing jumps. */
+/* transitions-dev skeleton reveal (14-skeleton-reveal.md): the loaded stack
+   un-blurs over the shared reveal clock while each card plays its own
+   chat-in fade — no double opacity, layout-free swap in the same slot. */
+.chat-variants:not(.is-loading) { animation: t-skel-unblur var(--reveal-dur) var(--reveal-ease); }
+@keyframes t-skel-unblur {
+  from { filter: blur(var(--reveal-blur)); }
+  to   { filter: blur(0); }
+}
 .skeleton {
   border-radius: var(--r-xs);
   background: linear-gradient(90deg, var(--surface-3) 25%, var(--surface-2) 37%, var(--surface-3) 63%);
@@ -2111,6 +2431,7 @@ html, body {
 
 @media (prefers-reduced-motion: reduce) {
   .skeleton { animation: none; }
+  .chat-variants:not(.is-loading) { animation: none; }
   .variant-card { animation: none; transition: none; }
 }
 
@@ -2120,6 +2441,11 @@ html, body {
   /* the global `* { margin: 0 }` reset kills the UA's `margin: auto` centring */
   margin: auto;
   width: min(680px, calc(100vw - 32px));
+  /* Without a cap the dialog grows past short viewports and the header —
+     title plus × — scrolls out of reach with no scroll container at all. */
+  max-height: 85vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-overlay);
   padding: 0;
@@ -2127,14 +2453,27 @@ html, body {
   background: var(--overlay);
   font-family: var(--ui-font);
   box-shadow: var(--shadow-lg);
+  transform-origin: center;
+  will-change: transform, opacity;
 }
 
-/* Native <dialog> centres itself — animate opacity only, no transform. */
-.settings-dialog[open] { animation: dialog-in .2s var(--ease); }
+/* transitions-dev modal open / close (06-modal.md), adapted to native
+   <dialog>: enter runs as a keyframe off [open] (scale .96 → 1, 250ms);
+   exit runs off .is-closing (150ms) before .close() — see src/app.js. */
+.settings-dialog[open] { animation: t-modal-in var(--modal-open-dur) var(--modal-ease); }
+.settings-dialog.is-closing { animation: t-modal-out var(--modal-close-dur) var(--modal-ease); }
 
-@keyframes dialog-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+@keyframes t-modal-in {
+  from { transform: scale(var(--modal-scale)); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+@keyframes t-modal-out {
+  from { transform: scale(1); opacity: 1; }
+  to   { transform: scale(var(--modal-scale-close)); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-dialog[open], .settings-dialog.is-closing { animation: none; }
 }
 
 .settings-dialog::backdrop { background: var(--scrim); }
@@ -2144,6 +2483,12 @@ html, body {
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px;
+  /* The dialog scrolls: pin the title and × so they stay visible and
+     reachable over long sections. Own background, or rows slide through. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--overlay);
 }
 .settings-dialog header { border-bottom: 1px solid var(--border-subtle); }
 .settings-dialog header span, .settings-dialog h3 {
@@ -2153,7 +2498,7 @@ html, body {
   letter-spacing: 0;
   text-transform: none;
 }
-.settings-dialog h2 { font-size: 22px; font-weight: 600; margin-top: 2px; }
+.settings-dialog h2 { font-size: 22px; font-weight: 600; }
 .settings-dialog h3 { margin-bottom: 12px; font-weight: 500; }
 .settings-dialog section { padding: 20px 24px; border-bottom: 1px solid var(--border-subtle); }
 .settings-dialog section:last-of-type { border-bottom: 0; }
@@ -2169,6 +2514,28 @@ html, body {
   font: inherit;
   font-size: 14px;
   outline: none;
+}
+/* transitions-dev error state shake (12-error-state-shake.md) on the API
+   key field: .is-error owns the border (constant width, only the tween),
+   .is-shaking stays orthogonal so the shake replays without flickering
+   the border — see showKeyError() in src/app.js. */
+#api-key { transition: border-color 150ms ease-out; will-change: transform; }
+#api-key.is-error {
+  border-color: var(--danger);
+  transition: border-color var(--revert-dur) ease-out;
+}
+#api-key.is-shaking {
+  animation: t-input-shake calc(var(--shake-dur-a) * 2 + var(--shake-dur-b) * 2) linear;
+}
+@keyframes t-input-shake {
+  0%      { transform: translateX(0);                                 animation-timing-function: var(--shake-ease); }
+  28.57%  { transform: translateX(var(--shake-distance));             animation-timing-function: var(--shake-ease); }
+  57.14%  { transform: translateX(calc(var(--shake-distance) * -1)); animation-timing-function: var(--shake-ease); }
+  78.57%  { transform: translateX(var(--shake-overshoot));            animation-timing-function: var(--shake-ease); }
+  100%    { transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #api-key { animation: none !important; transform: none !important; }
 }
 /* Checkboxes keep their own focus ring (below) and a filled pill would look
    wrong behind one, so they are left out of both rules. */
@@ -2213,8 +2580,15 @@ html, body {
 .combo-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* `display` has to stay with the popover state: setting it unconditionally
-   overrides the UA's `[popover] { display: none }` and the list never hides. */
-.combo:popover-open { display: flex; flex-direction: column; }
+   overrides the UA's `[popover] { display: none }` and the list never hides.
+   transitions-dev menu dropdown (05-menu-dropdown.md), adapted to the native
+   popover: enter grows from --dropdown-pre-scale (250ms) via @starting-style;
+   exit dips out (150ms) via allow-discrete. No JS needed — older engines
+   ignore the discrete transition and keep the previous instant swap. */
+.combo:popover-open { opacity: 1; transform: scale(1); }
+@starting-style {
+  .combo:popover-open { opacity: 0; transform: scale(var(--dropdown-pre-scale)); }
+}
 .combo {
   position: fixed;
   margin: 0;
@@ -2226,6 +2600,25 @@ html, body {
   box-shadow: var(--shadow-lg);
   color: var(--text);
   overflow: hidden;
+  transform-origin: top center;
+  opacity: 0;
+  transform: scale(var(--dropdown-pre-scale));
+  transition:
+    transform var(--dropdown-open-dur) var(--dropdown-ease),
+    opacity   var(--dropdown-open-dur) var(--dropdown-ease),
+    display   var(--dropdown-close-dur) allow-discrete,
+    overlay   var(--dropdown-close-dur) allow-discrete;
+  will-change: transform, opacity;
+}
+.combo:popover-open {
+  display: flex;
+  flex-direction: column;
+  transition:
+    transform var(--dropdown-open-dur) var(--dropdown-ease),
+    opacity   var(--dropdown-open-dur) var(--dropdown-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .combo { transition: none !important; }
 }
 .combo .combo-search {
   min-height: 42px;
@@ -2385,15 +2778,38 @@ html, body {
   height: 12px;
   border-radius: 50%;
   background: var(--muted);
-  transition: transform .12s ease, background .12s ease;
+  translate: 0 0;
+  will-change: translate;
+  transition: background .12s ease;
 }
 .theme-toggle input:checked { background: var(--primary-bg); border-color: var(--primary-bg); }
-.theme-toggle input:checked::after { transform: translateX(14px); background: var(--primary-fg); }
+.theme-toggle input:checked::after { translate: var(--toggle-travel) 0; background: var(--primary-fg); }
+/* transitions-dev toggle (27-toggle.md): double-bounce travel, keyed off
+   .is-init (added on first change in src/app.js) so mount never bounces. */
+.theme-toggle input.is-init:checked::after { animation: t-toggle-on var(--toggle-dur) var(--toggle-ease) both; }
+.theme-toggle input.is-init:not(:checked)::after { animation: t-toggle-off var(--toggle-dur) var(--toggle-ease) both; }
+@keyframes t-toggle-on {
+  0% { translate: 0 0; }
+  55% { translate: calc(var(--toggle-travel) + var(--toggle-ov1)) 0; }
+  80% { translate: calc(var(--toggle-travel) - var(--toggle-ov2)) 0; }
+  100% { translate: var(--toggle-travel) 0; }
+}
+@keyframes t-toggle-off {
+  0% { translate: var(--toggle-travel) 0; }
+  55% { translate: calc(0px - var(--toggle-ov1)) 0; }
+  80% { translate: var(--toggle-ov2) 0; }
+  100% { translate: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle input::after { animation: none !important; }
+}
 .theme-toggle input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-check small { display: block; color: var(--muted); font-size: 13px; }
 
 .settings-hint, .settings-error { min-height: 18px; margin-top: 10px; color: var(--muted); font-size: 13px; }
 .settings-error { color: var(--danger); }
+.settings-hint:empty, .settings-error:empty { display: none; }
+.settings-sub { margin-top: 2px; color: var(--muted); font-size: 13px; }
 .configured-keys { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .key-chip {
   display: flex;
@@ -2411,3 +2827,35 @@ html, body {
 @media (max-width: 640px) {
   .settings-grid, .key-entry { grid-template-columns: 1fr; }
 }
+
+/* Settings tabs: a fixed-height dialog, rail on the left, one tab's sections
+   in the panel. The dialog's data-tab (src/app.js) picks which sections show;
+   the panel scrolls, so switching tabs never resizes the window. */
+#settings-dialog { width: min(780px, calc(100vw - 32px)); height: min(640px, 85vh); overflow: hidden; }
+#settings-dialog form { height: 100%; }
+.settings-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 180px 1fr; }
+.settings-tabs { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-right: 1px solid var(--border-subtle); }
+.settings-dialog .settings-tabs button {
+  min-height: 36px;
+  justify-content: flex-start;
+  padding: 0 12px;
+  border-radius: var(--r-field);
+  background: none;
+  color: var(--text-2);
+  font-size: 14px;
+  text-align: left;
+}
+.settings-dialog .settings-tabs button:hover { background: var(--fill-hover); color: var(--text); }
+.settings-dialog .settings-tabs button[aria-selected="true"] { background: var(--surface-2); color: var(--text); }
+.settings-dialog .settings-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.settings-panel { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+#settings-dialog[data-tab="models"] section[data-tab]:not([data-tab="models"]),
+#settings-dialog[data-tab="access"] section[data-tab]:not([data-tab="access"]),
+#settings-dialog[data-tab="general"] section[data-tab]:not([data-tab="general"]) { display: none; }
+#settings-dialog section.tab-end { border-bottom: 0; }
+@media (max-width: 640px) {
+  .settings-layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .settings-tabs { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border-subtle); padding: 8px 12px; }
+  .settings-dialog .settings-tabs button { flex: none; }
+}
+

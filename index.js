@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Litura — local AI-assisted writing editor
+ * Stilura — local AI-assisted writing editor
  * Split-pane editor with LLM assistance via Pi
  *
  * Usage:
- *   npx litura        (in the folder holding your draft)
+ *   npx stilura        (in the folder holding your draft)
  *   node index.js
  */
 
@@ -24,12 +24,16 @@ import { buildReviewTask, buildReviewUser, reviewCodesForPass } from './review-p
 import { documentStore, MAX_DOCUMENT_BYTES } from './document-store.js';
 import { suggestionPrompts, parseSuggestion } from './suggestions.js';
 import { CHAT_EDITS_PROMPT, chatVisibleText, parseChatResponse } from './chat-edits.js';
+import { desktopBridge } from './desktop.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Renamed from Litura: STILURA_* wins, LITURA_* still honored so existing
+// setups keep working.
+const env = name => process.env[`STILURA_${name}`] ?? process.env[`LITURA_${name}`];
 // In the npm package the server sits next to its own assets. In the desktop
 // build it is a single bundled file and the assets are Tauri resources, so the
 // shell says where they are.
-const ROOT = process.env.LITURA_ROOT || __dirname;
+const ROOT = env('ROOT') || __dirname;
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const VERSION = MANIFEST.version;
 
@@ -49,7 +53,7 @@ if (process.argv.includes('--version') || process.argv.includes('-v')) {
   process.exit(0);
 }
 
-// Litura opens no connection of its own — every request it makes belongs to a
+// Stilura opens no connection of its own — every request it makes belongs to a
 // model call the writer asked for. So the update check is a command you run,
 // not something that happens quietly at startup.
 if (process.argv.includes('--check-update')) {
@@ -59,13 +63,13 @@ if (process.argv.includes('--check-update')) {
     process.exit(1);
   });
   if (latest === null) {
-    console.log(`Litura ${VERSION} — ${name} is not published; nothing to compare against.`);
+    console.log(`Stilura ${VERSION} — ${name} is not published; nothing to compare against.`);
     process.exit(0);
   }
   // Stated, not judged: a local build can legitimately run ahead of the
   // registry, and ranking two versions correctly is a semver dependency.
   console.log(latest === VERSION
-    ? `Litura ${VERSION} — same as the published release.`
+    ? `Stilura ${VERSION} — same as the published release.`
     : `Published: ${name}@${latest}. Running: ${VERSION}.\n` +
       `  npx ${name}       — always runs the published release\n` +
       `  npm i -g ${name}  — if you installed it globally`);
@@ -94,20 +98,20 @@ if (fs.existsSync(path.join(ROOT, 'src/app.js'))) {
 
 // Started by the desktop shell rather than by a person at a terminal. The shell
 // owns the window, the update path, and this process's lifetime.
-const SIDECAR = Boolean(process.env.LITURA_SIDECAR);
+const SIDECAR = Boolean(env('SIDECAR'));
+const desktop = SIDECAR && env('STATE_DIR') ? desktopBridge(env('STATE_DIR'), readBody, sendJson) : null;
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const PUBLIC = path.join(ROOT, 'public');
 
-// Draft and style live in the folder Litura was started from, not inside the
-// install directory — `npx litura` in a notes folder edits that folder. The
+// Draft and style live in the folder Stilura was started from, not inside the
+// install directory — `npx stilura` in a notes folder edits that folder. The
 // bundled style.md is the fallback when the folder has none of its own.
 const CWD        = process.cwd();
 const DRAFT_FILE = process.env.DRAFT_FILE || path.join(CWD, 'draft.md');
-// One active document at a time. It starts as the draft and follows the file
-// the writer opens in the sidebar — saves always go to the open file, never
-// to a copy left behind in draft.md.
-let draftStore = documentStore(DRAFT_FILE);
+// Unqualified /draft stays on the launch file. Each tab names its own file;
+// opening one must never retarget saves made by another tab or agent.
+const draftStore = documentStore(DRAFT_FILE);
 
 // ─── Workspace files ───────────────────────────────────────────────────────
 // The sidebar lists the Markdown and text files sitting next to the draft,
@@ -116,7 +120,7 @@ let draftStore = documentStore(DRAFT_FILE);
 // directory: DRAFT_FILE may point elsewhere, and the listing must follow the
 // draft. Names are basenames with an approved extension, resolved inside that
 // folder — anything else is a 400, never a filesystem walk. Opening a file
-// retargets the single active document (and its saves) onto it.
+// identifies that tab's document without changing other tabs' save targets.
 const WORKSPACE_EXTENSIONS = new Set(['.md', '.markdown', '.txt']);
 const FILES_DIR = path.dirname(path.resolve(DRAFT_FILE));
 function workspaceFile(name) {
@@ -125,7 +129,17 @@ function workspaceFile(name) {
   if (!WORKSPACE_EXTENSIONS.has(path.extname(name).toLowerCase())) return null;
   const resolved = path.join(FILES_DIR, name);
   if (path.resolve(FILES_DIR, name) !== resolved) return null;
+  try { if (!fs.lstatSync(resolved).isFile()) return null; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   return resolved;
+}
+
+function requestedDraft(url) {
+  const name = url.searchParams.get('name');
+  if (name === null || name === path.basename(DRAFT_FILE)) return draftStore;
+  const file = workspaceFile(name);
+  if (!file) throw Object.assign(new Error('Open a Markdown or text file by name.'), { status: 400 });
+  return documentStore(file);
 }
 
 // Two-line card preview: the first ~160 chars of actual prose. Markup is
@@ -173,6 +187,7 @@ const MIME = {
   '.css':   'text/css; charset=utf-8',
   '.js':    'application/javascript; charset=utf-8',
   '.svg':   'image/svg+xml',
+  '.png':   'image/png',
   '.woff2': 'font/woff2',
   '.woff':  'font/woff',
   '.aff':   'text/plain; charset=utf-8',
@@ -234,7 +249,7 @@ function readBody(req) {
 // re-prompt. Name the fix, not the errno.
 function fsErrorMessage(error) {
   if (error?.code === 'EPERM' || error?.code === 'EACCES') {
-    return 'Litura may not open this folder. On macOS allow it under System Settings → Privacy & Security → Files and Folders, or pick a folder outside Documents, Desktop and Downloads.';
+    return 'Stilura may not open this folder. On macOS allow it under System Settings → Privacy & Security → Files and Folders, or pick a folder outside Documents, Desktop and Downloads.';
   }
   return error?.message || String(error);
 }
@@ -262,6 +277,10 @@ async function handleRequest(req, res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   const url = new URL(req.url, `http://localhost`);
+  if (url.pathname.startsWith('/api/desktop/')) {
+    if (desktop) return desktop(req, res, url);
+    return sendJson(res, 404, { error: 'Not a desktop session' });
+  }
 
   // Which version is running, and — only when the browser asks with ?check=1,
   // which it does only if the writer turned the check on — which is published.
@@ -339,13 +358,13 @@ async function handleRequest(req, res) {
   //
   if (url.pathname === '/draft') {
     if (req.method === 'GET') {
-      sendJson(res, 200, draftStore.read());
+      sendJson(res, 200, { ...requestedDraft(url).read(), name: url.searchParams.get('name') ?? path.basename(DRAFT_FILE) });
       return;
     }
     if (req.method === 'PUT') {
       try {
         const body = await readBody(req);
-        sendJson(res, 200, { saved: true, ...draftStore.write(body.text, body.revision) });
+        sendJson(res, 200, { saved: true, ...requestedDraft(url).write(body.text, body.revision) });
       } catch (error) {
         console.error('[/draft]', error.message);
         sendJson(res, error.status || 500, { error: fsErrorMessage(error), current: error.current });
@@ -353,7 +372,7 @@ async function handleRequest(req, res) {
       return;
     }
   }
-  if (req.method === 'GET' && url.pathname === '/draft/history') return sendJson(res, 200, { snapshots: draftStore.history() });
+  if (req.method === 'GET' && url.pathname === '/draft/history') return sendJson(res, 200, { snapshots: requestedDraft(url).history() });
 
   if (req.method === 'GET' && url.pathname === '/files') {
     let entries;
@@ -388,20 +407,49 @@ async function handleRequest(req, res) {
   if (req.method === 'GET' && url.pathname === '/file') {
     const file = workspaceFile(url.searchParams.get('name'));
     if (!file) { sendJson(res, 400, { error: 'Open a Markdown or text file by name.' }); return; }
-    let text;
-    try { text = fs.readFileSync(file, 'utf8'); }
+    let current;
+    try { current = documentStore(file).read(); }
+    catch (error) {
+      const missing = error.code === 'ENOENT';
+      sendJson(res, missing ? 404 : error.status || 500, { error: missing ? 'File no longer exists.' : fsErrorMessage(error) });
+      return;
+    }
+    if (!current.exists) { sendJson(res, 404, { error: 'File no longer exists.' }); return; }
+    sendJson(res, 200, { ...current, name: path.basename(file) });
+    return;
+  }
+  // DELETE /file — remove a workspace file by basename. Returns like GET
+  // when the name is bad or the file is gone; the caller keeps whatever it
+  // needs for Undo, the server keeps nothing.
+  if (req.method === 'DELETE' && url.pathname === '/file') {
+    const file = workspaceFile(url.searchParams.get('name'));
+    if (!file) { sendJson(res, 400, { error: 'Delete a Markdown or text file by name.' }); return; }
+    try { fs.unlinkSync(file); }
     catch (error) {
       const missing = error.code === 'ENOENT';
       sendJson(res, missing ? 404 : 500, { error: missing ? 'File no longer exists.' : fsErrorMessage(error) });
       return;
     }
-    if (Buffer.byteLength(text) > MAX_DOCUMENT_BYTES) { sendJson(res, 413, { error: 'File exceeds the 1 MB editing limit.' }); return; }
-    sendJson(res, 200, { name: path.basename(file), text });
+    sendJson(res, 200, { deleted: true, name: path.basename(file) });
     return;
   }
-  // POST /draft/open — switch the single active document (and its saves) to
-  // another workspace file. The previous file is untouched: whatever was in
-  // the editor for it stays in its own browser copy and on its own disk path.
+  // Without a revision this only creates a missing file (including Undo).
+  // Replacing an existing file uses the same guard and history as /draft.
+  if (req.method === 'PUT' && url.pathname === '/file') {
+    try {
+      const body = await readBody(req);
+      const file = workspaceFile(String(body.name ?? ''));
+      if (!file) { sendJson(res, 400, { error: 'Write a Markdown or text file by name.' }); return; }
+      if (typeof body.text !== 'string') { sendJson(res, 400, { error: 'A text body is required.' }); return; }
+      if (Buffer.byteLength(body.text) > MAX_DOCUMENT_BYTES) { sendJson(res, 413, { error: 'File exceeds the 1 MB editing limit.' }); return; }
+      const current = documentStore(file).write(body.text, body.revision ?? 'missing');
+      sendJson(res, 200, { saved: true, name: path.basename(file), ...current });
+    } catch (error) {
+      sendJson(res, error.status || 500, { error: fsErrorMessage(error), current: error.current });
+    }
+    return;
+  }
+  // Opening validates and reads a file; saves explicitly name it afterwards.
   if (req.method === 'POST' && url.pathname === '/draft/open') {
     try {
       const body = await readBody(req);
@@ -415,8 +463,7 @@ async function handleRequest(req, res) {
         return;
       }
       if (Buffer.byteLength(text) > MAX_DOCUMENT_BYTES) { sendJson(res, 413, { error: 'File exceeds the 1 MB editing limit.' }); return; }
-      draftStore = documentStore(file);
-      sendJson(res, 200, draftStore.read());
+      sendJson(res, 200, documentStore(file).read());
     } catch (error) {
       sendJson(res, error.status || 500, { error: fsErrorMessage(error) });
     }
@@ -428,7 +475,9 @@ async function handleRequest(req, res) {
     if      (url.pathname === '/')          serveStatic(res, path.join(PUBLIC, 'index.html'));
     else if (url.pathname === '/style.css') serveStatic(res, path.join(PUBLIC, 'style.css'));
     else if (url.pathname === '/app.js')    serveStatic(res, path.join(PUBLIC, 'app.js'));
-    else if (url.pathname === '/logo.svg')  serveStatic(res, path.join(PUBLIC, 'logo.svg'));
+    else if (url.pathname === '/logo-tile.png')       serveStatic(res, path.join(PUBLIC, 'logo-tile.png'));
+    else if (url.pathname === '/logo-mark.png')       serveStatic(res, path.join(PUBLIC, 'logo-mark.png'));
+    else if (url.pathname === '/logo-mark-white.png') serveStatic(res, path.join(PUBLIC, 'logo-mark-white.png'));
     else if (url.pathname.startsWith('/fonts/')) {
       const fontFile = path.basename(url.pathname);
       serveStatic(res, path.join(PUBLIC, 'fonts', fontFile));
@@ -689,7 +738,7 @@ function openBrowser(url) {
     .unref();
 }
 
-// A stale Litura, or anything else, may hold 3000. Walk up rather than die.
+// A stale Stilura, or anything else, may hold 3000. Walk up rather than die.
 function listen(port, attempt = 0) {
   // A failed attempt leaves its handlers queued; without this the next success
   // fires every one of them and announces a port nothing is bound to.
@@ -703,15 +752,15 @@ function listen(port, attempt = 0) {
   });
   server.once('listening', () => {
     const url = `http://127.0.0.1:${server.address().port}`;
-    console.log(`Litura → ${url}`);
+    console.log(`Stilura → ${url}`);
     console.log(`Draft  → ${DRAFT_FILE}`);
     console.log(`Style  → ${STYLE_FILE}`);
     // One machine-readable line for the desktop shell. It waits for this before
     // it opens a window, so it must not be a log line someone may reword.
-    if (SIDECAR) console.log(`LITURA_READY ${url}`);
+    if (SIDECAR) console.log(`STILURA_READY ${url}`);
     // The shell already has a window for this; a browser tab beside it would be
     // a second, stale copy of the same draft.
-    if (!process.env.LITURA_NO_OPEN && !SIDECAR) openBrowser(url);
+    if (!env('NO_OPEN') && !SIDECAR) openBrowser(url);
   });
   server.listen(port, '127.0.0.1');
 }

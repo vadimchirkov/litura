@@ -9,7 +9,7 @@ import { documentStore } from './document-store.js';
 import { replacementTarget, newerVersion, wordDiff } from './editing.js';
 import { mergeReviewFindings, locateFindings } from './review.js';
 
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-safety-'));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-safety-'));
 const filename = path.join(temp, 'draft.md');
 const store = documentStore(filename);
 assert.equal(store.read().revision, 'missing');
@@ -44,6 +44,10 @@ assert(replacementTarget(document, target));
 assert(!replacementTarget('New ' + document, target));
 assert(!replacementTarget(document, { ...target, from: 15 }));
 assert(!replacementTarget(document, { ...target, text: undefined }));
+// An empty span is an insertion point: valid only untouched and exactly empty.
+assert(replacementTarget(document, { document, from: 5, to: 5, text: '' }));
+assert(!replacementTarget(document, { document, from: 5, to: 5, text: 'x' }));
+assert(!replacementTarget(document, { document, from: 6, to: 5, text: '' }));
 assert(newerVersion('0.10.0', '0.2.0'));
 assert(!newerVersion('0.1.9', '0.2.0'));
 assert(!newerVersion('0.2.0', '0.2.0'));
@@ -76,7 +80,7 @@ assert.equal(mergeReviewFindings([globals, [{ code: 'generic-prose', quote: 'loc
 // Real HTTP server, disposable draft, no provider calls or credential changes.
 const child = spawn(process.execPath, ['index.js'], {
   cwd: import.meta.dirname,
-  env: { ...process.env, PORT: '0', DRAFT_FILE: filename, LITURA_NO_OPEN: '1' },
+  env: { ...process.env, PORT: '0', DRAFT_FILE: filename, STILURA_NO_OPEN: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = '';
@@ -86,7 +90,7 @@ try {
     const timer = setTimeout(() => reject(new Error('Server did not start: ' + output)), 20_000);
     child.stdout.on('data', chunk => {
       output += chunk;
-      const match = output.match(/Litura → (http:\/\/127\.0\.0\.1:\d+)/);
+      const match = output.match(/Stilura → (http:\/\/127\.0\.0\.1:\d+)/);
       if (match) { clearTimeout(timer); resolve(match[1]); }
     });
     child.once('exit', code => { clearTimeout(timer); reject(new Error(`Server exited ${code}: ${output}`)); });
@@ -132,7 +136,7 @@ try {
 //  The sidebar lists the Markdown and text files next to the draft and opens
 //  them by basename. A disposable working directory keeps the listing exact;
 //  traversal, wrong extensions, and missing files must all fail.
-const filesTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-files-'));
+const filesTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-files-'));
 fs.writeFileSync(path.join(filesTemp, 'outside.md'), 'not next to the draft');
 fs.writeFileSync(path.join(filesTemp, 'photo.png'), 'not an image');
 fs.mkdirSync(path.join(filesTemp, 'sub'));
@@ -144,7 +148,7 @@ fs.writeFileSync(path.join(filesTemp, 'sub', '.hidden.md'), 'hidden');
 // follow the draft's folder, not the process cwd.
 const filesChild = spawn(process.execPath, [path.join(import.meta.dirname, 'index.js')], {
   cwd: filesTemp,
-  env: { ...process.env, PORT: '0', LITURA_NO_OPEN: '1', DRAFT_FILE: path.join(filesTemp, 'sub', 'draft.md') },
+  env: { ...process.env, PORT: '0', STILURA_NO_OPEN: '1', DRAFT_FILE: path.join(filesTemp, 'sub', 'draft.md') },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let filesOutput = '';
@@ -154,7 +158,7 @@ try {
     const timer = setTimeout(() => reject(new Error('Server did not start: ' + filesOutput)), 20_000);
     filesChild.stdout.on('data', chunk => {
       filesOutput += chunk;
-      const match = filesOutput.match(/Litura → (http:\/\/127\.0\.0\.1:\d+)/);
+      const match = filesOutput.match(/Stilura → (http:\/\/127\.0\.0\.1:\d+)/);
       if (match) { clearTimeout(timer); resolve(match[1]); }
     });
     filesChild.once('exit', code => { clearTimeout(timer); reject(new Error(`Server exited ${code}: ${filesOutput}`)); });
@@ -194,19 +198,19 @@ try {
 //  by closing stdin. Both are invisible from the browser, so nothing else
 //  would notice them breaking.
 //
-const sidecarTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-sidecar-'));
+const sidecarTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-sidecar-'));
 const sidecar = spawn(process.execPath, ['index.js'], {
   cwd: import.meta.dirname,
-  env: { ...process.env, PORT: '0', DRAFT_FILE: path.join(sidecarTemp, 'draft.md'), LITURA_SIDECAR: '1' },
+  env: { ...process.env, PORT: '0', DRAFT_FILE: path.join(sidecarTemp, 'draft.md'), STILURA_SIDECAR: '1' },
   stdio: ['pipe', 'pipe', 'inherit'],
 });
 try {
   let seen = '';
   const ready = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('No LITURA_READY line: ' + seen)), 20_000);
+    const timer = setTimeout(() => reject(new Error('No STILURA_READY line: ' + seen)), 20_000);
     sidecar.stdout.on('data', chunk => {
       seen += chunk;
-      const match = seen.match(/^LITURA_READY (http:\/\/127\.0\.0\.1:\d+)$/m);
+      const match = seen.match(/^STILURA_READY (http:\/\/127\.0\.0\.1:\d+)$/m);
       if (match) { clearTimeout(timer); resolve(match[1]); }
     });
     sidecar.once('exit', code => { clearTimeout(timer); reject(new Error(`Sidecar exited ${code}: ${seen}`)); });

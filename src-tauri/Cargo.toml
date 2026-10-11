@@ -1,5 +1,5 @@
 [package]
-name = "litura"
+name = "stilura"
 version = "0.0.0"                       # read from package.json by tauri.conf.json
 description = "A local AI-assisted editor for sharper, more human writing"
 authors = ["Vadim Chirkov"]
@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 serde_json = "1"   # tauri::generate_context! expands into it
+reqwest = { version = "0.13", default-features = false } # already used by the updater
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
 const root = path.resolve(import.meta.dirname, '..');
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'litura-browser-'));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-browser-'));
 const fakePi = `
 export async function getAgentStatus() { return { available: true, providers: [{id:'fixture', name:'Test'}], models:[{provider:'fixture',model:'test',name:'Test model',thinkingLevels:['off']}], authProviders:[], defaultSelection:{provider:'fixture',model:'test',thinkingLevel:'off'} }; }
 export async function saveProviderApiKey() { throw Error('Fixture does not store keys'); }
@@ -44,7 +44,7 @@ const result = await build({
   } }],
 });
 const child = spawn(process.execPath, ['--input-type=module', '--eval', result.outputFiles[0].text], {
-  cwd: root, stdio: 'inherit', env: { ...process.env, PORT: '0', LITURA_NO_OPEN: '1', DRAFT_FILE: path.join(temp, 'draft.md') },
+  cwd: root, stdio: 'inherit', env: { ...process.env, PORT: '0', STILURA_NO_OPEN: '1', DRAFT_FILE: path.join(temp, 'draft.md') },
 });
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
 child.on('exit', code => { fs.rmSync(temp, { recursive: true, force: true }); process.exit(code ?? 0); });

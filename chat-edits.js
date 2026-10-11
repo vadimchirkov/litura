@@ -1,4 +1,7 @@
 // A deliberate response envelope, never commands inferred from prose/Markdown.
+// (The <litura-edits> tag name is wire format shared with stored chats:
+// renaming it would orphan existing histories. The product name changed;
+// the protocol did not.)
 export const EDITS_OPEN = '<litura-edits>';
 const EDITS_CLOSE = '</litura-edits>';
 export const CHAT_EDITS_PROMPT = `
