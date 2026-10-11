@@ -8,13 +8,12 @@ Local AI writing enhancer that writes with you. It highlights generic, AI-soundi
 npx stilura
 ```
 
-![Stilura highlighting sales language, a "not X but Y" construction and a forced triple, with a finding card open](docs/screenshot.png)
+![Stilura marking stock wording in a short story, with a finding card explaining why "It is important to note" weakens the sentence](docs/screenshot.png)
 ## How it works
 
 Stilura checks your draft against 20 named patterns in `style.md`: sales language, vague attribution, forced triples, filler openers, stacked qualifiers, and more. A second pass catches structural issues like buried points and broken paragraph promises.
 
-- **Options** — three rewrites for any finding. Hover to preview, click to apply.
-- **Discuss** — chat about a passage or the whole draft.
+- **Options** — rewrites for any finding, shown one at a time. Yes to apply, No to see the next.
 - **Brief** (`/brief`) — tell it who reads this and what it should do. Rewrites aim at that reader; review stays unbiased.
 - **Continuations** — short next-line suggestions appear when you pause. `Tab` to accept, `Escape` to dismiss.
 

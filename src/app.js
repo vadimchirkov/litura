@@ -3818,10 +3818,6 @@ function findingCard(finding, instruction) {
   });
   const actions = chatEl('div', 'finding-actions');
   actions.append(offer, dismiss);
-  const discuss = chatEl('button', 'chat-action', 'Discuss');
-  discuss.type = 'button';
-  discuss.addEventListener('click', () => { const range = findingRange(finding.id); if (range) attachLive(finding, range); chatInput.focus(); });
-  actions.append(discuss);
   if (finding.id === -1) dismiss.textContent = 'Keep here';
   // Variants open inside this card — beside the passage they replace — not
   // in the bottom stream. The stream stays for conversation about the draft.
@@ -3852,62 +3848,53 @@ function variantCards(variants, instruction, target, card = null) {
   const wrap = chatEl('div', 'chat-variants');
   wrap.setAttribute('role', 'list');
   wrap.dataset.targetFrom = String(target.from);
-  ordered.forEach((text, index) => {
+  let current = 0;
+
+  // One option at a time: the writer reads it in place and answers Yes or No.
+  const items = ordered.map((text, index) => {
     const item = chatEl('div', 'variant-card');
     item.setAttribute('role', 'listitem');
-    item.tabIndex = 0;
-    item.setAttribute('role', 'button');
-    item.setAttribute('aria-label', `Apply option ${index + 1}`);
-    const body = chatEl('div', 'variant-text', text);
-    item.append(body);
-    const previewIt = () => {
-      if (wrap.classList.contains('is-spent')) return;
-      if (!replacementTarget(workView.state.doc.toString(), target)) return;
-      clearTimeout(unpreviewTimer);
-      showPlainPreview(text, target);
-    };
-    const unpreview = () => {
-      clearTimeout(unpreviewTimer);
-      unpreviewTimer = setTimeout(clearPlainPreview, UNPREVIEW_DELAY);
-    };
-    item.addEventListener('mouseenter', previewIt);
-    item.addEventListener('mouseleave', unpreview);
-    item.addEventListener('focus', previewIt);
-    item.addEventListener('blur', unpreview);
-    const apply = () => { if (!wrap.classList.contains('is-spent')) applyText(text, target, wrap, item); };
-    item.addEventListener('click', apply);
-    item.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); apply(); }
-      else if (event.key === 'Escape') { event.preventDefault(); unpreview(); item.blur(); workView.focus(); }
-    });
+    item.append(chatEl('div', 'variant-text', text));
+    if (index > 0) item.hidden = true;
     wrap.append(item);
+    return { element: item, text };
   });
 
-  // Three options none of which fit is otherwise a dead end — the passage is
-  // still attached, so ask again with the same instruction.
-  // /idea has no instruction to repeat, so it gets no button.
-  // The usage hint is shown once: after the first applied option the writer
-  // knows the drill, and the row shrinks to the retry icon alone.
-  const hintSeen = (() => { try { return localStorage.getItem('wa-variant-hint') === 'seen'; } catch { return false; } })();
-  if (instruction !== null) {
-    const foot = chatEl('div', 'variant-foot');
-    const again = chatEl('button', 'chat-action is-icon');
-    again.type = 'button';
-    again.setAttribute('aria-label', 'Try again — ask for three more');
-    again.title = 'Try again — ask for three more';
-    again.innerHTML = '<svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="19.17 3.33 19.17 8.33 14.17 8.33"/><path d="M17.07 12.5a7.5 7.5 0 1 1-1.77-7.8l3.87 3.63"/></svg>';
-    again.addEventListener('click', () => {
-      if (wrap.classList.contains('is-spent')) return;
-      clearPlainPreview();
-      wrap.remove();
-      requestVariants(instruction, target, card);
-    });
-    if (!hintSeen) foot.append(chatEl('span', 'variant-hint', 'Hover to preview · Click to apply · Esc to dismiss'));
-    foot.append(again);
-    wrap.append(foot);
-  } else if (!hintSeen) {
-    wrap.append(chatEl('div', 'variant-hint', 'Hover to preview · Click to apply · Esc to dismiss'));
-  }
+  const previewCurrent = () => {
+    if (wrap.classList.contains('is-spent')) return;
+    if (!replacementTarget(workView.state.doc.toString(), target)) return;
+    showPlainPreview(items[current].text, target);
+  };
+
+  const foot = chatEl('div', 'variant-foot');
+  const yes = chatEl('button', 'chat-action is-primary', 'Yes');
+  yes.type = 'button';
+  yes.addEventListener('click', () => {
+    if (wrap.classList.contains('is-spent')) return;
+    clearPlainPreview();
+    applyText(items[current].text, target, wrap, items[current].element);
+  });
+  const no = chatEl('button', 'chat-dismiss', 'No');
+  no.type = 'button';
+  no.addEventListener('click', () => {
+    if (wrap.classList.contains('is-spent')) return;
+    clearPlainPreview();
+    if (current < items.length - 1) {
+      items[current].element.hidden = true;
+      current++;
+      items[current].element.hidden = false;
+      previewCurrent();
+    } else {
+      // All declined — clear variants, re-enable Options on the finding card
+      const host = wrap.closest('.chat-entry.is-finding');
+      if (host) restoreFindingCard(host);
+      fadeRemove(wrap);
+      markVariantTarget(null);
+    }
+  });
+  foot.append(yes, no);
+  wrap.append(foot);
+  requestAnimationFrame(previewCurrent);
   return wrap;
 }
 
