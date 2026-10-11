@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -49,6 +49,17 @@ function findBinary() {
 }
 
 const binary = process.argv[2] ? path.resolve(process.argv[2]) : findBinary();
+
+// CI's macOS VMs let V8 map JIT memory regardless; a real Mac kills a sidecar
+// signed without these before the server prints a line. So ask the signature.
+if (process.platform === 'darwin') {
+  const sidecar = path.join(path.dirname(binary), 'stilura-server');
+  const signature = execFileSync('codesign', ['-d', '--entitlements', '-', '--xml', sidecar], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  for (const key of ['allow-jit', 'allow-unsigned-executable-memory']) {
+    assert(signature.includes(`com.apple.security.cs.${key}`), `${sidecar} is signed without ${key}: V8 cannot start under the hardened runtime.`);
+  }
+}
+
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-smoke-'));
 const workspace = path.join(temp, 'writing');
 const draft = 'Smoke draft: a sentence the app must hand back.\n';

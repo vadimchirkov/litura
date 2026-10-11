@@ -6,8 +6,11 @@ Stilura (renamed from Litura) follows [semantic versioning](https://semver.org).
 
 - Fixed cross-document Undo and saves from concurrent tabs. File writes now keep revision checks and history; workspace APIs reject symbolic links.
 - Desktop state survives server port changes. Closing, changing folders, and installing updates wait for confirmed saves. Partial brief answers survive reloads, and Save as falls back to a download where the system file-picker API is unavailable.
+- Fixed the desktop app crash on macOS ("The server stopped before it was ready"): ad-hoc code signing now carries the JIT entitlements that V8 needs under the hardened runtime. The smoke test verifies the sidecar signature.
+- Desktop releases are gated behind a draft: the updater never sees a half-built release. All platforms must build and pass their smoke test before the release goes live.
+- Removed the Discuss button from finding cards in the chat. When rewrite options appear they show one at a time with Yes / No instead of three cards at once.
 
-- Renamed Litura → Stilura (*stilus*, the pen, + *litura*, the correction): npm package `stilura`, commands `stilura` / `stilura-mcp`, desktop app, skill (`skills/stilura`), and all user-facing strings. `STILURA_*` environment variables replace `LITURA_*` (old spellings still honored). The GitHub repo, release URLs, and the Tauri bundle identifier move with the name — reinstall the desktop app from the new releases page; its saved folder choice does not carry over. Browser drafts, `style.md`, and disk history (`.litura-history`, `litura:` storage keys, `<litura-edits>` tags) are untouched and keep working.
+- Renamed Litura → Stilura (*stilus*, the pen, + *litura*, the correction): npm package `stilura`, commands `stilura` / `stilura-mcp`, desktop app, skill (`skills/stilura`), and all user-facing strings. `STILURA_*` environment variables replace `LITURA_*` (old spellings still honored). The GitHub repo, release URLs, and the Tauri bundle identifier move with the name — reinstall the desktop app from the new releases page; desktop state migrates automatically. Browser drafts, `style.md`, and disk history (`.litura-history`, `litura:` storage keys, `<litura-edits>` tags) are untouched and keep working.
 
 ## 0.6.0 — 2026-10-09
 

@@ -1,17 +1,42 @@
 name: Desktop build
 
 # A tag builds the desktop app for every platform and attaches the bundles —
-# and the signed latest.json the updater reads — to that tag's release. Manual
-# runs are for checking that the build still works without cutting a release.
+# and the signed latest.json the updater reads — to a draft release. The draft
+# becomes the latest release only after every platform has built and passed its
+# smoke test: the updater follows releases/latest, which never shows a draft.
+# Manual runs are for checking that the build still works without cutting a
+# release.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
 
 jobs:
-  desktop:
+  # Made once, before the matrix: drafts are not unique per tag, so four jobs
+  # racing to create one could split the bundles across several.
+  draft:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
     permissions:
-      contents: write   # the release the bundles are attached to
+      contents: write
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+    steps:
+      - id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$GITHUB_REF_NAME" \
+            -f name="Stilura $GITHUB_REF_NAME" -f body='See CHANGELOG.md for what changed.' \
+            -F draft=true --jq .id)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    needs: draft
+    # A manual run skips the draft and still builds.
+    if: ${{ !cancelled() && needs.draft.result != 'failure' }}
+    permissions:
+      contents: write   # the draft the bundles are attached to
     strategy:
       fail-fast: false
       matrix:
@@ -76,16 +101,16 @@ jobs:
 
       - uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # uploads to the tag's release
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # uploads to the draft
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
         with:
           args: --target ${{ matrix.target }}
+          releaseId: ${{ needs.draft.outputs.id }}
+          # A draft's download URLs say untagged-…; latest.json gets the tag's.
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: Stilura ${{ github.ref_name }}
           releaseBody: See CHANGELOG.md for what changed.
-          releaseDraft: false
           # The updater reads this file from the latest release; without it a
           # published build is invisible to every copy already installed.
           includeUpdaterJson: true
@@ -94,7 +119,24 @@ jobs:
       # Everything below the window has its own checks. What only a built
       # bundle can get wrong — resources that did not travel, a sidecar for the
       # wrong architecture, a runtime that will not start — is asked here, by
-      # running the thing that was just packaged. A red job after a tag means
-      # the release is up but should not be announced.
+      # running the thing that was just packaged. A red job keeps the release
+      # a draft.
       - name: Smoke-test the bundle
         run: ${{ startsWith(matrix.platform, 'ubuntu') && 'xvfb-run -a npm run smoke:desktop' || 'npm run smoke:desktop' }}
+
+  publish:
+    needs: [draft, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE: repos/${{ github.repository }}/releases/${{ needs.draft.outputs.id }}
+    steps:
+      # Jobs that upload at the same moment can overwrite each other's entry.
+      - name: Check latest.json lists every platform
+        run: |
+          asset=$(gh api "$RELEASE/assets" --jq '.[] | select(.name == "latest.json") | .id')
+          gh api -H 'Accept: application/octet-stream' "repos/$GITHUB_REPOSITORY/releases/assets/$asset" \
+            | jq -e '.platforms | has("darwin-aarch64") and has("darwin-x86_64") and has("linux-x86_64") and has("windows-x86_64")'
+      - run: gh api -X PATCH "$RELEASE" -F draft=false -f make_latest=true --silent
