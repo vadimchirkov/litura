@@ -62,6 +62,86 @@ fn save_folder(app: &AppHandle, folder: &Path) {
     }
 }
 
+/// Litura became Stilura, and the bundle identifier changed with the name.
+/// Every per-app directory is named after that identifier, so the saved
+/// folder, the editor state, and the webview's local storage would all start
+/// empty. Copy the old directories across once, before the webview opens.
+const LITURA_IDENTIFIER: &str = "io.github.vadimchirkov.litura";
+
+fn migrate_from_litura(app: &AppHandle) {
+    let paths = app.path();
+    // macOS shares one directory for config and data; the second pass finds
+    // it already moved. WebKit keeps local storage outside it, by bundle id.
+    // WebView2 (Windows) and WebKitGTK (Linux) keep theirs inside these.
+    #[allow(unused_mut)]
+    let mut dirs = vec![paths.app_config_dir(), paths.app_data_dir(), paths.app_local_data_dir()];
+    #[cfg(target_os = "macos")]
+    dirs.push(paths.home_dir().map(|home| home.join("Library/WebKit").join(&app.config().identifier)));
+    for new in dirs.into_iter().flatten() {
+        if let Some(old) = new.parent().map(|parent| parent.join(LITURA_IDENTIFIER)) {
+            if let Err(error) = migrate_dir(&old, &new) {
+                eprintln!("Could not carry over {}: {error}", old.display());
+            }
+        }
+    }
+}
+
+/// Copy `old` to `new` when only `old` exists. The copy lands under a
+/// temporary name and is renamed into place, so an interrupted run leaves
+/// `new` absent and the next launch tries again. `old` is left alone: it is
+/// the way back if the writer reinstalls Litura.
+fn migrate_dir(old: &Path, new: &Path) -> std::io::Result<()> {
+    if !old.is_dir() || new.exists() {
+        return Ok(());
+    }
+    let mut temp = new.as_os_str().to_owned();
+    temp.push(".migrating");
+    let temp = PathBuf::from(temp);
+    let _ = std::fs::remove_dir_all(&temp);
+    copy_dir(old, &temp)?;
+    std::fs::rename(&temp, new)
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_dir(&entry.path(), &to.join(entry.file_name()))?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_dir_copies_once_and_keeps_the_original() {
+        let root = std::env::temp_dir().join(format!("stilura-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (old, new) = (root.join("litura"), root.join("stilura"));
+        std::fs::create_dir_all(old.join("editor-state")).unwrap();
+        std::fs::write(old.join("folder.txt"), "/writing").unwrap();
+        std::fs::write(old.join("editor-state/a.json"), "{}").unwrap();
+
+        migrate_dir(&old, &new).unwrap();
+        assert_eq!(std::fs::read_to_string(new.join("folder.txt")).unwrap(), "/writing");
+        assert!(new.join("editor-state/a.json").is_file());
+        assert!(old.join("folder.txt").is_file());
+
+        // A directory that already exists is never overwritten.
+        std::fs::write(new.join("folder.txt"), "/chosen").unwrap();
+        migrate_dir(&old, &new).unwrap();
+        assert_eq!(std::fs::read_to_string(new.join("folder.txt")).unwrap(), "/chosen");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
 /// Ask for the writing folder and hand the answer to `next`.
 ///
 /// The callback form, not the blocking one: a blocking pick answered from
@@ -308,6 +388,7 @@ fn main() {
         .manage(Server::default())
         .setup(|app| {
             let handle = app.handle().clone();
+            migrate_from_litura(&handle);
             app.set_menu(build_menu(&handle)?)?;
 
             // The window opens on a local holding page first: the folder
