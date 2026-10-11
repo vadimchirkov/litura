@@ -10,7 +10,7 @@ npx stilura
 
 ![Stilura highlighting sales language, a "not X but Y" construction and a forced triple, with a finding card open](docs/screenshot.png)
 
-> **Renamed from Litura.** Same project, new name. The npm package moved from `litura` to `stilura` and the repository from `vadimchirkov/litura` to `vadimchirkov/stilura`. Your `draft.md` and other files stay where they are.
+> **Renamed from Litura.** Same project, new name. The npm package moved from `litura-app` to `stilura` and the repository from `vadimchirkov/litura` to `vadimchirkov/stilura`. Your `draft.md` and other files stay where they are.
 
 ## What it finds
 
