@@ -1697,7 +1697,6 @@ function remarkRow(quote, label, reason, open, kind = '') {
 }
 function renderScoreDetails() {
   syncReviewPanel();
-  const text = workView.state.doc.toString();
   const rows = [
     ...workView.state.field(styleMarkerField).map(marker => ({
       from: marker.from, quote: marker.quote, label: 'Stock wording', reason: marker.reason, kind: '',
@@ -1710,9 +1709,7 @@ function renderScoreDetails() {
   ].sort((a, b) => a.from - b.from);
   scoreRemarkList.replaceChildren(...rows.map(row => remarkRow(row.quote, row.label, row.reason, row.open, row.kind)));
   if (!rows.length) scoreRemarkList.append(chatEl('p', 'style-details-note',
-    reviewState === 'complete' ? 'No slop found.' : 'Nothing marked yet.'));
-  if (!isLatinScript(text)) scoreRemarkList.append(chatEl('p', 'style-details-note', 'Local checks are English-only; the model check covers this draft.'));
-}
+    reviewState === 'complete' ? 'No slop found.' : 'Nothing marked yet.'));}
 function keepStyleMarker(marker) {
   const kept = { ...marker, state: 'kept' };
   keptStyle.push(kept);
