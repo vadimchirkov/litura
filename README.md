@@ -9,9 +9,6 @@ npx stilura
 ```
 
 ![Stilura highlighting sales language, a "not X but Y" construction and a forced triple, with a finding card open](docs/screenshot.png)
-
-> **Renamed from Litura.** The npm package moved from `litura-app` to `stilura`, the repository from `vadimchirkov/litura` to `vadimchirkov/stilura`. Your files stay where they are.
-
 ## How it works
 
 Stilura checks your draft against 20 named patterns in `style.md`: sales language, vague attribution, forced triples, filler openers, stacked qualifiers, and more. A second pass catches structural issues like buried points and broken paragraph promises.
