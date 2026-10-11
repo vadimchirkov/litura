@@ -25,10 +25,20 @@ export async function completeText({systemPrompt, userPrompt, signal}) {
     return JSON.stringify([selected + ' revised A', selected + ' revised B', selected + ' revised C']);
   }
   if (systemPrompt.includes('inline writing assistant')) return 'TEXT: and continued';
+  if (systemPrompt.includes('Create a writing brief interview')) return JSON.stringify([
+    { key: 'reader', question: 'Who should read this passage?', options: ['A first-time reader', 'A fellow writer', 'A friend'] },
+    { key: 'goal', question: 'What should this passage leave with them?', options: ['A clear picture', 'A new question', 'A feeling'] },
+    { key: 'awareness', question: 'Do they know the situation in this passage?', options: ['Not yet', 'Some of it', 'All of it'] },
+    { key: 'scope', question: 'Where will this passage appear?', options: ['A letter', 'An essay', 'A story'] },
+  ]);
   if (systemPrompt.includes('global structure pass')) return '[]';
   return JSON.stringify(['Alpha passage.', 'Beta passage.'].filter(quote=>userPrompt.includes(quote)).map(quote=>({code:'generic-prose',quote,pattern:'Test wording',reason:'Fixture finding for safe editing',fix:'Make the passage clearer'})));
 }
-export async function streamText({systemPrompt, onText, signal}) {
+export async function streamText({systemPrompt, messages, onText, signal}) {
+  if (systemPrompt.includes('latest user message explicitly addresses')) {
+    onText('Fixture brief update.<litura-edits>' + JSON.stringify({ edits: [], brief: { source: messages.at(-1).content, changes: { reader: 'beginners' } } }) + '</litura-edits>');
+    return;
+  }
   onText('Partial fixture answer');
   await new Promise((resolve,reject)=>{const timer=setTimeout(resolve,300);signal?.addEventListener('abort',()=>{clearTimeout(timer);reject(signal.reason)}, {once:true})});
   if (systemPrompt.includes('expand the following idea')) throw Error('Simulated stream failure');

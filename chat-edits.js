@@ -2,6 +2,8 @@
 // (The <litura-edits> tag name is wire format shared with stored chats:
 // renaming it would orphan existing histories. The product name changed;
 // the protocol did not.)
+import { validateBriefUpdate } from './brief.js';
+
 export const EDITS_OPEN = '<litura-edits>';
 const EDITS_CLOSE = '</litura-edits>';
 export const CHAT_EDITS_PROMPT = `
@@ -66,7 +68,7 @@ export function locateChatEdits(items, document, selection = null) {
   });
 }
 
-export function parseChatResponse(raw, document, selection) {
+export function parseChatResponse(raw, document, selection, message) {
   const start = envelopeStart(raw);
   if (!start) return { text: raw, edits: [] };
   let items;
@@ -79,7 +81,12 @@ export function parseChatResponse(raw, document, selection) {
     const tail = raw.slice(start.at);
     items = JSON.parse(tail.slice(tail.indexOf('[')).replace(/```\s*$/, ''));
   }
-  return { text: chatVisibleText(raw, true), edits: locateChatEdits(items, document, selection) };
+  const result = { text: chatVisibleText(raw, true), edits: locateChatEdits(Array.isArray(items) ? items : items?.edits, document, selection) };
+  if (!Array.isArray(items) && items.brief !== undefined) {
+    try { result.brief = validateBriefUpdate(items.brief, message); }
+    catch { result.briefWarning = 'The brief update could not be verified. No brief changes were saved.'; }
+  }
+  return result;
 }
 
 // Map only through known editor transactions. Never search a changed document

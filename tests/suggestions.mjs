@@ -39,6 +39,9 @@ const prompts = suggestionPrompts({ document: 'Before\n\nAfter', cursor: 6, styl
 assert(prompts.systemPrompt.includes('Keep my voice.'));
 assert(prompts.userPrompt.includes('TEXT AFTER CURSOR:\n\n\nAfter'));
 assert(prompts.userPrompt.includes('Known facts.'));
+const briefPrompts = suggestionPrompts({ document: 'Draft', brief: 'Reader: beginners' });
+assert.match(briefPrompts.userPrompt, /WRITING BRIEF.*\nReader: beginners/);
+assert.match(briefPrompts.systemPrompt, /not facts to insert/);
 
 // Exercise production editor state, acceptance and scheduling with a deferred
 // provider boundary. Responses deliberately ignore abort to test stale guards.
@@ -55,6 +58,7 @@ function harness(text = 'A sufficiently long draft') {
     autoSuggestOn: true, loadingDocument: false, savePaused: false, queueMicrotask,
     currentAgent: agentStub, ensureAgent: async () => true,
     activeSuggestAgent: agentStub,
+    briefContext: () => '',
     setTimeout: fn => { timers.set(++timerId, fn); return timerId; },
     clearTimeout: id => timers.delete(id),
     startJob: () => { const job = new AbortController(); jobs.add(job); return job; },
@@ -184,4 +188,26 @@ for (const [text, cursor, eligible] of [
   h.view.dispatch({ selection: { anchor: cursor } });
   assert.equal(h.context.atParagraphEnd(h.view.state), eligible);
 }
-console.log('Suggestion checks passed: spacing, word boundaries, partial words, scheduling, cancellation, stale results, acceptance and manual requests.');
+{
+  const h = harness();
+  let brief = 'Reader: beginners';
+  h.context.briefContext = () => brief;
+  const pending = h.context.suggestFetch();
+  const body = JSON.parse(h.requests[0].options.body);
+  assert.equal(body.brief, brief);
+  assert.equal(body.messages, undefined, 'Suggestions must not receive chat history');
+  brief = 'Reader: experts';
+  h.answer(0); await pending;
+  assert.equal(h.ghost(), null, 'Changing the brief invalidates an in-flight suggestion');
+}
+{
+  const h = harness();
+  h.context.positionBrief = { reader: 'beginners' };
+  h.context.docStorage = { setItem() {} };
+  const from = source.indexOf('function saveBrief()'), to = source.indexOf('function restoreBrief()', from);
+  vm.runInContext(source.slice(from, to), h.context);
+  h.context.ghostShow(h.view, 'old wording');
+  h.context.saveBrief();
+  assert.equal(h.ghost(), null, 'Saving a brief clears already visible ghost text');
+}
+console.log('Suggestion checks passed: spacing, scheduling, cancellation, stale results, brief context and acceptance.');

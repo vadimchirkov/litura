@@ -25,6 +25,7 @@ import { documentStore, MAX_DOCUMENT_BYTES } from './document-store.js';
 import { suggestionPrompts, parseSuggestion } from './suggestions.js';
 import { CHAT_EDITS_PROMPT, chatVisibleText, parseChatResponse } from './chat-edits.js';
 import { desktopBridge } from './desktop.js';
+import { BRIEF_STEPS, BRIEF_PROMPT, CHAT_BRIEF_PROMPT, briefUpdateAllowed, validateBriefQuestions } from './brief.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Renamed from Litura: STILURA_* wins, LITURA_* still honored so existing
@@ -231,7 +232,7 @@ function readBody(req) {
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected a JSON object');
-        for (const key of ['text', 'revision', 'document', 'selected', 'target', 'context', 'idea', 'instruction', 'selection', 'provider', 'apiKey', 'name', 'method', 'code']) {
+        for (const key of ['text', 'revision', 'document', 'selected', 'target', 'context', 'brief', 'idea', 'instruction', 'selection', 'provider', 'apiKey', 'name', 'method', 'code']) {
           if (body[key] !== undefined && typeof body[key] !== 'string') throw new Error(`${key} must be a string`);
         }
         if (body.document && Buffer.byteLength(body.document) > MAX_DOCUMENT_BYTES) throw new Error('Document exceeds 1 MB');
@@ -499,6 +500,26 @@ async function handleRequest(req, res) {
     if ((body.document?.length ?? 0) > 60_000) return sendJson(res, 413, { error: 'AI actions support up to 60,000 characters per draft. Split the document into smaller drafts; editing and export remain available.' });
     if (url.pathname === '/rewrite' && (!body.selected || !Number.isInteger(body.from) || body.document?.slice(body.from, body.from + body.selected.length) !== body.selected)) return sendJson(res, 400, { error: 'Selected text does not match the document range' });
 
+    if (url.pathname === '/brief') {
+      if (typeof body.document !== 'string') return sendJson(res, 400, { error: 'Brief requires a draft' });
+      const answers = body.answers ?? {};
+      if (!answers || typeof answers !== 'object' || Array.isArray(answers)
+        || Object.entries(answers).some(([key, value]) => !BRIEF_STEPS.some(step => step.key === key)
+          || typeof value !== 'string' || value.length > 200)) {
+        return sendJson(res, 400, { error: 'Invalid brief answers' });
+      }
+      if (!body.document.trim()) return sendJson(res, 200, { questions: BRIEF_STEPS });
+      try {
+        const raw = await completeText({
+          systemPrompt: BRIEF_PROMPT,
+          userPrompt: JSON.stringify({ draft: body.document, answers }),
+          selection: body.agent, signal, maxTokens: 4000,
+        });
+        sendJson(res, 200, { questions: validateBriefQuestions(JSON.parse(raw)) });
+      } catch (error) { sendJson(res, 502, { error: error.message }); }
+      return;
+    }
+
     // POST /idea — SSE stream
     if (url.pathname === '/idea') {
       const system = buildSystemPrompt(
@@ -555,12 +576,14 @@ async function handleRequest(req, res) {
         .map(message => ({ role: message.role, content: String(message.content) }))
         .slice(-20);
       if (!turns.length) { sendJson(res, 400, { error: 'No messages' }); return; }
+      const latestMessage = turns.at(-1).role === 'user' ? turns.at(-1).content : '';
 
       const system = buildSystemPrompt(
         'You are a writing assistant working alongside the author on the draft below. ' +
         'Answer questions about it and propose concrete wording when asked. ' +
         'You cannot edit the document yourself — the author applies what they choose, ' +
         'so propose replacements for their approval. ' + CHAT_EDITS_PROMPT +
+        (briefUpdateAllowed(latestMessage) ? CHAT_BRIEF_PROMPT : '') +
         'Be brief. Skip preamble, restating the question, and offers of further help. ' +
         NO_SLOP +
         (body.selection ? 'The author has selected a passage; treat it as the subject unless they say otherwise.' : '')
@@ -593,11 +616,11 @@ async function handleRequest(req, res) {
           },
         });
         let result;
-        try { result = parseChatResponse(raw, body.document, selectedRange); }
+        try { result = parseChatResponse(raw, body.document, selectedRange, latestMessage); }
         catch {
           result = { text: chatVisibleText(raw), edits: [], editWarning: 'The proposed edits could not be verified. Ask for the rewrite again.' };
         }
-        res.write(`data: ${JSON.stringify({ answer: result.text, edits: result.edits, editWarning: result.editWarning })}\n\n`);
+        res.write(`data: ${JSON.stringify({ answer: result.text, edits: result.edits, editWarning: result.editWarning, brief: result.brief, briefWarning: result.briefWarning })}\n\n`);
         res.write('data: [DONE]\n\n');
         res.end();
       } catch (e) {
@@ -701,14 +724,15 @@ async function handleRequest(req, res) {
     //  Returns: { suggestion: string }  — a short natural continuation
     //
     if (url.pathname === '/suggest') {
-      const { context, document: doc, cursor, manual } = body;
+      const { context, brief, document: doc, cursor, manual } = body;
+      if (brief?.length > 4000) return sendJson(res, 400, { error: 'Brief is too long' });
 
       const at     = cursor ?? (doc ?? '').length;
       const prefix = (doc ?? '').slice(0, at);
 
       try {
         const suggestion = await completeText({
-          ...suggestionPrompts({ document: doc, cursor: at, context, style: readStyle(), manual: !!manual }),
+          ...suggestionPrompts({ document: doc, cursor: at, context, brief, style: readStyle(), manual: !!manual }),
           selection: body.agent,
           continuation: true,
           signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),

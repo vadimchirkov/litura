@@ -7,7 +7,7 @@ import { trimOverlap } from './review.js';
 // press it reads as a broken button, so a finished sentence stops being a
 // reason to abstain. The grounding rules do not move — an asked-for
 // continuation may invent no more than an offered one.
-export function suggestionPrompts({ document = '', cursor = document.length, context, style, manual = false }) {
+export function suggestionPrompts({ document = '', cursor = document.length, context, brief, style, manual = false }) {
   const thought = manual
     ? 'Stay on the current thought; when it is already finished, open the next sentence its own line of thought calls for.'
     : 'Stay on the last thought.';
@@ -28,6 +28,8 @@ export function suggestionPrompts({ document = '', cursor = document.length, con
       style ? `Follow this writing style guide:\n\n${style}` : '',
       `You are an inline writing assistant. Fill the cursor position without changing existing text.
 Match the draft's language, voice, vocabulary, rhythm and factual uncertainty. ${thought}
+The writing brief sets audience, purpose and constraints, not facts to insert. Use it to guide tone and level of explanation.
+The local sentence and surrounding text determine what comes next. A brief never licenses invented claims, a new topic or a forced call to action.
 Let the continuation's length follow how well the material supports it, up to 15 words: a word or punctuation when that finishes the thought, a full clause or sentence when the draft or context clearly carries it further.
 ${silence}
 Complete grammar, punctuation, an unfinished word, or a consequence directly supported by the supplied facts. Never choose a decision or next event for the author. ${choice}
@@ -43,6 +45,7 @@ Prefix ending in an already complete quoted phrase → TEXT: ”.
 The format label is not part of the draft. Preserve the author's quotation marks; they need no escaping.`,
     ].filter(Boolean).join('\n\n---\n\n'),
     userPrompt: [
+      brief ? `WRITING BRIEF (preferences, not factual evidence):\n${brief}` : '',
       context ? `AUTHOR'S MATERIAL:\n${context}` : '',
       `TEXT BEFORE CURSOR:\n${document.slice(0, cursor)}`,
       `TEXT AFTER CURSOR:\n${document.slice(cursor)}`,

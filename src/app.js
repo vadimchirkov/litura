@@ -28,6 +28,7 @@ import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spel
 import { searchKeymap } from '@codemirror/search';
 import { hydrateIcons, icon } from './icons.js';
 import { openStorage } from './storage.js';
+import { BRIEF_STEPS, validateBriefQuestions, validateBriefUpdate } from '../brief.js';
 
 async function main() {
 const desktop = new URLSearchParams(location.search).get('shell') === 'desktop';
@@ -1709,8 +1710,8 @@ function renderScoreDetails() {
   ].sort((a, b) => a.from - b.from);
   scoreRemarkList.replaceChildren(...rows.map(row => remarkRow(row.quote, row.label, row.reason, row.open, row.kind)));
   if (!rows.length) scoreRemarkList.append(chatEl('p', 'style-details-note',
-    reviewState === 'complete' ? 'No slop found.' : 'No slop marked yet. Check the draft to catch stock wording and weak spots.'));
-  if (!isLatinScript(text)) scoreRemarkList.append(chatEl('p', 'style-details-note', 'Local wording checks support English; the model check supports this draft.'));
+    reviewState === 'complete' ? 'No slop found.' : 'Nothing marked yet.'));
+  if (!isLatinScript(text)) scoreRemarkList.append(chatEl('p', 'style-details-note', 'Local checks are English-only; the model check covers this draft.'));
 }
 function keepStyleMarker(marker) {
   const kept = { ...marker, state: 'kept' };
@@ -1871,6 +1872,7 @@ async function suggestFetch(manual = false) {
   const suggestAgent = activeSuggestAgent() ?? currentAgent();
   if (version !== suggestVersion || (!manual && !view.hasFocus) || !suggestAgent) return;
   const agent = suggestAgent;
+  const brief = briefContext();
 
   const job = startJob({ background: !manual });
   suggestAbort = job;
@@ -1878,7 +1880,8 @@ async function suggestFetch(manual = false) {
     && !loadingDocument && !savePaused && !document.hidden && (manual || view.hasFocus) && !view.composing
     && !view.state.readOnly && (manual || autoSuggestOn)
     && view.state.doc === state.doc && view.state.selection.eq(state.selection)
-    && JSON.stringify(activeSuggestAgent() ?? currentAgent()) === JSON.stringify(agent);
+    && JSON.stringify(activeSuggestAgent() ?? currentAgent()) === JSON.stringify(agent)
+    && briefContext() === brief;
   if (manual) setReviewStatus('Suggesting…', undefined, 'suggest');
 
   try {
@@ -1890,6 +1893,7 @@ async function suggestFetch(manual = false) {
         cursor:   pos,
         agent,
         manual,
+        brief: brief || undefined,
       }),
       signal: job.signal,
     });
@@ -2295,17 +2299,12 @@ function layoutRail() {
     .filter(item => item.at !== null && item.at !== undefined)
     .sort((a, b) => a.at - b.at);
   for (const node of rail.children) node.style.visibility = 'hidden';
-  // Tops are always set fresh — an offscreen card keeps a correct top for
-  // when it scrolls back, since scrolling no longer re-runs this. Only
-  // visibility is culled to the viewport window; overflow clips the rest.
-  const viewTop = scrollTop;
-  const viewBottom = scrollTop + scroller.clientHeight;
+  // The scroller clips offscreen cards; hiding them here would survive a scroll.
   let floor = -Infinity;
   for (const item of placed) {
     const height = item.node.offsetHeight;
     const at = Math.max(item.at, floor);
     item.node.style.top = `${at}px`;
-    if (at + height <= viewTop || at >= viewBottom) continue;
     item.node.style.visibility = 'visible';
     floor = at + height + 8;
   }
@@ -3005,53 +3004,89 @@ function notesBrief() {
   return `WRITER'S MARGIN NOTES (the author's own remarks — weigh them, do not quote them back):\n${lines.join('\n')}`;
 }
 
-// ── Positioning brief (lite) ────────────────────────────────────────────────
-// Four questions from the positioning-brief skill (step 2: reader, goal,
-// awareness, scope). Static options, no model call — the writer picks or
-// types their own. Stored per-document as wa-brief, browser only. Sent with
-// chat, rewrites and ideas; never with review (it must judge the prose
-// unbiased) and never with suggestions (they fire on every pause).
-const BRIEF_STEPS = [
-  { key: 'reader', label: 'Reader', question: 'Who is this for?', options: ['Newcomer deciding if it fits', 'Practitioner getting something done', 'Existing user going deeper'] },
-  { key: 'goal', label: 'Goal', question: 'What should the page make them do?', options: ['Try it', 'Understand if it fits', 'Get started fast'] },
-  { key: 'awareness', label: 'Awareness', question: 'What do they already know?', options: ['Knows the problem, not solutions', 'Compares solutions', 'Knows us, needs how-to'] },
-  { key: 'scope', label: 'Scope', question: 'What are we writing?', options: ['One page', 'Landing + tutorial', 'README only'] },
-];
+// Four draft-specific questions, saved with answers so an interrupted brief resumes.
 let positionBrief = null;   // { reader, goal, awareness, scope, updatedAt, nudged }
 let briefSession = null;    // { step, answers, card } while the interview runs
 
 function saveBrief() {
+  cancelSuggestion();
+  ghostClear(workView);
   if (positionBrief) docStorage.setItem('wa-brief', JSON.stringify(positionBrief));
   else docStorage.removeItem('wa-brief');
 }
 function restoreBrief() {
   const saved = safeJson(docStorage.getItem('wa-brief'), null);
   positionBrief = saved && typeof saved === 'object' ? saved : null;
+  if (positionBrief?.questions) {
+    try { positionBrief.questions = validateBriefQuestions(positionBrief.questions); }
+    catch { delete positionBrief.questions; }
+  }
+  briefSession?.controller?.abort();
   briefSession = null;
 }
 function briefComplete() {
   return BRIEF_STEPS.every(step => typeof positionBrief?.[step.key] === 'string' && positionBrief[step.key].trim());
 }
 function briefContext() {
-  if (!briefComplete()) return '';
-  const lines = BRIEF_STEPS.map(step => `- ${step.label}: ${positionBrief[step.key]}`);
-  return `POSITIONING BRIEF (the author's answers about audience and goal — use it to judge fit, never to excuse weak prose):\n${lines.join('\n')}`;
+  const lines = BRIEF_STEPS.flatMap((step, index) => typeof positionBrief?.[step.key] === 'string' && positionBrief[step.key].trim()
+    ? [`- ${positionBrief.questions?.[index]?.question || step.label}: ${positionBrief[step.key]}`] : []);
+  if (typeof positionBrief?.direction === 'string' && positionBrief.direction.trim()) lines.push(`- Writing constraints: ${positionBrief.direction}`);
+  return lines.length ? `WRITING BRIEF (author's preferences, not factual evidence):\n${lines.join('\n')}` : '';
+}
+
+function applyChatBrief(update, message, expected) {
+  let changes;
+  try { ({ changes } = validateBriefUpdate(update, message)); }
+  catch { notify('The brief update could not be verified. Nothing was saved.'); return; }
+  if (JSON.stringify(positionBrief) !== expected || briefSession) {
+    notify('The brief changed while the reply was loading. Ask again to update it.');
+    return;
+  }
+  const previous = positionBrief;
+  positionBrief = { ...positionBrief, ...changes, updatedAt: Date.now(), nudged: true };
+  // Generated questions can become irrelevant after the author changes the brief.
+  delete positionBrief.questions;
+  const applied = positionBrief;
+  saveBrief();
+  notifyUndo('Brief updated — suggestions, rewrites and chat now use it.', () => {
+    if (positionBrief !== applied) { notify('The brief has changed since this update. Edit it with /brief.'); return; }
+    positionBrief = previous;
+    saveBrief();
+  });
 }
 function combinedContext() {
   return [notesBrief(), briefContext()].filter(Boolean).join('\n\n');
 }
 
-function startBrief() {
+async function startBrief() {
   dismissPassingNotice();
   openIsland();
   if (briefSession) { renderBriefQuestion(); chatInput.focus(); return; }
-  if (briefComplete()) { renderBriefSummary(); return; }
+  if (briefComplete() && positionBrief?.questions) { renderBriefSummary(); return; }
   const answers = {};
   for (const step of BRIEF_STEPS) {
     if (typeof positionBrief?.[step.key] === 'string' && positionBrief[step.key].trim()) answers[step.key] = positionBrief[step.key];
   }
   const step = BRIEF_STEPS.findIndex(item => !answers[item.key]);
-  briefSession = { step: step === -1 ? 0 : step, answers, card: null };
+  const session = briefSession = { step: step === -1 ? 0 : step, answers, card: null };
+  if (!positionBrief?.questions && workView.state.doc.length) {
+    session.loading = true;
+    session.controller = new AbortController();
+    renderBriefQuestion();
+    try {
+      const result = await api('/brief', { method: 'POST', signal: session.controller.signal,
+        body: JSON.stringify({ document: workView.state.doc.toString(), answers, agent: currentAgent() }) });
+      if (briefSession !== session) return;
+      positionBrief = { ...(positionBrief || {}), questions: validateBriefQuestions(result.questions) };
+      saveBrief();
+    } catch (error) {
+      if (briefSession !== session) return;
+      notify('Could not tailor the brief — using general questions. ' + error.message);
+    }
+    session.loading = false;
+  }
+  if (briefSession !== session) return;
+  if (briefComplete()) { session.card?.remove(); briefSession = null; renderBriefSummary(); return; }
   renderBriefQuestion();
   chatInput.focus();
 }
@@ -3059,17 +3094,17 @@ function startBrief() {
 function renderBriefQuestion() {
   if (!briefSession) return;
   briefSession.card?.remove();
-  const step = BRIEF_STEPS[briefSession.step];
+  const step = (positionBrief?.questions || BRIEF_STEPS)[briefSession.step];
   const card = chatEl('div', 'chat-entry is-agent brief-card');
   const head = chatEl('div', 'brief-head');
   head.append(chatEl('span', 'brief-kicker', 'Positioning brief'));
   head.append(chatEl('span', 'brief-step', `${briefSession.step + 1} of ${BRIEF_STEPS.length}`));
   card.append(head);
-  card.append(chatEl('p', 'brief-question', step.question));
+  card.append(chatEl('p', 'brief-question', briefSession.loading ? 'Preparing questions for your draft…' : step.question));
   const options = chatEl('div', 'brief-options');
   options.setAttribute('role', 'group');
   options.setAttribute('aria-label', step.question);
-  for (const option of step.options) {
+  for (const option of briefSession.loading ? [] : step.options) {
     const pick = chatEl('button', 'brief-option', option);
     pick.type = 'button';
     pick.addEventListener('click', () => answerBriefStep(option));
@@ -3077,7 +3112,7 @@ function renderBriefQuestion() {
   }
   card.append(options);
   const foot = chatEl('div', 'brief-foot');
-  foot.append(chatEl('span', 'variant-hint', 'Or type your own answer below.'));
+  foot.append(chatEl('span', 'variant-hint', briefSession.loading ? '' : 'Or type your own answer below.'));
   const skip = chatEl('button', 'brief-skip', 'Skip for now');
   skip.type = 'button';
   skip.addEventListener('click', () => cancelBrief());
@@ -3087,7 +3122,7 @@ function renderBriefQuestion() {
 }
 
 function answerBriefStep(text) {
-  if (!briefSession) return;
+  if (!briefSession || briefSession.loading) return;
   const clean = String(text ?? '').trim();
   if (!clean) return;
   const step = BRIEF_STEPS[briefSession.step];
@@ -3096,8 +3131,9 @@ function answerBriefStep(text) {
   saveBrief();
   briefSession.card?.remove();
   briefSession.card = null;
-  if (briefSession.step < BRIEF_STEPS.length - 1) {
-    briefSession.step += 1;
+  const next = BRIEF_STEPS.findIndex(item => !briefSession.answers[item.key]?.trim());
+  if (next !== -1) {
+    briefSession.step = next;
     renderBriefQuestion();
     return;
   }
@@ -3105,11 +3141,11 @@ function answerBriefStep(text) {
 }
 
 function finishBrief() {
-  positionBrief = { ...briefSession.answers, updatedAt: Date.now(), nudged: true };
+  positionBrief = { ...positionBrief, ...briefSession.answers, updatedAt: Date.now(), nudged: true };
   briefSession = null;
   saveBrief();
   renderBriefSummary();
-  notify('Brief saved — rewrites, chat and ideas now use it.');
+  notify('Brief saved — suggestions, rewrites, chat and ideas now use it.');
 }
 
 function renderBriefSummary() {
@@ -3137,13 +3173,15 @@ function renderBriefSummary() {
     rows.append(row);
   }
   card.append(rows);
-  const meta = 'Used for rewrites, chat and ideas — never for review. Type /brief to review.';
+  if (positionBrief.direction) card.append(chatEl('p', 'brief-value', positionBrief.direction));
+  const meta = 'Used for suggestions, rewrites, chat and ideas. To update from chat: “For the whole draft: …”.';
   card.append(chatEl('p', 'variant-hint', meta));
   chatAdd(card);
 }
 
 function cancelBrief() {
   if (!briefSession) return;
+  briefSession.controller?.abort();
   briefSession.card?.remove();
   // Keep partial answers so /brief resumes where it stopped.
   positionBrief = { ...(positionBrief || {}), ...briefSession.answers, nudged: true };
@@ -4101,13 +4139,6 @@ const SLASH_COMMANDS = [
     desc: 'Answer 4 questions about reader and goal',
     takesArgs: false,
     run() {
-      if (briefSession) {
-        briefSession.card?.remove();
-        // Keep partial answers so the fresh interview resumes where it stopped.
-        positionBrief = { ...(positionBrief || {}), ...briefSession.answers, nudged: true };
-        briefSession = null;
-        saveBrief();
-      }
       clearNotice('brief');
       startBrief();
     },
@@ -4218,6 +4249,7 @@ async function chatSend() {
   }
   // While the brief interview runs the composer is its answer field.
   if (briefSession) {
+    if (briefSession.loading) return;
     if (!text) return;
     chatInput.value = '';
     chatResize();
@@ -4253,7 +4285,8 @@ function newReplyBubble() {
 async function streamReply(reply) {
   chatAbort?.abort();
   const job = startJob(); chatAbort = job;
-  const request = { document: workView.state.doc.toString(), selection: attachedRange(), changes: [] };
+  const request = { document: workView.state.doc.toString(), selection: attachedRange(), changes: [],
+    brief: JSON.stringify(positionBrief), message: chatHistory.at(-1)?.content };
   chatRequests.add(request);
   let answer = '', result = null;
   try {
@@ -4281,6 +4314,8 @@ async function streamReply(reply) {
     const message = { role: 'assistant', content: answer, edits, editWarning: result?.editWarning };
     chatHistory.push(message); renderChatAnswer(reply, message); saveChat(); chatScroll(true);
     if (message.editWarning) notify(message.editWarning);
+    if (result?.briefWarning) notify(result.briefWarning);
+    else if (result?.brief) applyChatBrief(result.brief, request.message, request.brief);
   } catch (error) {
     if (!reply.isConnected) return;
     if (error.name === 'AbortError') { reply.innerHTML = renderMarkdown(answer ? answer + '\n\n[Stopped — incomplete]' : 'Stopped'); return; }
@@ -4957,7 +4992,7 @@ function loadFromDisk(text) {
   docStorage.removeItem('wa-notes');
   docStorage.removeItem('wa-brief');
   positionBrief = null;
-  if (briefSession) { briefSession.card?.remove(); briefSession = null; }
+  if (briefSession) { briefSession.controller?.abort(); briefSession.card?.remove(); briefSession = null; }
   chatHistory = []; chatStream.replaceChildren(); findingCards.clear();
   docStorage.removeItem('wa-chat');
   docStorage.removeItem('wa-kept-wording');
@@ -5388,6 +5423,7 @@ async function switchDocument(name) {
   discardNoteCards();
   for (const stale of document.querySelectorAll('.chat-variants')) stale.remove();
   positionBrief = null;
+  briefSession?.controller?.abort();
   briefSession = null;
   clearPlainPreview();
   reviewFindings = [];

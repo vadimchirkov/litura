@@ -38,6 +38,7 @@ const section = (start, end) => {
     BRIEF_STEPS: [{ key: 'reader' }, { key: 'goal' }, { key: 'awareness' }, { key: 'scope' }],
     docStorage: { getItem: key => entries.get(key), setItem: (key, value) => entries.set(key, value), removeItem: key => entries.delete(key) },
     renderBriefQuestion() {}, safeJson: (value, fallback) => value ? JSON.parse(value) : fallback,
+    cancelSuggestion() {}, ghostClear() {}, workView: {},
   });
   vm.runInContext(section('function saveBrief()', 'function briefComplete()') + section('function answerBriefStep(', 'function finishBrief()'), context);
   vm.runInContext("answerBriefStep('Practitioner'); restoreBrief();", context);

@@ -1254,15 +1254,15 @@ html, body {
    side-by-side row squeezed both the button and the status it reported on. */
 .style-review-actions {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
+  align-items: center;
+  gap: 10px;
   margin: 0;
-  padding: 10px 16px 12px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border-subtle);
 }
-#style-review-run { display: flex; width: 100%; align-items: center; justify-content: center; }
-#style-review-status { min-height: 16px; color: var(--text-2); font-size: 12px; }
+#style-review-run { min-height: 26px; padding: 3px 12px; font-size: 12px; }
+#style-review-status { color: var(--text-2); font-size: 12px; }
+#style-review-status[hidden] { display: none; }
 /* Chat buttons speak one language: pills with a hairline edge. The primary
    one borrows the send button's fill, so the main action reads the same
    everywhere in the panel. */
@@ -1484,9 +1484,12 @@ html, body {
 /* The open panel narrows the pane, so the draft's centre moves half a panel
    width right while viewport-centring stays put. The composer follows the
    text. Below 640px the panel overlays instead of squeezing — no shift. */
-:root[data-sidebar="open"] .chat { left: calc(50% + 124px); }
+:root[data-sidebar="open"] .chat {
+  left: calc(50% + 124px);
+  width: min(680px, calc(100vw - 280px));
+}
 @media (max-width: 640px) {
-  :root[data-sidebar="open"] .chat { left: 50%; }
+  :root[data-sidebar="open"] .chat { left: 50%; width: min(680px, calc(100vw - 32px)); }
 }
 
 .chat > * { pointer-events: auto; }
