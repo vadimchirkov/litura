@@ -2,11 +2,16 @@
 
 Stilura (renamed from Litura) follows [semantic versioning](https://semver.org). Until 1.0 the minor number carries breaking changes.
 
-## Unreleased
+## 0.7.0 — 2026-10-15
 
-- Removed review/scoring APIs, Lens demo, unused helpers, legacy note-status polling, old environment aliases and desktop migration. Document storage now uses Stilura names, with a guarded transfer of existing files and saved chat state.
+- Added inline generation with `/`, passage questions and replacements with `Change` / Cmd/Ctrl+K, and previews accepted with Tab, dismissed with Escape or regenerated with R.
+- Added live document sessions, concurrent edits, shared notes and an HTTP work queue with review and Undo.
+- Removed the stdio MCP server, command and SDK dependency. Agent integration uses the local HTTP API.
+- Removed Review API, style scoring, Lens, unused helpers, old note-status polling, `LITURA_*` aliases and migration from the old desktop app.
+- Document storage now uses Stilura names, with guarded transfer of existing files and saved chat state.
+- Simplified the README and added a short demo GIF and recording scenario.
 
-- Removed the stdio MCP server, CLI command and direct SDK dependency. Agent integration uses the existing local HTTP API.
+## Earlier 0.6.x changes
 
 - Fixed cross-document Undo and saves from concurrent tabs. File writes now keep revision checks and history; workspace APIs reject symbolic links.
 - Desktop state survives server port changes. Closing, changing folders, and installing updates wait for confirmed saves. Partial brief answers survive reloads, and Save as falls back to a download where the system file-picker API is unavailable.

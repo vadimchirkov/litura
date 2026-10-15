@@ -26,3 +26,6 @@ npm-debug.log*
 *.litura-notes.json
 *.stilura-session
 *.litura-session
+
+# Local project plans.
+/plans/
