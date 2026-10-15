@@ -6,10 +6,8 @@ npm-debug.log*
 /draft.md.stilura-history
 /.claude
 /dist
-# Generated bundles: rebuilt by `npm run build` (frontend) and
-# `npm run build:artifact` (Lens demo). Sources stay tracked.
+# Generated frontend bundle: rebuilt by `npm run build`.
 /public/app.js
-/artifact/stilura-lens.html
 /src-tauri/target
 # The Node runtime the desktop build ships: 120 MB, fetched by
 # scripts/fetch-node.mjs and checksummed against the release.
@@ -21,7 +19,10 @@ npm-debug.log*
 # Local graft/agent tooling — personal configs, not part of the project.
 /AGENTS.md
 /.ignore
-/.mcp.json
 /opencode.json
+/*.stilura-history
 /*.litura-history
-/artifact/litura-lens.html
+*.stilura-notes.json
+*.litura-notes.json
+*.stilura-session
+*.litura-session

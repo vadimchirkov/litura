@@ -1,7 +1,5 @@
 /**
- * tasks.js — prompt builders shared by the HTTP server (index.js) and the MCP
- * server (mcp-server.mjs). index.js cannot be imported (it listens on import),
- * so anything both entry points need lives here.
+ * tasks.js — prompt builders and prose generation for the HTTP server.
  */
 
 import fs from 'fs';
@@ -9,7 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { completeText } from './pi.js';
 import {
-  parseVariants, variantLimit,
+  markSelection, selectionSlot, parseVariants, variantLimit,
   SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
 } from './review.js';
 
@@ -17,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // In the npm package the server sits next to its own assets. In the desktop
 // build it is a single bundled file and the assets are Tauri resources, so the
 // shell says where they are.
-const ROOT = (process.env.STILURA_ROOT ?? process.env.LITURA_ROOT) || __dirname;
+const ROOT = (process.env.STILURA_ROOT) || __dirname;
 
 // Draft and style live in the folder Stilura was started from, not inside the
 // install directory — `npx stilura` in a notes folder edits that folder. The
@@ -41,8 +39,7 @@ export function readStyle() {
   }
 }
 
-// The same patterns /review flags. Every route that generates prose gets these,
-// so the app never writes what it is about to underline.
+// Shared constraints for every prose-generating route.
 export const NO_SLOP =
   'Never produce throat-clearing, vague attribution ("experts agree", "studies show"), empty puffery, ' +
   'faux insight, generic filler, "not just X, but Y" contrasts, robotic parallel rhythm, ' +
@@ -51,11 +48,37 @@ export const NO_SLOP =
 
 // A variant several times the length of the selection is the whole-document
 // rewrite failure, not a stylistic choice. Name it once and take the retry.
-// A malformed answer is retried the same way review retries: an occasional bad
-// response should cost a second call, not show the writer a parser error.
+// Retry a malformed answer before showing the writer a parser error.
 const REWRITE_ATTEMPTS = 3;
 
-export async function completeVariants({ system, user, body }) {
+export function requestRewrite(body) {
+  const { selected, document, from, instruction, context } = body;
+  const system = buildSystemPrompt(
+    'You are a writing assistant. Generate exactly 3 different replacements for the SELECTED TEXT ' +
+    'and nothing else. Each variant must be distinct in phrasing and approach. ' +
+    'Match the tone and flow of the paragraphs before and after the selection. ' +
+    'The document is context: it shows where the selection sits and must not be rewritten, ' +
+    `summarised, or included in your output. The selection is marked ${SELECT_OPEN}like this${SELECT_CLOSE} inside it. ` +
+    `Each variant is substituted for the marked span alone — it fills the ${SELECT_SLOT} gap in the sentence shown below it: ` +
+    'never restate, absorb, or repeat any words outside the markers, and keep roughly the length of the selection. ' +
+    'Follow the instruction — it names the specific problem this replacement has to fix. ' +
+    NO_SLOP +
+    'Never invent sources, numbers, dates, quotes, evidence, or stronger certainty. If evidence is missing, preserve uncertainty or ask for a source. ' +
+    'Return ONLY a JSON array with exactly 3 strings: ["variant1","variant2","variant3"]. ' +
+    'No markdown fences, no commentary, no explanation — just the raw JSON array.',
+  );
+  const slot = document && selectionSlot(document, selected, from);
+  const user = [
+    `SELECTED TEXT — replace exactly this, nothing more:\n${selected}`,
+    instruction ? `INSTRUCTION:\n${instruction}` : 'Rewrite the selected text in 3 distinct ways.',
+    slot ? `EACH VARIANT FILLS ${SELECT_SLOT} AND MUST READ CORRECTLY IN PLACE:\n${slot}` : '',
+    context ? `CONTEXT:\n${context}` : '',
+    document ? `DOCUMENT (context only — do not rewrite it):\n${markSelection(document, selected, from)}` : '',
+  ].filter(Boolean).join('\n\n---\n\n');
+  return completeVariants({ system, user, body });
+}
+
+async function completeVariants({ system, user, body }) {
   const selected = String(body.selected ?? '');
   const limit = variantLimit(selected);
   let prompt = user;
@@ -66,7 +89,7 @@ export async function completeVariants({ system, user, body }) {
       selection: body.agent,
       // Shared with reasoning tokens: at 1500 a thinking model spends the whole
       // budget deliberating and returns an empty string. Three short strings
-      // cost nothing, so give it the same room /review has.
+      // need little output, but reasoning shares this budget.
       maxTokens: 4000,
       signal: body.signal,
     });

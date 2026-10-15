@@ -19,7 +19,7 @@ const FALLBACK_MODELS = [
 // pointed the app at, so it is allowed by default. `STILURA_OFFLINE_MODELS=1`
 // stops Stilura from asking, and Pi falls back to the list it already has —
 // bundled, or cached from an earlier refresh.
-const OFFLINE_MODELS = Boolean(process.env.STILURA_OFFLINE_MODELS ?? process.env.LITURA_OFFLINE_MODELS);
+const OFFLINE_MODELS = Boolean(process.env.STILURA_OFFLINE_MODELS);
 let runtimePromise;
 const runtime = () => runtimePromise ??= ModelRuntime.create({ allowModelNetwork: !OFFLINE_MODELS })
   .catch(error => {
@@ -285,11 +285,14 @@ export async function completeText({ systemPrompt, userPrompt, selection, maxTok
   const resolved = await resolveModel(selection);
   const modelKey = `${resolved.model.provider}/${resolved.model.id}`;
   // Typing suggestions need the least reasoning the model supports, regardless
-  // of the author's review settings. Mandatory-reasoning models need headroom.
+  // of the default model settings. Mandatory-reasoning models need headroom.
   const ask = async level => {
     const effectiveSelection = continuation ? selectionFor(resolved.model, level) : resolved.selection;
     const budget = continuation ? (effectiveSelection.thinkingLevel === 'off' ? 256 : 2048) : maxTokens;
-    return resolved.rt.completeSimple(resolved.model, request(systemPrompt, userPrompt), options(effectiveSelection, budget, signal));
+    // The session key routes OpenAI-style providers to a warm prompt cache:
+    // measured on a long draft, 86% of input cached and ~1.6 s → ~1.0 s.
+    return resolved.rt.completeSimple(resolved.model, request(systemPrompt, userPrompt),
+      { ...options(effectiveSelection, budget, signal), ...(continuation ? { sessionId: 'stilura-suggest' } : {}) });
   };
   let response = await ask(reasoningRequired.has(modelKey) ? 'minimal' : 'off');
   if (continuation && !reasoningRequired.has(modelKey) && response.stopReason === 'error' && mandatoryReasoning(response)) {

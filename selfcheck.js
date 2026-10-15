@@ -9,9 +9,8 @@ import { spellingMarkers, noteSpellingAdded } from './spellcheck.js';
 import { clampBubble, resolveDrift, unwrapProse, wordDiff } from './editing.js';
 import { chatVisibleText, parseChatResponse } from './chat-edits.js';
 import {
-  completedSentences, findingContext, isLatinScript, locateFindings, markSelection, mergeReviewFindings,
-  parseReviewResponse, parseVariants, selectionSlot, styleMarkers, styleMetrics, styleScore, trimOverlap,
-  validateReviewFindings, variantLimit, SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
+  completedSentences, isLatinScript, markSelection, parseVariants, selectionSlot,
+  trimOverlap, variantLimit, SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
 } from './review.js';
 
 // ── Bare edit list ──
@@ -40,7 +39,7 @@ import {
 {
   const source = fs.readFileSync(new URL('./pi.js', import.meta.url), 'utf8');
   const server = fs.readFileSync(new URL('./index.js', import.meta.url), 'utf8');
-  assert.match(server.slice(server.indexOf("if (url.pathname === '/suggest')")), /continuation: true/);
+  assert.match(server.slice(server.indexOf("if (url.pathname === '/suggest')")), /requestSuggestion\(/);
   const code = source.slice(source.indexOf('const options ='), source.indexOf('export async function streamText')).replace('export ', '');
   let response, sent;
   const model = { reasoning: true };
@@ -159,76 +158,7 @@ assert.equal(renderMarkdown('```\nx = 1\n```'), '<pre><code>x = 1</code></pre>')
 // Underscores inside identifiers are not emphasis.
 assert.equal(renderMarkdown('call style_score now'), '<p>call style_score now</p>');
 
-// Slop scores above clean prose of the same length.
-const slop = 'In today\'s fast-paced world, experts agree that writing is crucial. '
-  + 'At the end of the day, this solution is not just innovative, but truly transformative. '
-  + 'It is important to note that this underscores a pivotal moment in an evolving landscape.';
-const clean = 'The bakery on Vine Street closed in March. Rent had doubled since 2019. '
-  + 'Ruth kept the ovens running for a week after the sign went up, then sold them to a caterer '
-  + 'in Dayton. She still has the key on her ring.';
-assert(styleScore(slop).score > styleScore(clean).score,
-  `expected slop to outscore clean prose, got ${styleScore(slop).score} vs ${styleScore(clean).score}`);
-assert(styleScore(slop).score > 40, `slop scored too low: ${styleScore(slop).score}`);
-assert(styleScore(clean).score < 30, `clean prose scored too high: ${styleScore(clean).score}`);
-
-// New high-signal categories must reach the automatic-review threshold, while
-// ordinary product verbs and justified passive voice stay clean.
-assert(styleScore('The dashboard understands what the manager wants and decides which metrics matter.').score >= 20);
-assert(styleScore('The dashboard shows three metrics and filters them by date.').score < 20);
-assert(styleScore('The server was restarted at 03:00 after its operator field disappeared from the log.').score < 20);
-assert(styleScore('The change could potentially possibly reduce support volume.').score >= 20);
-assert(styleScore('The change could reduce support volume.').score < 20);
-assert(styleScore('WE MUST MOVE NOW.').score >= 20);
-
-// Empty input must not read as slop, and short input must skip the structural axes.
-assert.equal(styleScore('').score, 0);
-assert.equal(styleScore('Rent had doubled since 2019.').structural, false);
-assert.equal(styleScore(clean).structural, true);
-
-// Burstiness: even cadence scores worse than a mix of short and long sentences.
-const even = 'The team met on Monday to talk. The team met on Tuesday to plan. The team met on Friday to ship.';
-const varied = 'They met Monday. After a week of arguing about the queue depth and whose service was dropping the messages, the team finally shipped on Friday. It held.';
-assert(styleMetrics(varied).burstiness > styleMetrics(even).burstiness);
-
-// The score has to be traceable to text the writer can find in their own draft.
-const hits = styleMetrics("In today's fast-paced world we leverage robust tooling.").hits;
-assert(hits.includes("In today's fast-paced world"));
-assert(hits.includes('leverage') && hits.includes('robust'));
-assert.deepEqual(styleMetrics('Rent had doubled since 2019.').hits, []);
-
-// Every mark navigates to its exact occurrence, including UTF-16 offsets and
-// repeated phrases. Nested dictionary words do not double-mark a phrase.
-// A repeated tell counts twice: the score must match the marks.
-assert.equal(styleMetrics('Studies show that teams ship faster. Studies show that morale rises.').tells, 2);
-assert.deepEqual(
-  styleMarkers('Studies show that teams ship faster. Studies show that morale rises.').map(marker => marker.quote),
-  ['Studies show', 'Studies show'],
-);
-{
-  const text = '✍️ A testament to ROBUST tools. A testament to robust tools.';
-  const markers = styleMarkers(text);
-  assert.deepEqual(markers.map(marker => marker.quote), ['A testament to', 'ROBUST', 'A testament to', 'robust']);
-  for (const [i, marker] of markers.entries()) {
-    assert.equal(text.slice(marker.from, marker.to), marker.quote);
-    if (i) assert(markers[i - 1].to <= marker.from);
-  }
-  assert.deepEqual(styleMarkers('The bakery closed in March.'), []);
-  assert.deepEqual(styleMarkers('Мы пишем обычный текст.'), []);
-  assert.match(styleMarkers('Studies show the effect.')[0].fix, /Never invent evidence/);
-  assert.match(styleMarkers('We left in order to arrive early.')[0].fix, /shorter expression/);
-
-  const first = 'First paragraph.\n\nThe robust tools work.\n\nClosing paragraph.';
-  const moved = 'An edited opening paragraph.\n\nThe robust tools work.\n\nClosing paragraph.';
-  const finding = document => ({ quote: 'robust', from: document.indexOf('robust') });
-  assert.equal(findingContext(first, finding(first)), findingContext(moved, finding(moved)));
-  const changed = moved.replace('tools work', 'tools failed');
-  assert.notEqual(findingContext(first, finding(first)), findingContext(changed, finding(changed)));
-  const repeated = 'The robust tools work.\n\nA robust cable broke.';
-  assert.equal(findingContext(repeated, { quote: 'robust', from: repeated.lastIndexOf('robust') }), 'A robust cable broke.');
-  assert.equal(findingContext(first, { quote: 'missing' }), null);
-}
-
-// The word lists are English; a Cyrillic draft must not be mistaken for clean.
+// The English spellchecker skips non-Latin drafts.
 assert.equal(isLatinScript('The bakery closed'), true);
 assert.equal(isLatinScript('Пекарня закрылась в марте'), false);
 
@@ -255,34 +185,6 @@ assert.equal(isLatinScript('Пекарня закрылась в марте'), f
 assert.equal(trimOverlap('Two hours later the queue', 'queue began draining'), ' began draining');
 assert.equal(trimOverlap('Two hours later the queue', ' began draining'), ' began draining');
 assert.equal(trimOverlap('It is a skill', ' that pays off'), ' that pays off');
-
-const parsed = parseReviewResponse('```json\n[{"quote":"Experts agree","pattern":"Vague attribution","reason":"No source","fix":"Name the source"}]\n```');
-assert.equal(parsed.length, 1);
-assert.equal(parsed[0].code, 'unclassified');
-assert.deepEqual(parseReviewResponse('No strong findings.'), []);
-assert.throws(() => parseReviewResponse('No findings array could be generated.'), /No findings array/);
-assert.throws(() => parseReviewResponse('[null]'), /object/);
-assert.throws(() => parseReviewResponse('[{"quote":"x"}]'), /non-empty/);
-assert.equal(parseReviewResponse('[{"code":"level-7-paragraph-flow","quote":"A. B.","pattern":"Break","reason":"No bridge","fix":"Connect them"}]')[0].code, 'level-7-paragraph-flow');
-const promise = { code: 'level-3-index-discussion', quote: 'We cover price, speed, and safety. Only price and speed follow.' };
-const repeatedTerm = { code: 'level-6-key-terms', quote: 'We cover price, speed, and safety.' };
-const otherTerm = { code: 'level-6-key-terms', quote: 'The interface renames the same metric.' };
-assert.deepEqual(mergeReviewFindings([[promise], [repeatedTerm, otherTerm, otherTerm]]), [promise, otherTerm]);
-assert.deepEqual(mergeReviewFindings([[repeatedTerm], [promise, otherTerm]]), [promise, otherTerm]);
-assert.deepEqual(mergeReviewFindings([[otherTerm], []]), [otherTerm]);
-assert.deepEqual(mergeReviewFindings([[otherTerm, { ...otherTerm, quote: otherTerm.quote + ' More context.' }]]), [otherTerm]);
-assert.throws(() => validateReviewFindings([otherTerm], ['generic-prose']), /outside this pass/);
-assert.throws(() => validateReviewFindings([otherTerm], ['level-6-key-terms'], 'A different passage.'), /copied exactly/);
-assert.doesNotThrow(() => validateReviewFindings([otherTerm], ['level-6-key-terms'], otherTerm.quote));
-assert.deepEqual(locateFindings('Experts agree. Experts agree.', parsed)[0], {
-  ...parsed[0], from: 0, to: 13,
-});
-
-// An occupied first match pushes the quote onto the next free occurrence.
-assert.deepEqual(
-  locateFindings('Experts agree. Experts agree.', parsed, [{ from: 0, to: 13 }])[0],
-  { ...parsed[0], from: 15, to: 28 },
-);
 
 // Only finished sentences are eligible; the trailing fragment is still being typed.
 assert.deepEqual(
@@ -317,6 +219,13 @@ assert.deepEqual(
   };
   const firstLine = clamp(600, 62, size, area);
   assert(firstLine.top >= area.top, `bubble top ${firstLine.top} sits inside the header band`);
+  // The bubble never covers the text it acts on: above it with room, below
+  // its last line without.
+  const line = { top: 300, bottom: 330 };
+  const above = clamp(600, line.top, size, area, line.bottom);
+  assert(above.side === 'above' && above.top + size.h <= line.top, `bubble ${JSON.stringify(above)} overlaps the line above it`);
+  const flipped = clamp(600, 70, size, area, 100);
+  assert(flipped.side === 'below' && flipped.top >= 100, `bubble ${JSON.stringify(flipped)} overlaps the text it flipped under`);
   // And a bubble never leaves the pane, which is what keeps the sidebar from
   // covering it when the panel is open.
   for (const x of [area.left - 40, area.right + 40, 600]) {

@@ -14,27 +14,20 @@ import path  from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { cancelOAuth, completeText, getAgentStatus, getOAuthStatus, removeProviderApiKey, saveProviderApiKey, startOAuth, streamText, submitOAuthCode } from './pi.js';
-import { buildSystemPrompt, completeVariants, readStyle, NO_SLOP, STYLE_FILE } from './tasks.js';
-import {
-  markSelection, parseVariants, selectionSlot, variantLimit,
-  SELECT_CLOSE, SELECT_OPEN, SELECT_SLOT,
-} from './review.js';
-import { requestReview } from './review-model.js';
-import { buildReviewTask, buildReviewUser, reviewCodesForPass } from './review-prompt.js';
+import { buildSystemPrompt, requestRewrite, readStyle, NO_SLOP, STYLE_FILE } from './tasks.js';
+import { insertionText, markSelection } from './review.js';
 import { documentStore, MAX_DOCUMENT_BYTES } from './document-store.js';
-import { suggestionPrompts, parseSuggestion } from './suggestions.js';
+import { documentSessions } from './live-session.js';
+import { requestSuggestion } from './suggestions.js';
 import { CHAT_EDITS_PROMPT, chatVisibleText, parseChatResponse } from './chat-edits.js';
 import { desktopBridge } from './desktop.js';
 import { BRIEF_STEPS, BRIEF_PROMPT, CHAT_BRIEF_PROMPT, briefUpdateAllowed, validateBriefQuestions } from './brief.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Renamed from Litura: STILURA_* wins, LITURA_* still honored so existing
-// setups keep working.
-const env = name => process.env[`STILURA_${name}`] ?? process.env[`LITURA_${name}`];
 // In the npm package the server sits next to its own assets. In the desktop
 // build it is a single bundled file and the assets are Tauri resources, so the
 // shell says where they are.
-const ROOT = env('ROOT') || __dirname;
+const ROOT = process.env.STILURA_ROOT || __dirname;
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const VERSION = MANIFEST.version;
 
@@ -99,8 +92,8 @@ if (fs.existsSync(path.join(ROOT, 'src/app.js'))) {
 
 // Started by the desktop shell rather than by a person at a terminal. The shell
 // owns the window, the update path, and this process's lifetime.
-const SIDECAR = Boolean(env('SIDECAR'));
-const desktop = SIDECAR && env('STATE_DIR') ? desktopBridge(env('STATE_DIR'), readBody, sendJson) : null;
+const SIDECAR = Boolean(process.env.STILURA_SIDECAR);
+const desktop = SIDECAR && process.env.STILURA_STATE_DIR ? desktopBridge(process.env.STILURA_STATE_DIR, readBody, sendJson) : null;
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const PUBLIC = path.join(ROOT, 'public');
@@ -112,7 +105,8 @@ const CWD        = process.cwd();
 const DRAFT_FILE = process.env.DRAFT_FILE || path.join(CWD, 'draft.md');
 // Unqualified /draft stays on the launch file. Each tab names its own file;
 // opening one must never retarget saves made by another tab or agent.
-const draftStore = documentStore(DRAFT_FILE);
+const sessions = documentSessions();
+const draftStore = sessions.get(DRAFT_FILE);
 
 // ─── Workspace files ───────────────────────────────────────────────────────
 // The sidebar lists the Markdown and text files sitting next to the draft,
@@ -140,7 +134,7 @@ function requestedDraft(url) {
   if (name === null || name === path.basename(DRAFT_FILE)) return draftStore;
   const file = workspaceFile(name);
   if (!file) throw Object.assign(new Error('Open a Markdown or text file by name.'), { status: 400 });
-  return documentStore(file);
+  return sessions.get(file);
 }
 
 // Two-line card preview: the first ~160 chars of actual prose. Markup is
@@ -179,8 +173,7 @@ function cardExcerpt(text) {
 }
 
 // ─── Style guide ───────────────────────────────────────────────────────────
-// readStyle, NO_SLOP, completeVariants and buildSystemPrompt live in tasks.js,
-// shared with the MCP server (mcp-server.mjs).
+// Prompts and prose generation live in tasks.js.
 
 // ─── Static file serving ───────────────────────────────────────────────────
 const MIME = {
@@ -232,7 +225,7 @@ function readBody(req) {
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected a JSON object');
-        for (const key of ['text', 'revision', 'document', 'selected', 'target', 'context', 'brief', 'idea', 'instruction', 'selection', 'provider', 'apiKey', 'name', 'method', 'code']) {
+        for (const key of ['text', 'revision', 'document', 'selected', 'target', 'context', 'brief', 'idea', 'instruction', 'previous', 'selection', 'provider', 'apiKey', 'name', 'method', 'code']) {
           if (body[key] !== undefined && typeof body[key] !== 'string') throw new Error(`${key} must be a string`);
         }
         if (body.document && Buffer.byteLength(body.document) > MAX_DOCUMENT_BYTES) throw new Error('Document exceeds 1 MB');
@@ -357,6 +350,39 @@ async function handleRequest(req, res) {
   //  The browser keeps writing to localStorage for instant reload; this is
   //  what survives clearing browser data and what other editors can open.
   //
+  if (url.pathname === '/draft/live') {
+    try {
+      const session = requestedDraft(url);
+      if (req.headers['x-stilura-session'] && req.headers['x-stilura-session'] !== session.token) return sendJson(res, 403, { error: 'Document session changed' });
+      if (req.method === 'GET') {
+        if (!url.searchParams.has('since')) return sendJson(res, 200, session.read());
+        const since = Number(url.searchParams.get('since')), epoch = url.searchParams.get('epoch');
+        if (!url.searchParams.has('events')) return sendJson(res, 200, session.events(since, epoch));
+        let data;
+        try { data = { type: 'updates', ...session.events(since, epoch) }; }
+        catch (error) { if (!error.current) throw error; data = { type: 'reset', current: error.current }; }
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+        const emit = value => res.write(`data: ${JSON.stringify(value)}\n\n`);
+        emit(data);
+        const unsubscribe = session.subscribe(emit);
+        const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15000);
+        res.on('close', () => { clearInterval(heartbeat); unsubscribe(); });
+        return;
+      }
+      if (req.method === 'POST') {
+        const body = await readBody(req);
+        if (body.action === 'push') return sendJson(res, 200, session.push(body));
+        if (body.action === 'patch') return sendJson(res, 200, session.patch(body.edits, body.revision));
+        if (body.action === 'write') return sendJson(res, 200, session.write(body.text, body.revision, { track: true }));
+        if (body.action === 'notes') return sendJson(res, 200, session.updateNotes(body));
+        if (body.action === 'work_next') return sendJson(res, 200, { job: session.claimWork(body.agent_id) });
+        if (body.action === 'work_finish') return sendJson(res, 200, session.finishWork(body));
+        if (body.action === 'work') return sendJson(res, 200, session.work(body));
+        if (body.action === 'note_suggest') return sendJson(res, 200, session.suggestNote(body));
+        return sendJson(res, 400, { error: 'Unknown session action' });
+      }
+    } catch (error) { return sendJson(res, error.status || 400, { error: error.message, current: error.current }); }
+  }
   if (url.pathname === '/draft') {
     if (req.method === 'GET') {
       sendJson(res, 200, { ...requestedDraft(url).read(), name: url.searchParams.get('name') ?? path.basename(DRAFT_FILE) });
@@ -464,7 +490,7 @@ async function handleRequest(req, res) {
         return;
       }
       if (Buffer.byteLength(text) > MAX_DOCUMENT_BYTES) { sendJson(res, 413, { error: 'File exceeds the 1 MB editing limit.' }); return; }
-      sendJson(res, 200, documentStore(file).read());
+      sendJson(res, 200, sessions.get(file).read());
     } catch (error) {
       sendJson(res, error.status || 500, { error: fsErrorMessage(error) });
     }
@@ -498,7 +524,7 @@ async function handleRequest(req, res) {
     catch (error) { sendJson(res, error.status || 400, { error: error.message }); return; }
     body.signal = signal;
     if ((body.document?.length ?? 0) > 60_000) return sendJson(res, 413, { error: 'AI actions support up to 60,000 characters per draft. Split the document into smaller drafts; editing and export remain available.' });
-    if (url.pathname === '/rewrite' && (!body.selected || !Number.isInteger(body.from) || body.document?.slice(body.from, body.from + body.selected.length) !== body.selected)) return sendJson(res, 400, { error: 'Selected text does not match the document range' });
+    if (['/rewrite', '/ask'].includes(url.pathname) && (typeof body.document !== 'string' || typeof body.selected !== 'string' || !body.selected || !Number.isInteger(body.from) || body.from < 0 || body.document.slice(body.from, body.from + body.selected.length) !== body.selected)) return sendJson(res, 400, { error: 'Selected text does not match the document range' });
 
     if (url.pathname === '/brief') {
       if (typeof body.document !== 'string') return sendJson(res, 400, { error: 'Brief requires a draft' });
@@ -520,18 +546,57 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // POST /idea — SSE stream
-    if (url.pathname === '/idea') {
+    // Reuse chat's verified envelope for free-form passage requests.
+    if (url.pathname === '/ask') {
+      if (typeof body.instruction !== 'string' || !body.instruction.trim() || body.instruction.length > 4000 || body.selected.length > 10000) {
+        return sendJson(res, 400, { error: 'Select up to 10000 characters and enter a request of up to 4000 characters.' });
+      }
+      try {
+        const raw = await completeText({
+          systemPrompt: buildSystemPrompt('Help with the SELECTED TEXT according to the author’s request, in their language. ' +
+            'Answer questions briefly. When asked to rewrite, replace or find synonyms, propose wording that replaces ONLY the entire selected text. ' +
+            'Preserve surrounding text, facts and grammatical fit. Give one replacement, or up to three when alternatives are requested. ' +
+            'Do not claim the draft changed. ' + CHAT_EDITS_PROMPT),
+          userPrompt: `SELECTED TEXT:\n${body.selected}\n\nREQUEST:\n${body.instruction}\n\nDRAFT (context only):\n${markSelection(body.document, body.selected, body.from)}` +
+            (body.context ? `\n\nWRITING BRIEF:\n${body.context}` : ''),
+          selection: body.agent, signal, maxTokens: 4000,
+        });
+        const result = parseChatResponse(raw, body.document, { from: body.from, to: body.from + body.selected.length }, body.instruction);
+        if (result.edits.some(edit => edit.state !== 'pending' || edit.from !== body.from || edit.quote !== body.selected)) {
+          throw new Error('The replacement exceeded the selected passage. Try a more specific request.');
+        }
+        if (!result.text.trim() && !result.edits.length) throw new Error('The model returned no answer.');
+        sendJson(res, 200, { answer: result.text, variants: result.edits.map(edit => edit.replacement) });
+      } catch (error) { sendJson(res, 502, { error: error.message }); }
+      return;
+    }
+
+    // POST /idea and /write — SSE stream
+    if (url.pathname === '/idea' || url.pathname === '/write') {
+      const writing = url.pathname === '/write';
+      if (writing && (!body.instruction?.trim() || body.instruction.length > 10000 || (body.previous?.length ?? 0) > 20000
+        || !Number.isInteger(body.from) || !Number.isInteger(body.cursor) || body.from > body.cursor)) {
+        sendJson(res, 400, { error: 'Provide a request of up to 10000 characters and its document range.' });
+        return;
+      }
       const system = buildSystemPrompt(
-        'You are a writing assistant. Given the context material and the current working document, ' +
-        'expand the following idea into a well-written passage that fits the tone and topic. ' +
+        (writing
+          ? 'Write the text requested by the author at the insertion point. Follow the request, its language, format and length. ' +
+            'Read the surrounding draft for context and continuity. Return only the new text that replaces the request, never repeat or rewrite the surrounding draft. ' +
+            'Text before and after the insertion is already written; do not retell it. When a previous suggestion is supplied, replace it with a materially different version of the same request. Change wording or structure while preserving facts; do not append to the old version or repeat it. '
+          : 'You are a writing assistant. Given the context material and the current working document, ' +
+            'expand the following idea into a well-written passage that fits the tone and topic. ') +
         NO_SLOP +
         'Return only the passage, no commentary, no preamble.'
       );
       const user = [
         body.context  ? `CONTEXT:\n${body.context}`           : '',
-        body.document ? `WORKING DOCUMENT:\n${body.document}` : '',
-        `IDEA TO EXPAND:\n${body.idea}`,
+        writing ? `TEXT BEFORE INSERTION:\n${(body.document ?? '').slice(0, body.from)}`
+          : body.document ? `WORKING DOCUMENT:\n${body.document}` : '',
+        writing ? `TEXT AFTER INSERTION:\n${(body.document ?? '').slice(body.cursor)}` : '',
+        writing && body.previous ? `PREVIOUS SUGGESTION TO REPLACE (not part of the draft):\n${body.previous}` : '',
+        writing ? `AUTHOR'S REQUEST:\n${body.instruction}` : `IDEA TO EXPAND:\n${body.idea}`,
+        writing && body.previous ? 'REGENERATION REQUEST: Rewrite the previous suggestion as a different alternative for the author. Use a different opening and sentence structure while fulfilling the original request and preserving facts. Return the complete new passage, not an addition to the old one.' : '',
       ].filter(Boolean).join('\n\n---\n\n');
 
       try {
@@ -540,17 +605,33 @@ async function handleRequest(req, res) {
           'Cache-Control': 'no-cache',
           'Connection':    'keep-alive',
         });
-        await streamText({
-          systemPrompt: system,
-          userPrompt: user,
-          selection: body.agent,
-          signal,
-          onText: text => res.write(`data: ${JSON.stringify({ text })}\n\n`),
-        });
+        let prompt = user;
+        const fingerprint = text => (text.match(/[\p{L}\p{N}\p{M}_]+/gu) ?? [text.trim()]).join(' ').toLowerCase();
+        for (let attempt = 0; attempt < (writing ? 2 : 1); attempt++) {
+          signal.throwIfAborted();
+          let answer = '';
+          await streamText({
+            systemPrompt: system, userPrompt: prompt, selection: body.agent, signal,
+            onText: text => { answer += text; res.write(`data: ${JSON.stringify({ text })}\n\n`); },
+          });
+          signal.throwIfAborted();
+          if (!writing) break;
+          const text = insertionText((body.document ?? '').slice(0, body.from), answer, (body.document ?? '').slice(body.cursor));
+          const problem = !text ? 'The model repeated text already in the draft or returned no new text.'
+            : body.previous && fingerprint(text) === fingerprint(body.previous) ? 'The model repeated the previous suggestion.' : '';
+          if (!problem) {
+            if (text !== answer) res.write(`data: ${JSON.stringify({ replace: text })}\n\n`);
+            break;
+          }
+          if (attempt === 1) throw new Error(problem);
+          // Reset the same preview before one corrective attempt; never append two answers.
+          res.write(`data: ${JSON.stringify({ replace: '' })}\n\n`);
+          prompt = `${user}\n\nDISCARDED ANSWER:\n${answer}\n\nCORRECTION: ${problem} Rewrite it with a different opening and sentence structure. Return only a new passage for the insertion, without repeating either side or the previous suggestion.`;
+        }
         res.write('data: [DONE]\n\n');
         res.end();
       } catch (e) {
-        console.error('[/idea]', e.message);
+        console.error(`[${url.pathname}]`, e.message);
         if (!res.headersSent) sendJson(res, 500, { error: e.message });
         else res.end(`data: ${JSON.stringify({ error: e.message })}\n\n`);
       }
@@ -639,78 +720,14 @@ async function handleRequest(req, res) {
     //  showing exactly which span is being replaced.
     //
     if (url.pathname === '/rewrite') {
-      const system = buildSystemPrompt(
-        'You are a writing assistant. Generate exactly 3 different replacements for the SELECTED TEXT ' +
-        'and nothing else. Each variant must be distinct in phrasing and approach. ' +
-        'The document is context: it shows where the selection sits and must not be rewritten, ' +
-        `summarised, or included in your output. The selection is marked ${SELECT_OPEN}like this${SELECT_CLOSE} inside it. ` +
-        `Each variant is substituted for the marked span alone — it fills the ${SELECT_SLOT} gap in the sentence shown below it: ` +
-        'never restate, absorb, or repeat any words outside the markers, and keep roughly the length of the selection. ' +
-        'Follow the instruction — it names the specific problem this replacement has to fix. ' +
-        NO_SLOP +
-        'Never invent sources, numbers, dates, quotes, evidence, or stronger certainty. If evidence is missing, preserve uncertainty or ask for a source. ' +
-        'Return ONLY a JSON array with exactly 3 strings: ["variant1","variant2","variant3"]. ' +
-        'No markdown fences, no commentary, no explanation — just the raw JSON array.'
-      );
-      const user = [
-        `SELECTED TEXT — replace exactly this, nothing more:\n${body.selected}`,
-        body.instruction
-          ? `INSTRUCTION:\n${body.instruction}`
-          : 'Rewrite the selected text in 3 distinct ways.',
-        body.document && selectionSlot(body.document, body.selected, body.from)
-          ? `EACH VARIANT FILLS ${SELECT_SLOT} AND MUST READ CORRECTLY IN PLACE:\n` +
-            selectionSlot(body.document, body.selected, body.from)
-          : '',
-        body.context  ? `CONTEXT:\n${body.context}` : '',
-        body.document
-          ? `DOCUMENT (context only — do not rewrite it):\n${markSelection(body.document, body.selected, body.from)}`
-          : '',
-      ].filter(Boolean).join('\n\n---\n\n');
-
       try {
-        const variants = await completeVariants({ system, user, body });
+        const variants = await requestRewrite({ ...body, signal });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ variants }));
       } catch (e) {
         console.error('[/rewrite]', e.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: e.message }));
-      }
-      return;
-    }
-
-    // POST /review — named, checkable writing-pattern findings
-    //
-    //  body.target (optional) narrows the audit to specific passages while the
-    //  full document stays in the prompt as context. The incremental
-    //  per-sentence review uses it; the toolbar button omits it.
-    //
-    if (url.pathname === '/review') {
-      const document = String(body.document ?? '').trim();
-      const target = String(body.target ?? '').trim();
-      if (!document) { sendJson(res, 200, { findings: [] }); return; }
-
-      const user = buildReviewUser({ document, target, context: body.context });
-      const phases = target ? ['local'] : ['global', 'local'];
-      const prompts = phases.map(phase => ({
-        phase,
-        systemPrompt: buildSystemPrompt(buildReviewTask({ targeted: Boolean(target), phase })),
-        userPrompt: user,
-        allowedCodes: reviewCodesForPass(Boolean(target), phase),
-        source: target || document,
-      }));
-
-      try {
-        const result = await requestReview({
-          prompts,
-          selection: body.agent,
-          signal,
-          detailed: true,
-        });
-        sendJson(res, 200, result);
-      } catch (e) {
-        console.error('[/review]', e.message);
-        sendJson(res, 500, { error: e.message });
       }
       return;
     }
@@ -728,21 +745,17 @@ async function handleRequest(req, res) {
       if (brief?.length > 4000) return sendJson(res, 400, { error: 'Brief is too long' });
 
       const at     = cursor ?? (doc ?? '').length;
-      const prefix = (doc ?? '').slice(0, at);
-
       try {
-        const suggestion = await completeText({
-          ...suggestionPrompts({ document: doc, cursor: at, context, brief, style: readStyle(), manual: !!manual }),
+        const text = await requestSuggestion({
+          document: doc, cursor: at, context, brief, style: readStyle(), manual: !!manual,
           selection: body.agent,
-          continuation: true,
           signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-        });
-        const text = suggestion ? parseSuggestion(prefix, suggestion) : '';
+        }, completeText);
         sendJson(res, 200, { suggestion: text });
       } catch (e) {
         console.error('[/suggest]', e.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ error: e.message, code: e.code, attempts: e.attempts }));
       }
       return;
     }
@@ -776,6 +789,7 @@ function listen(port, attempt = 0) {
   });
   server.once('listening', () => {
     const url = `http://127.0.0.1:${server.address().port}`;
+    sessions.listen(url);
     console.log(`Stilura → ${url}`);
     console.log(`Draft  → ${DRAFT_FILE}`);
     console.log(`Style  → ${STYLE_FILE}`);
@@ -784,7 +798,7 @@ function listen(port, attempt = 0) {
     if (SIDECAR) console.log(`STILURA_READY ${url}`);
     // The shell already has a window for this; a browser tab beside it would be
     // a second, stale copy of the same draft.
-    if (!env('NO_OPEN') && !SIDECAR) openBrowser(url);
+    if (!process.env.STILURA_NO_OPEN && !SIDECAR) openBrowser(url);
   });
   server.listen(port, '127.0.0.1');
 }
@@ -798,3 +812,4 @@ if (SIDECAR) {
 }
 
 listen(PORT);
+process.on('exit', () => sessions.close());

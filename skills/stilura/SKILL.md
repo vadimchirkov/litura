@@ -1,6 +1,6 @@
 ---
 name: stilura
-description: Edit prose alongside the Stilura writing editor. Use when the user is working in a folder with draft.md and Stilura running, or asks to review, rewrite, or continue a draft in Stilura's voice. Covers Stilura's style rules, finding codes, and its localhost HTTP API.
+description: Edit prose alongside the Stilura writing editor. Use when the user is working in a folder with draft.md and Stilura running, or asks to review, rewrite, or continue a draft in Stilura's voice. Covers Stilura's style rules and its localhost HTTP API.
 ---
 
 # Stilura
@@ -49,18 +49,6 @@ but never force essay structure onto lists, dialogue, or deliberate
 disorientation. If the user supplies their own writing sample, it outranks
 every rule here.
 
-## Finding codes (Stilura review taxonomy)
-
-One code per finding, most specific wins: `level-1-whole-essay` (title
-misleads / ending doesn't resolve the opening), `level-2-introduction`
-(opening lacks common ground, problem, cost, or point),
-`level-3-index-discussion` (opening promises structure the discussion breaks),
-`level-4-fractal-structure` (section doesn't support its containing unit),
-`level-5-point-placement` (no point, buried point, point at both ends),
-`level-6-key-terms` (announced terms disappear or arrive unannounced),
-`level-7-paragraph-flow` (abrupt old-to-new break between sentences),
-`generic-prose` (any tell from the voice rules above).
-
 ## Stilura localhost API
 
 Base: `http://127.0.0.1:<port>`, port 3000 unless taken (server walks up to
@@ -80,12 +68,6 @@ curl -s -X PUT http://127.0.0.1:$PORT/draft \
   -H 'Content-Type: application/json' \
   -d '{"text":"...","revision":"<sha from GET>"}'
 
-# Review: up to 8 findings {code, quote, pattern, reason, fix};
-# quote is always an exact contiguous passage of the draft
-curl -s -X POST http://127.0.0.1:$PORT/review \
-  -H 'Content-Type: application/json' \
-  -d '{"document":"...full draft...","target":"...optional: audit only this passage..."}'
-
 # Rewrite: exactly 3 variants replacing ONLY the selection.
 # from = character offset of selected in document; the slice must match.
 curl -s -X POST http://127.0.0.1:$PORT/rewrite \
@@ -104,8 +86,6 @@ curl -sN -X POST http://127.0.0.1:$PORT/chat \
 ```
 
 Limits: AI routes accept drafts up to 60,000 characters; files cap at 1 MB.
-Keep `pattern` ≤ 4 words, `reason`/`fix` ≤ 12 words each when reporting
-findings — the author reads them at a glance beside the draft.
 
 ## Editing protocol
 
@@ -115,14 +95,47 @@ findings — the author reads them at a glance beside the draft.
 3. Alternatively edit `draft.md` directly with file tools. Stilura notices
    external changes and offers the author `Load disk` / `Keep mine` — so say
    what you changed and let them choose.
-4. Small, named edits beat rewrites. Quote the exact passage, name the code
-   (`generic-prose`, `level-7-paragraph-flow`, …), give the direction — don't
-   silently rewrite the whole document.
+4. Make small, named edits. Quote the exact passage and explain the change;
+   do not silently rewrite the whole document.
 
-## MCP server (preferred when available)
+## Live HTTP collaboration
 
-If the host connected a `stilura` MCP server (`mcp-server.mjs`), use its tools
-instead of curl: `draft_read`, `draft_write`, `review`, `rewrite`, `suggest`,
-`chat`, `idea`. Same prompts, same revision guard on `draft_write`, and
-document arguments default to the live draft. The curl recipes above are the
-fallback when no MCP server is connected.
+Use `sessionClient(filename)` from `session-client.js` to share the editor's
+live document. It discovers `<file>.stilura-session` and authenticates requests
+to the local HTTP session. Never write directly to disk while the editor is
+running. An unreachable live owner blocks fallback; reconnect and retry.
+
+- `read()` returns text, revision and shared notes, including resolved notes.
+- `patch([{ old, new, from?, all? }], revision)` applies exact replacements.
+  Repeated text needs `from` or `all: true`; overlapping edits fail atomically.
+  Edits elsewhere rebase; a changed target fails. Re-read before retrying.
+- `write(text, revision)` replaces the draft under a revision guard.
+- `resolveNote(id)` preserves the note and closes it in connected editors.
+- `changes(revision, waitMs)` waits up to 30 seconds for text or note updates.
+
+Notes persist in `<file>.stilura-notes.json`. Read their text, quote and anchor
+before editing. Refuse automatic edits against drifted anchors; verify the
+intended passage and supply its exact text and offset.
+
+### External agent work loop
+
+While the host authorizes an active writing session:
+
+1. Read the draft and notes. Use a stable, unique agent ID.
+2. Call `nextWork(agentId, 30000)`; process existing saved notes too.
+3. Follow the returned instruction, feedback, target and `kind`.
+   For `idea`, expand the thought into a passage fitting its exact location.
+4. Call `finishWork({ id, token, revision, edits, comment })` with the claimed
+   revision and exact replacements. Changes elsewhere rebase; a changed target
+   fails. Submit `error` instead when clarification is needed. Claims expire
+   after five minutes.
+5. Applied work awaits human review. Accept, Undo and Regenerate belong to the
+   writer; never resolve a work result automatically.
+6. Continue watching through `nextWork` or `changes`. The host must keep this
+   loop active; updates do not automatically awaken an idle agent.
+
+Use `suggestNote({ text, agent_id, revision, quote?, from? })` sparingly for
+advice after a writing pause. Advice does not change text or queue work for
+its author. Do not invoke generation on every keystroke or repeatedly comment
+on an unchanged passage. Saved user notes are work signals; rough prose alone
+is not a command. Saved feedback stays in note history.

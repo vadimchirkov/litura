@@ -38,7 +38,7 @@ export function briefUpdateAllowed(message) {
 
 export const CHAT_BRIEF_PROMPT = `
 The latest user message explicitly addresses the document-wide brief. Only if it gives a definite instruction,
-end with <litura-edits>{"edits":[],"brief":{"source":"Exact complete latest user message","changes":{"reader":"New audience"}}}</litura-edits>.
+end with <stilura-edits>{"edits":[],"brief":{"source":"Exact complete latest user message","changes":{"reader":"New audience"}}}</stilura-edits>.
 This object replaces the usual edit array; put any proposed text edits in its edits array with the same rules.
 Allowed brief fields: reader (audience), goal (desired effect), awareness (prior knowledge), scope (format), direction (additional writing constraints).
 Use at most 200 characters per field, 500 for direction. Change only fields explicitly requested by the latest message.

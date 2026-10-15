@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { migrateStorageEntries } from './storage-migration.js';
 
 // Per-key atomic files keep desktop state independent of the HTTP port.
 export function desktopStorage(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  return {
+  const storage = {
     read() {
       const entries = [];
       for (const name of fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
@@ -13,10 +14,15 @@ export function desktopStorage(directory) {
         if (typeof item.key !== 'string' || typeof item.value !== 'string') throw new Error('Invalid desktop backup');
         entries.push([item.key, item.value]);
       }
-      return entries;
+      const migrated = migrateStorageEntries(entries);
+      const saved = new Map(entries);
+      for (const [key, value] of migrated) {
+        if (saved.get(key) !== value) storage.write(key, value);
+      }
+      return [...migrated];
     },
     write(key, value) {
-      if (typeof key !== 'string' || key.length > 1024 || !/^(wa-|litura:)/.test(key)
+      if (typeof key !== 'string' || key.length > 1024 || !/^(wa-|stilura:)/.test(key)
           || (value !== null && typeof value !== 'string')) {
         throw Object.assign(new Error('Invalid storage entry'), { status: 400 });
       }
@@ -31,6 +37,7 @@ export function desktopStorage(directory) {
       } finally { fs.rmSync(temp, { force: true }); }
     },
   };
+  return storage;
 }
 
 export function desktopBridge(directory, readBody, sendJson) {

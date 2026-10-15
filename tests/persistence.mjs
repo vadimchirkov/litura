@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { EditorState, Compartment, Transaction } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
 import { openStorage } from '../src/storage.js';
+import { resolveDrift, unwrapProse } from '../editing.js';
 
 const source = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 const section = (start, end) => {
@@ -65,7 +66,7 @@ const section = (start, end) => {
   const requests = [];
   let text = 'first edit';
   const context = vm.createContext({
-    saving: false, savePromise: null, savePaused: false, loadingDocument: false, diskHold: false,
+    liveSync: null, saving: false, savePromise: null, savePaused: false, loadingDocument: false, diskHold: false,
     diskText: 'old', diskRevision: 'old-revision', autosaveHold: false, documentName: 'A.md',
     workView: { state: { doc: { toString: () => text } } },
     fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
@@ -86,6 +87,87 @@ const section = (start, end) => {
   assert.equal(context.diskText, 'latest edit');
 }
 
+
+// Switching must stop on text, note or backup failures before opening another file.
+for (const failure of ['throw', 'paused', 'conflict', 'unconfirmed', 'notes', 'backup', null]) {
+  const events = [], notices = [];
+  let release;
+  const context = vm.createContext({
+    loadingDocument: false, switchingDocument: false, desktopSaving: false, desktop: true,
+    documentName: 'A.md', diskText: 'old', diskTimer: null, savePaused: false, diskHold: false, autosaveHold: false,
+    jobs: [], liveSync: null,
+    workView: { state: { doc: { toString: () => 'latest' } }, focus() {} },
+    editorSetReadonly: (_, value) => events.push(value ? 'locked' : 'unlocked'),
+    clearTimeout() {}, cancelSuggestion() {}, saveToDisk() {},
+    async flushSave() {
+      events.push('save');
+      if (failure === 'throw') throw new Error('Network unavailable');
+      if (failure === 'paused') { context.savePaused = true; return; }
+      if (failure === 'conflict') { context.diskHold = true; return; }
+      if (failure === 'unconfirmed') return;
+      if (!release) await new Promise(resolve => { release = resolve; });
+      context.diskText = 'latest';
+    },
+    saveChat() {}, saveBrief() {},
+    saveNotes() { if (failure === 'notes') throw new Error('Notes unavailable'); },
+    saveSnapshot() { events.push('snapshot'); },
+    localStorage: { async flush() { events.push('backup'); if (failure === 'backup') throw new Error('Backup unavailable'); } },
+    async api() { events.push('open'); throw new Error('Stop fixture after observing open'); },
+    notify: (text, options) => notices.push({ text, ...options }),
+  });
+  vm.runInContext(section('async function switchDocument(', 'const toggleSidebar'), context);
+  const switching = context.switchDocument('B.md');
+  assert(!events.includes('open'), 'Opening must await the save');
+  if (release) release();
+  await switching;
+  assert.equal(events.includes('open'), failure === null, String(failure));
+  assert.equal(context.documentName, 'A.md');
+  assert.equal(context.switchingDocument, false);
+  assert.equal(events.at(-1), 'unlocked');
+  assert.match(notices.at(-1).text, /current draft stays open/);
+  if (!failure) assert(events.indexOf('backup') < events.indexOf('open'));
+  if (failure === 'conflict') assert.equal(notices.at(-1).action, null, 'Retry must not bypass a disk conflict');
+  if (failure === 'paused') {
+    context.flushSave = async () => { context.diskText = 'latest'; };
+    await notices.at(-1).action();
+    assert(events.includes('open'), 'Retry saving must resume a paused save before switching');
+  }
+}
+
+// Startup and file switching share cache recovery, normalization and conflict checks.
+for (const mode of ['disk', 'cached', 'fast-forward', 'conflict']) {
+  const current = { id: 'draft', path: '/draft.md', text: mode === 'cached' ? 'Keep\nformatting.' : 'First line\nsecond line.', revision: 'r2' };
+  const cached = mode === 'disk' ? null : mode === 'cached' ? current.text : 'Unsaved local text';
+  const effects = [];
+  const context = vm.createContext({
+    current, cached, resolveDrift, unwrapProse, diskHold: false,
+    workView: { state: EditorState.create({ doc: '' }) },
+    docStorage: { getItem: key => key === 'wa-working' ? cached : null },
+    lastDiskBaseline: () => ({ text: mode === 'fast-forward' ? cached : 'Older disk text' }),
+    noteDiskBaseline() {},
+    openDocumentText: text => { context.workView.state = EditorState.create({ doc: text }); },
+    restoreChat() {}, restoreNotes() {}, restoreBrief() {}, renderFileList() {}, clearNotice() {},
+    adoptDiskText: draft => { effects.push('adopted'); context.openDocumentText(draft.text); },
+    showDriftBanner() { context.diskHold = true; effects.push('conflict'); },
+    liveSync: { connect() { effects.push('connected'); } },
+    notifyUndo: (_, undo) => { context.undo = undo; }, save() {},
+  });
+  context.workView.dispatch = spec => { context.workView.state = context.workView.state.update(spec).state; };
+  vm.runInContext(section('function restoreDocument(', 'async function initializeDocument('), context);
+  context.restoreDocument(current);
+  assert.equal(context.documentKey, 'stilura:draft:');
+  if (mode === 'disk') {
+    assert.equal(context.workView.state.doc.toString(), 'First line second line.');
+    context.undo();
+    assert.equal(context.workView.state.doc.toString(), current.text);
+  } else if (mode === 'cached') assert.equal(context.workView.state.doc.toString(), cached);
+  else if (mode === 'fast-forward') assert.equal(context.workView.state.doc.toString(), current.text);
+  else {
+    assert.equal(context.workView.state.doc.toString(), cached);
+    assert.equal(context.diskHold, true);
+    assert(!effects.includes('connected'));
+  }
+}
 
 // The real desktop handler does not acknowledge before both saves complete.
 {
@@ -208,14 +290,17 @@ try {
   const adapterRequest = (route, options = {}) => request(route, options.method ?? 'GET', options.body && JSON.parse(options.body));
   let storage = await openStorage({ desktop: true, browser, request: adapterRequest, onError: error => { throw error; } });
   storage.setItem('wa-theme', 'dark');
-  storage.setItem('litura:doc:wa-brief', '{"reader":"Practitioner"}');
-  storage.setItem('litura:doc:wa-brief', '{"reader":"Newest answer"}');
+  storage.setItem('stilura:doc:wa-brief', '{"reader":"Practitioner"}');
+  storage.setItem('stilura:doc:wa-brief', '{"reader":"Newest answer"}');
   await storage.flush();
   await stop();
   request = await launch();
   storage = await openStorage({ desktop: true, browser, request: adapterRequest, onError: error => { throw error; } });
   assert.equal(storage.getItem('wa-theme'), 'dark');
-  assert.equal(storage.getItem('litura:doc:wa-brief'), '{"reader":"Newest answer"}');
+  assert.equal(storage.getItem('stilura:doc:wa-brief'), '{"reader":"Newest answer"}');
+  storage.setItem('stilura:doc:wa-brief', '{"reader":"Local edit"}');
+  await storage.refresh();
+  assert.equal(storage.getItem('stilura:doc:wa-brief'), '{"reader":"Local edit"}', 'refresh must preserve local saves');
   assert.equal((await request('/api/desktop/storage', 'PUT', { key: '../escape', value: 'bad' })).status, 400);
   assert.equal((await request('/api/desktop/flush', 'POST', {})).status, 409, 'Never restart without a connected editor');
 

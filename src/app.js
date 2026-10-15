@@ -3,14 +3,16 @@
 import {
   EditorView,
   keymap,
+  drawSelection,
   Decoration,
   WidgetType,
-  placeholder,
+  showTooltip,
 } from '@codemirror/view';
 import {
   EditorState,
   Transaction,
   StateField,
+  RangeSet,
   StateEffect,
   Compartment,
   Prec,
@@ -19,18 +21,22 @@ import {
   defaultKeymap,
   history,
   historyKeymap,
+  isolateHistory,
 } from '@codemirror/commands';
-import { findingContext, isLatinScript, locateFindings, styleMarkers, styleScore } from '../review.js';
 import { renderMarkdown } from '../markdown.js';
 import { clampBubble, replacementTarget, newerVersion, resolveDrift, unwrapProse, wordDiff } from '../editing.js';
+import { paragraphRanges, resolveNoteRange, mapNoteAnchors } from '../notes.js';
+import { reversible } from '../work.js';
 import { EDITS_OPEN, chatVisibleText, locateChatEdits, mapChatEdit, chatEditMatches } from '../chat-edits.js';
 import { loadSpellDictionary, noteSpellingAdded, spellingMarkers } from '../spellcheck.js';
 import { searchKeymap } from '@codemirror/search';
 import { hydrateIcons, icon } from './icons.js';
 import { openStorage } from './storage.js';
+import { liveDocument } from './live.js';
 import { BRIEF_STEPS, validateBriefQuestions, validateBriefUpdate } from '../brief.js';
 
 async function main() {
+let liveSync = null;
 const desktop = new URLSearchParams(location.search).get('shell') === 'desktop';
 const localStorage = await openStorage({
   desktop,
@@ -57,30 +63,16 @@ const keyAddEl      = document.getElementById('key-add');
 const configuredKeys = document.getElementById('configured-keys');
 const settingsError = document.getElementById('settings-error');
 const modelHint     = document.getElementById('model-hint');
-const suggestProviderEl = document.getElementById('suggest-provider');
-const suggestModelEl = document.getElementById('suggest-model');
-const suggestHint   = document.getElementById('suggest-hint');
-const reviewButton  = document.getElementById('review-button');
 const chatStream    = document.getElementById('chat-stream');
 const chatInput     = document.getElementById('chat-input');
-const chatChip      = document.getElementById('chat-chip');
-const chatChipText  = document.getElementById('chat-chip-text');
-const chatChipClear = document.getElementById('chat-chip-clear');
 const chatSendButton = document.getElementById('chat-send');
 const chatClear     = document.getElementById('chat-clear');
 const chatPill      = document.getElementById('chat-pill');
 const chatPillLabel = document.getElementById('chat-pill-label');
-const scoreEl       = document.getElementById('style-score');
-const scoreValueEl  = document.getElementById('style-score-value');
-const scoreCountEl  = document.getElementById('style-score-count');
-const scoreDetails = document.getElementById('style-details');
-const detailsCountEl = document.getElementById('style-details-count');
-const scoreReviewRun = document.getElementById('style-review-run');
-const scoreReviewStatus = document.getElementById('style-review-status');
-const scoreRemarkList = document.getElementById('style-remark-list');
+if (!/Mac|iPhone|iPad/.test(navigator.platform)) chatPill.querySelector('kbd').textContent = 'Ctrl K';
 const editFeedback = document.getElementById('edit-feedback');
+const noticeLive = document.getElementById('notice-live');
 const chatPanel     = document.getElementById('chat');
-const autoReviewEl  = document.getElementById('auto-review');
 const updateCheckEl = document.getElementById('update-check');
 const themeToggleEl = document.getElementById('theme-toggle');
 const updateBadge   = document.getElementById('update-badge');
@@ -93,11 +85,17 @@ let currentTheme = savedTheme === 'dark' || savedTheme === 'light'
   ? savedTheme
   : (systemTheme.matches ? 'dark' : 'light');
 function setTheme(theme, persist = true) {
+  const root = document.documentElement;
+  // Every color transition would otherwise fire at once on its own clock and
+  // smear the swap: freeze them, flush the new values, then let them back.
+  root.classList.add('no-transition');
   currentTheme = theme;
-  document.documentElement.dataset.theme = theme;
-  document.documentElement.style.colorScheme = theme;
+  root.dataset.theme = theme;
+  root.style.colorScheme = theme;
   themeToggleEl.checked = theme === 'dark';
   if (persist) localStorage.setItem('wa-theme', theme);
+  void root.offsetHeight;
+  requestAnimationFrame(() => root.classList.remove('no-transition'));
 }
 setTheme(currentTheme, false);
 themeToggleEl.addEventListener('change', () => {
@@ -153,6 +151,7 @@ function notify(text, { action = null, label = 'Undo', sticky = false, detail = 
   if (!text) {
     clearTimeout(noticeTimer);
     editFeedback.hidden = true;
+    noticeLive.textContent = '';
     chatPanel.classList.remove('has-notice');
     if (key === '' || (pendingNotice && pendingNotice.key === key)) pendingNotice = null;
     noticeKey = ''; noticeSticky = false;
@@ -192,16 +191,19 @@ function showNotice(text, { action = null, label = 'Undo', sticky = false, detai
   hydrateIcons(editFeedback);
   if (tone) editFeedback.dataset.tone = tone; else delete editFeedback.dataset.tone;
   editFeedback.hidden = false;
+  noticeLive.textContent = text;
   chatPanel.classList.add('has-notice');
   noticeKey = key;
   noticeSticky = sticky;
-  if (!sticky) noticeTimer = setTimeout(() => notify(''), NOTICE_MS);
+  // Only plain news times out. An Undo or an error stays until dismissed: a
+  // timer would take the recovery away before a keyboard user reaches it.
+  if (!sticky && !action && tone !== 'error') noticeTimer = setTimeout(() => notify(''), NOTICE_MS);
 }
 // A notice under the pointer is being read or about to be pressed: it must
 // not fade out from under the hand. Leaving restarts the full count.
 editFeedback.addEventListener('mouseenter', () => clearTimeout(noticeTimer));
 editFeedback.addEventListener('mouseleave', () => {
-  if (noticeSticky || editFeedback.hidden) return;
+  if (noticeSticky || editFeedback.hidden || editFeedback.querySelector('.edit-feedback-undo') || editFeedback.dataset.tone === 'error') return;
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => notify(''), NOTICE_MS);
 });
@@ -221,36 +223,10 @@ chatInput.addEventListener('blur', event => {
   notify(parked.text, parked.opts);
 });
 function clearNotice(key) { if (noticeKey === key) notify(''); }
-const reviewStatus = document.getElementById('review-status');
-let reviewState = 'idle';
-let reviewNotice = '';
-// One header line, truncated when the window is narrow — the title keeps the
-// whole message reachable instead of pushing the draft down a row.
-// "Suggesting…" never touches this line: it lives only in the island's pill
-// (syncPill), so a finished review cannot wipe it and it cannot wipe a review.
-function setReviewStatus(text, detail, from = 'review') {
-  if (from === 'suggest') {
-    suggestWorking = text.endsWith('…') ? text : '';
-    syncPill();
-    if (text && !suggestWorking) notify(text, { detail });
-    return;
-  }
-  if (from === 'review') { reviewNotice = text; syncReviewPanel(); }
-  // Progress ("Suggesting…") stays on this line; anything to read is a notice.
-  const progress = text.endsWith('…');
-  // transitions-dev thinking states: keep the shimmer copy in sync and
-  // replay the rise-in swap when the line changes (reflow re-arms it).
-  if (reviewStatus.textContent !== (progress ? text : '')) {
-    reviewStatus.classList.remove('swap');
-    void reviewStatus.offsetWidth;
-    reviewStatus.classList.add('swap');
-  }
-  reviewStatus.textContent = progress ? text : '';
-  reviewStatus.dataset.text = progress ? text : '';
-  reviewStatus.title = progress ? text : '';
-  reviewStatus.dataset.from = progress ? from : '';
+function setSuggestStatus(text, detail) {
+  suggestWorking = text.endsWith('…') ? text : '';
   syncPill();
-  if (text && !progress) notify(text, { detail });
+  if (text && !suggestWorking) notify(text, { detail });
 }
 
 // A provider's failure arrives as a status code and its own JSON, and pasting
@@ -267,7 +243,7 @@ const MODEL_ERRORS = {
   403: 'This key may not use this model.',
   404: 'This model is not available.',
   408: 'The model took too long.',
-  413: 'The draft is too long for this model.',
+  413: 'The draft is too long for this model. Pick a model with a longer context, or select a shorter passage.',
   429: 'The model is rate-limited.',
   500: 'The provider hit an error.',
   502: 'The provider hit an error.',
@@ -286,14 +262,14 @@ function modelError(error) {
   // one useful thing in a rate-limit payload.
   const waitMatch = status === 429 ? /try again in (\d+(?:\.\d+)?)\s*(ms|s|m)\b/i.exec(detail) : null;
   const wait = waitMatch ? Math.max(1, Math.ceil(Number(waitMatch[1]) * { ms: .001, s: 1, m: 60 }[waitMatch[2].toLowerCase()])) : 0;
-  const unusable = /^Expected TEXT:|^Continuation must be/.test(detail);
+  const unusable = /^Expected TEXT:|^Continuation must be|^Word continuation/.test(detail);
   return {
     say: wait ? `The model is rate-limited. Try again in ${wait} s.`
       : unusable ? 'The model\'s answer was unusable.'
       : MODEL_ERRORS[status] ?? 'The model could not answer.',
     // Retrying a rejected key, a missing model or an oversized draft only
-    // fails again; all but the draft are fixed in settings.
-    act: [401, 402, 403, 404].includes(status) ? 'settings' : status === 413 ? null : 'retry',
+    // fails again; each is fixed in settings (the draft by a larger model).
+    act: [401, 402, 403, 404, 413].includes(status) ? 'settings' : 'retry',
     // Where the fix is: a rejected or unfunded key is under access, a model
     // the key cannot use or that does not exist is picked under models.
     tab: status === 401 || status === 402 ? 'access' : 'models',
@@ -312,13 +288,6 @@ function notifyProblem(problem, retry = null, label = 'Try again', key = '') {
       : {};
   notify(problem.say, { ...act, sticky: true, detail: problem.detail, key, icon: 'alert', tone: 'error' });
 }
-// A failed check says what broke and, for a key or a missing model, offers the
-// settings that fix it. The key keeps a run of automatic checks to one notice.
-function reviewFailed(error, label, retry = null) {
-  const problem = modelError(error);
-  setReviewStatus(`${label} failed. ${problem.say}`, error.message);
-  notifyProblem(problem, retry, 'Try again', 'review-error');
-}
 // A failed suggestion is about the model, not the text: report it even when
 // the writer has typed on since. Background retries fire at every pause, so a
 // passing failure is shown once per half minute; one only settings can fix
@@ -333,8 +302,9 @@ function reportSuggestFailure(problem, manual) {
 }
 let tabId;
 try {
-  tabId = sessionStorage.getItem('litura-tab') || crypto.randomUUID();
-  sessionStorage.setItem('litura-tab', tabId);
+  if (!sessionStorage.getItem('stilura-tab') && sessionStorage.getItem('litura-tab')) sessionStorage.setItem('stilura-tab', sessionStorage.getItem('litura-tab'));
+  tabId = sessionStorage.getItem('stilura-tab') || crypto.randomUUID();
+  sessionStorage.setItem('stilura-tab', tabId);
 } catch { tabId = crypto.randomUUID(); }
 const docStorage = {
   getItem(key) { try { return documentKey ? (key === 'wa-working' ? localStorage.getItem(documentKey + key + ':' + tabId) : null) ?? localStorage.getItem(documentKey + key) : null; } catch { return null; } },
@@ -369,19 +339,15 @@ function finishJob(job) {
 function stopJobs() {
   for (const job of jobs) job.abort();
   cancelSuggestion();
-  clearTimeout(autoReviewTimer);
 }
 
 // ─── Stored state across versions ──────────────────────────────────────────
-// Bumped by hand, only when the shape of stored findings or chat turns changes
-// — not on every release, or a patch would throw away a writer's review. The
+// Bumped only when stored chat turns change shape. The
 // draft (`wa-working`, mirrored to draft.md) is never cleared here: it is the
 // only state the writer cannot regenerate.
 const STORAGE_SCHEMA = '1';
 if (localStorage.getItem('wa-schema') !== STORAGE_SCHEMA) {
-  docStorage.removeItem('wa-findings');
   docStorage.removeItem('wa-chat');
-  docStorage.removeItem('wa-kept-wording');
   localStorage.setItem('wa-schema', STORAGE_SCHEMA);
 }
 
@@ -419,56 +385,8 @@ function saveAgentSelection() {
   localStorage.setItem('wa-agent', JSON.stringify(agentSelection));
 }
 
-// ─── Suggestion model ──────────────────────────────────────────────────────
-// Continuations fire on nearly every pause, so they get their own cheap model
-// while review, rewrite, chat, and /idea keep the default above. The server
-// always spends the least reasoning the model allows (see `continuation` in
-// pi.js), so there is no reasoning control here — only provider and model.
-//
-// Preference order, checked against Text Arena creative-writing scores
-// (Oct 2026) crossed with price and `off`-level support: GPT-6 Luna (1411,
-// $0.10/$0.50 per 1M) ties GPT-5.6 Luna and DeepSeek Flash on quality at a
-// third of the input price, and all three switch reasoning off. Higher-ranked
-// cheap models (Gemini 3.8 Flash at 1492, GLM-5.3 Flash at 1435) mandate
-// reasoning, which would burn deliberation tokens on every keystroke pause —
-// the writer may still pick them by hand; they just aren't the default.
-const SUGGEST_FALLBACKS = [
-  ['openai', 'gpt-6-luna'],
-  ['openai', 'gpt-5.6-luna'],
-  ['xiaomi', 'mimo-v2.6-flash'],
-  ['deepseek', 'deepseek-flash'],
-  ['anthropic', 'claude-haiku-4-5'],
-];
-let suggestSelection = null;
-try { suggestSelection = JSON.parse(localStorage.getItem('wa-suggest') || 'null'); } catch {}
-let draftSuggest = suggestSelection;
-
-function normalizeSuggest(selection) {
-  const model = agentInfo.models.find(item => item.provider === selection?.provider && item.model === selection?.model);
-  if (!model) return null;
-  return { provider: model.provider, model: model.model };
-}
-
-function defaultSuggest() {
-  for (const [provider, model] of SUGGEST_FALLBACKS) {
-    if (agentInfo.models.some(item => item.provider === provider && item.model === model)) return { provider, model };
-  }
-  return normalizeSelection(agentSelection);
-}
-
-function activeSuggestAgent() {
-  return normalizeSuggest(suggestSelection) ?? defaultSuggest();
-}
-
-function saveSuggestSelection() {
-  const normalized = normalizeSuggest(draftSuggest);
-  if (!normalized) return;
-  draftSuggest = normalized;
-  suggestSelection = normalized;
-  cancelSuggestion();
-  ghostClear(workView);
-  localStorage.setItem('wa-suggest', JSON.stringify(suggestSelection));
-}
+// Continuations share the editor's model; the server minimizes reasoning.
+function activeSuggestAgent() { return currentAgent(); }
 
 // ── Combobox ──
 //
@@ -590,8 +508,6 @@ function combobox(trigger) {
 
 combobox(providerEl);
 combobox(modelEl);
-combobox(suggestProviderEl);
-combobox(suggestModelEl);
 
 // One open popover at most follows its field; closed ones cost nothing.
 for (const event of ['resize', 'scroll']) {
@@ -646,24 +562,6 @@ function renderModelSettings() {
   modelHint.textContent = agentInfo.models.length ? '' : 'Add an API key or configure Pi authentication to see models.';
 }
 
-function renderSuggestSettings() {
-  draftSuggest = normalizeSuggest(draftSuggest) ?? defaultSuggest();
-  const providerIds = [...new Set(agentInfo.models.map(model => model.provider))];
-  setOptions(suggestProviderEl, providerIds.map(id => ({
-    value: id,
-    label: agentInfo.providers.find(provider => provider.id === id)?.name ?? id,
-  })), draftSuggest?.provider);
-  const models = agentInfo.models.filter(model => model.provider === fieldValue(suggestProviderEl));
-  setOptions(suggestModelEl, models.map(model => ({ value: model.model, label: model.name || model.model })), draftSuggest?.model);
-  const model = models.find(item => item.model === fieldValue(suggestModelEl));
-  draftSuggest = model ? { provider: model.provider, model: model.model } : null;
-  suggestHint.textContent = !agentInfo.models.length
-    ? 'Add an API key or configure Pi authentication to see models.'
-    : draftSuggest
-      ? `Continuations use ${model.name || model.model}; review, rewrites, chat, and /idea use the default model above.`
-      : '';
-}
-
 function renderCredentials() {
   setOptions(keyProviderEl, agentInfo.authProviders.map(provider => ({ value: provider.id, label: provider.name })), keyProviderEl.value || 'openai');
   apiKeyEl.placeholder = agentInfo.authProviders.find(provider => provider.id === keyProviderEl.value)?.label ?? 'API key';
@@ -679,7 +577,26 @@ function renderCredentials() {
       remove.type = 'button';
       remove.textContent = '×';
       remove.title = remove.ariaLabel = `Remove ${provider.name} key`;
-      remove.addEventListener('click', () => removeProviderKey(provider.id));
+      // A removed key cannot be brought back from here: the first press only
+      // arms the button, the second removes. Blur or Escape disarms it.
+      const disarm = () => {
+        remove.classList.remove('is-armed');
+        remove.textContent = '×';
+        remove.ariaLabel = `Remove ${provider.name} key`;
+      };
+      remove.addEventListener('click', () => {
+        if (remove.classList.contains('is-armed')) return removeProviderKey(provider.id);
+        remove.classList.add('is-armed');
+        remove.textContent = 'Remove key';
+        remove.ariaLabel = `Confirm: remove ${provider.name} key`;
+      });
+      remove.addEventListener('blur', disarm);
+      remove.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !remove.classList.contains('is-armed')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        disarm();
+      });
       chip.append(remove);
     }
     return chip;
@@ -714,12 +631,6 @@ async function refreshAgent() {
     agentSelection = normalizeSelection(agentInfo.defaultSelection);
     if (agentSelection) localStorage.setItem('wa-agent', JSON.stringify(agentSelection));
   }
-  // Unlike the default model, a stale suggestion pick is migrated, not kept:
-  // it names no voice the writer chose, only a cost optimization, and a dead
-  // default would silently bill keystrokes to the expensive model.
-  suggestSelection = normalizeSuggest(suggestSelection) ?? defaultSuggest();
-  if (suggestSelection) localStorage.setItem('wa-suggest', JSON.stringify(suggestSelection));
-  else localStorage.removeItem('wa-suggest');
   return agentInfo;
 }
 
@@ -756,12 +667,9 @@ async function openSettings(tab) {
   try { await refreshAgent(); } catch (error) { settingsError.textContent = error.message; }
   await refreshOAuth();
   draftSelection = currentAgent();
-  draftSuggest = suggestSelection;
   renderModelSettings();
-  renderSuggestSettings();
   renderCredentials();
   renderSubscriptions();
-  syncKeyAdd();
   if (!settingsDialog.open) settingsDialog.showModal();
   else pollOAuth();
 }
@@ -778,7 +686,12 @@ function closeSettingsAnimated() {
   settingsDialog.classList.add('is-closing');
   setTimeout(() => settingsDialog.close(), closeMs);
 }
-settingsDialog.addEventListener('close', () => settingsDialog.classList.remove('is-closing'));
+settingsDialog.addEventListener('close', () => {
+  settingsDialog.classList.remove('is-closing');
+  // A picker left open would outlive the dialog: invisible, still holding
+  // keystrokes, and flashing back in on the next open.
+  for (const popover of settingsDialog.querySelectorAll(':popover-open')) popover.hidePopover();
+});
 settingsDialog.querySelector('.dialog-close').addEventListener('click', closeSettingsAnimated);
 
 // Without a model every AI action fails in the console and the editor just
@@ -806,18 +719,6 @@ modelEl.addEventListener('change', () => {
   renderModelSettings();
   saveAgentSelection();
 });
-suggestProviderEl.addEventListener('change', () => {
-  const first = agentInfo.models.find(model => model.provider === fieldValue(suggestProviderEl));
-  if (first) draftSuggest = { provider: first.provider, model: first.model };
-  renderSuggestSettings();
-  saveSuggestSelection();
-});
-suggestModelEl.addEventListener('change', () => {
-  draftSuggest = { provider: fieldValue(suggestProviderEl), model: fieldValue(suggestModelEl) };
-  renderSuggestSettings();
-  saveSuggestSelection();
-});
-
 // A popover left open behind a closed dialog comes back with it.
 settingsDialog.addEventListener('close', () => {
   stopOAuthPoll();
@@ -837,11 +738,8 @@ keyProviderEl.addEventListener('change', renderCredentials);
 document.getElementById('settings-form').addEventListener('submit', event => event.preventDefault());
 
 const keyToggleEl = document.getElementById('key-toggle');
-function syncKeyAdd() {
-  keyAddEl.disabled = !apiKeyEl.value.trim();
-}
 apiKeyEl.addEventListener('input', () => {
-  syncKeyAdd();
+  apiKeyEl.removeAttribute('aria-invalid');
   // transitions-dev error shake: typing clears the error at once.
   if (apiKeyEl._revertTimer) { clearTimeout(apiKeyEl._revertTimer); apiKeyEl._revertTimer = null; }
   apiKeyEl.classList.remove('is-error');
@@ -857,8 +755,17 @@ keyToggleEl.addEventListener('click', () => {
   apiKeyEl.focus();
 });
 
+// Add stays enabled and validates on press: a disabled button cannot be
+// focused and never says why it does nothing. It is disabled only while the
+// request runs, so a double press cannot add the key twice.
 async function addProviderKey() {
-  if (!apiKeyEl.value.trim()) return;
+  if (!apiKeyEl.value.trim()) {
+    settingsError.textContent = 'Enter an API key first.';
+    apiKeyEl.setAttribute('aria-invalid', 'true');
+    showKeyError();
+    apiKeyEl.focus();
+    return;
+  }
   settingsError.textContent = '';
   keyAddEl.disabled = true;
   try {
@@ -867,15 +774,14 @@ async function addProviderKey() {
       body: JSON.stringify({ provider: keyProviderEl.value, apiKey: apiKeyEl.value }),
     });
     apiKeyEl.value = '';
-    syncKeyAdd();
     renderModelSettings();
-    renderSuggestSettings();
-    renderCredentials();
+      renderCredentials();
   } catch (error) {
     settingsError.textContent = error.message;
+    apiKeyEl.setAttribute('aria-invalid', 'true');
     showKeyError();
   }
-  finally { syncKeyAdd(); }
+  finally { keyAddEl.disabled = false; }
 }
 keyAddEl.addEventListener('click', addProviderKey);
 
@@ -906,8 +812,7 @@ async function removeProviderKey(provider) {
   try {
     agentInfo = await api('/api/agent/credentials', { method: 'DELETE', body: JSON.stringify({ provider }) });
     renderModelSettings();
-    renderSuggestSettings();
-    renderCredentials();
+      renderCredentials();
     await refreshOAuth();
   } catch (error) { settingsError.textContent = error.message; }
 }
@@ -946,6 +851,7 @@ function renderSubscriptions() {
     const chip = document.createElement('div');
     chip.className = 'key-chip';
     const dot = document.createElement('i');
+    if (!provider.configured) dot.className = 'is-off';
     const name = document.createElement('span');
     name.textContent = `${provider.label ?? provider.name} · ${provider.configured ? 'connected' : 'not connected'}`;
     chip.append(dot, name);
@@ -1019,8 +925,7 @@ async function pollOAuth() {
       await refreshAgent();
       draftSelection = currentAgent();
       renderModelSettings();
-      renderSuggestSettings();
-      renderCredentials();
+          renderCredentials();
       // The chip reads oauthInfo.supported: re-read it, or the just-signed-in
       // subscription keeps showing "not connected / Sign in" until reopen.
       await refreshOAuth();
@@ -1121,6 +1026,20 @@ const ghostField = StateField.define({
   create: () => null,
 
   update(val, tr) {
+    // Typing the ghost's own next characters keeps the rest on screen, so
+    // no new request is needed until the writer leaves the suggestion.
+    if (val && tr.docChanged && tr.isUserEvent('input.type')) {
+      let typed = null;
+      tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+        typed = typed === null && fromA === val.pos && toA === val.pos ? inserted.toString() : false;
+      });
+      const pos = val.pos + (typed ? typed.length : 0);
+      const head = tr.newSelection.main;
+      if (typed && val.text.startsWith(typed) && head.empty && head.head === pos) {
+        return typed === val.text ? null : { text: val.text.slice(typed.length), pos };
+      }
+      return null;
+    }
     if (tr.docChanged) return null;  // typing → clear
     if (tr.selection)  return null;  // cursor moved → clear
     for (const e of tr.effects) {
@@ -1164,41 +1083,11 @@ function ghostAccept(view) {
   return true;
 }
 
-// ─── Slop review highlights ───────────────────────────────────────────────────
-
-let keptStyle = [];
-let localFinding = null;
-function saveKeptStyle() {
-  docStorage.setItem('wa-kept-wording', JSON.stringify({ document: workView.state.doc.toString(), marks: keptStyle }));
-}
-function visibleStyleMarkers(text) {
-  return styleMarkers(text).filter(marker =>
-    !keptStyle.some(kept => kept.state === 'kept' && kept.from === marker.from && kept.to === marker.to && kept.quote === marker.quote));
-}
-
-const refreshStyleFx = StateEffect.define();
-
-const styleMarkerField = StateField.define({
-  create: state => visibleStyleMarkers(state.doc.toString()),
-  update: (markers, tr) => {
-    if (tr.docChanged) { for (const kept of keptStyle) mapChatEdit(kept, tr.changes); keptStyle = keptStyle.filter(kept => kept.state !== 'stale'); }
-    for (const effect of tr.effects) {
-      if (effect.is(refreshStyleFx)) return visibleStyleMarkers(tr.newDoc.toString());
-    }
-    return tr.docChanged ? visibleStyleMarkers(tr.newDoc.toString()) : markers;
-  },
-  provide: field => EditorView.decorations.from(field, markers => Decoration.set(markers.map(marker =>
-    Decoration.mark({
-      class: 'cm-style-marker',
-      attributes: { 'data-style-from': String(marker.from), title: 'Possible stock wording — click to explore' },
-    }).range(marker.from, marker.to)), true)),
-});
-
 // ─── Spelling marks ─────────────────────────────────────────────────────────
 //
 //  A deterministic, offline check for actual misspellings — distinct from the
 //  style tells above, which flag wording choices rather than errors. Fixes
-//  are instant word swaps, so they skip the finding-card/model path entirely.
+//  are instant word swaps and need no model call.
 //
 // ponytail: dictionary loads once at startup; a word added via the bubble's
 // "Ignore" only survives the tab session. Persist to localStorage if writers
@@ -1216,184 +1105,14 @@ const spellMarkerField = StateField.define({
     }
     return tr.docChanged ? visibleSpellMarkers(tr.newDoc.toString()) : markers;
   },
-  provide: field => EditorView.decorations.from(field, markers => Decoration.set(markers.map(marker =>
-    Decoration.mark({
-      class: 'cm-spell-marker',
-      attributes: { 'data-spell-from': String(marker.from), title: 'Possible misspelling — click for suggestions' },
-    }).range(marker.from, marker.to)), true)),
 });
 
-const setReviewFx = StateEffect.define();
-const addReviewFx = StateEffect.define();
-const dropReviewFx = StateEffect.define();  // one finding the writer disagreed with
-let reviewFindings = [];
-let findingSeq = 0;
-
-const slopMark = finding => Decoration.mark({
-  class: 'cm-slop',
-  attributes: {
-    'data-slop-id': String(finding.id),
-    title: `${finding.pattern}: ${finding.reason}`,
-  },
-}).range(finding.from, finding.to);
-
-const reviewField = StateField.define({
-  create: () => Decoration.none,
-  update(decorations, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(setReviewFx)) return Decoration.set(effect.value.map(slopMark), true);
-      if (effect.is(addReviewFx)) return decorations.update({ add: effect.value.map(slopMark), sort: true });
-      if (effect.is(dropReviewFx)) return decorations.update({
-        filter: (_from, _to, deco) => deco.spec.attributes['data-slop-id'] !== String(effect.value),
-      });
-    }
-    if (!tr.docChanged) return decorations;
-    // Edits elsewhere only shift a finding; edits inside one make its quote stale.
-    const edited = [];
-    tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => edited.push([fromB, toB]));
-    return decorations.map(tr.changes).update({
-      filter: (from, to) => !edited.some(([a, b]) => a < to && b > from),
-    });
-  },
-  provide: field => EditorView.decorations.from(field),
-});
-
-// ─── Attached passage highlight ───────────────────────────────────────────────
-//
-//  A native selection greys out the moment the composer takes focus, which is
-//  exactly when the writer needs to see what they attached. This mark does not.
-//
-const setAttachFx = StateEffect.define();
-
-const attachField = StateField.define({
-  create: () => Decoration.none,
-  update(decorations, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(setAttachFx)) {
-        // A finding already reads as a background band; the attachment washes
-        // over it in its own hue instead of drawing a second shape. The
-        // decoration still has to exist — it is what tracks the live
-        // position and ends the attachment on an edit — only its look is shared.
-        const cls = effect.value?.finding ? 'cm-attached cm-attached-finding' : 'cm-attached';
-        return effect.value
-          ? Decoration.set([Decoration.mark({ class: cls }).range(effect.value.from, effect.value.to)])
-          : Decoration.none;
-      }
-    }
-    if (!tr.docChanged) return decorations;
-    // Rewriting the passage by hand ends the attachment: variants generated for
-    // the old wording must not be offered against the new one.
-    const edited = [];
-    tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => edited.push([fromB, toB]));
-    return decorations.map(tr.changes).update({
-      filter: (from, to) => !edited.some(([a, b]) => a < to && b > from),
-    });
-  },
-  provide: field => EditorView.decorations.from(field),
-});
-
-// ─── Open-variants target ───────────────────────────────────────────────────
-//
-//  The passage whose options are currently on screen. Options no longer
-//  attach to the composer, so without this the draft would give no sign of
-//  which phrase is being decided. One live group at a time means one mark.
-const setVariantTargetFx = StateEffect.define();
-
-const variantTargetField = StateField.define({
-  create: () => Decoration.none,
-  update(decorations, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(setVariantTargetFx)) {
-        return effect.value
-          ? Decoration.set([Decoration.mark({ class: 'cm-variant-target' }).range(effect.value.from, effect.value.to)])
-          : Decoration.none;
-      }
-    }
-    if (!tr.docChanged) return decorations;
-    // An edit inside the passage invalidates the open options with it.
-    const edited = [];
-    tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => edited.push([fromB, toB]));
-    return decorations.map(tr.changes).update({
-      filter: (from, to) => !edited.some(([a, b]) => a < to && b > from),
-    });
-  },
-  provide: field => EditorView.decorations.from(field),
-});
-
-function markVariantTarget(target) {
-  try { workView.dispatch({ effects: setVariantTargetFx.of(target ? { from: target.from, to: target.to } : null) }); } catch {}
-}
-
-// The mark follows the last live group: clear it only when no undecided
-// group remains on screen, so dismissing one card never steals the mark of
-// another card's open options.
-function syncVariantTarget() {
-  if (!document.querySelector('.chat-variants:not(.is-spent):not(.is-loading)')) markVariantTarget(null);
-}
-
-// Live position of a finding — decorations move with the document, the
-// from/to captured at review time do not.
-function findingRange(id) {
-  if (id === -1) return localFinding && chatEditMatches(localFinding, workView.state.doc.toString()) ? { from: localFinding.from, to: localFinding.to } : null;
-  let found = null;
-  workView.state.field(reviewField).between(0, workView.state.doc.length, (from, to, deco) => {
-    if (deco.spec.attributes['data-slop-id'] === String(id)) { found = { from, to }; return false; }
-  });
-  return found;
-}
-
-function currentRanges() {
-  const ranges = [];
-  workView.state.field(reviewField).between(0, workView.state.doc.length, (from, to) => { ranges.push({ from, to }); });
-  return ranges;
-}
-
-function syncReviewLabel() {
-  const count = workView.state.field(reviewField).size;
-  reviewButton.classList.toggle('has-findings', count > 0);
-  swapRecipeLabel(reviewButton.disabled ? 'Checking…' : 'Slop');
-  syncStyleScore();
-}
-// transitions-dev text states swap (04-text-states-swap.md): three-phase
-// label swap — exit up through blur, swap text, enter from below.
-function swapRecipeLabel(next) {
-  if (reviewButton.textContent === next) return;
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    reviewButton.textContent = next;
-    return;
-  }
-  const dur = parseFloat(
-    getComputedStyle(document.documentElement).getPropertyValue('--text-swap-dur')
-  ) || 150;
-  reviewButton.classList.add('swap-text', 'is-exit');
-  setTimeout(() => {
-    reviewButton.textContent = next;
-    reviewButton.classList.remove('is-exit');
-    reviewButton.classList.add('is-enter-start');
-    void reviewButton.offsetHeight; // flush the below-rest state
-    reviewButton.classList.remove('is-enter-start');
-  }, dur);
-}
-let jumpFrom = -1;
-function jumpToNextFinding(direction = 1) {
-  const live = reviewFindings.map(finding => ({ finding, range: findingRange(finding.id) })).filter(item => item.range)
-    .sort((a, b) => a.range.from - b.range.from || a.finding.id - b.finding.id);
-  if (!live.length) return;
-  const index = live.findIndex(item => item.finding.id === jumpFrom);
-  const next = live[(index + direction + live.length) % live.length];
-  jumpFrom = next.finding.id;
-  openFinding(next.finding, true);
-}
-// Stepping through findings is a keyboard job; the marks in the draft are the
-// pointing device. F8 is the editor convention for "next problem".
 document.addEventListener('keydown', event => {
-  if (event.key === 'F8') { event.preventDefault(); jumpToNextFinding(event.shiftKey ? -1 : 1); }
   if (event.key === 'Escape' && !markBubble.hidden) { hideMarkBubble(); workView.focus(); return; }
   if (event.key === 'Escape' && plainPreview) { clearPlainPreview(); workView.focus(); return; }
   // Last, so the lighter dismissals above still win. On a narrow window the
   // sidebar is a layer over the text, and Escape is how a layer goes away.
-  // The composer claims Escape for itself only while it holds a request or an
-  // attached passage, and claims it by stopping the event on the way out — so
+  // The composer claims Escape for itself only while it holds a request, and claims it by stopping the event on the way out — so
   // there is nothing left to check here. Tested any looser, the panel became
   // undismissable by key, because the focus is almost always in the draft and
   // the draft has no Escape of its own to spend. The scrim is the way out for
@@ -1415,171 +1134,6 @@ document.addEventListener('mouseup', event => {
   deferBubble(() => showSelectionBubble(clientX, clientY), 250);
 });
 document.addEventListener('copy', () => { if (bubbleMode === 'selection') hideMarkBubble(); });
-// Disagreeing with a finding has to be as cheap as accepting one, or the
-// counter keeps advertising work the writer already rejected.
-function dismissFinding(id) {
-  if (id === -1) { if (localFinding) keepStyleMarker(localFinding); return; }
-  const finding = reviewFindings.find(item => item.id === id);
-  const document = workView.state.doc.toString();
-  const range = findingRange(id);
-  const dismissed = safeJson(docStorage.getItem('dismissed'), []);
-  const decision = finding && { code: finding.code, quote: finding.quote, context: findingContext(document, { ...finding, ...range }) };
-  if (decision) dismissed.push(decision);
-  docStorage.setItem('dismissed', JSON.stringify(dismissed.slice(-100)));
-  reviewFindings = reviewFindings.filter(finding => finding.id !== id);
-  const card = findingCards.get(id);
-  if (card) { railAnchors.delete(card); railHomes.delete(card); fadeRemove(card); }
-  findingCards.delete(id);
-  workView.dispatch({ effects: dropReviewFx.of(id) });
-  hideMarkBubble();
-  if (activeFinding?.id === id) detach();
-  else clearPlainPreview();
-  refocusAfterRemoval(id);
-  saveFindings();
-  syncVariantTarget();
-  syncReviewLabel();
-  workView.focus();
-  if (decision) notifyUndo('Kept as is', () => {
-    const saved = safeJson(docStorage.getItem('dismissed'), []);
-    docStorage.setItem('dismissed', JSON.stringify(saved.filter(item => JSON.stringify(item) !== JSON.stringify(decision))));
-    if (workView.state.doc.toString() === document) { mergeFindings([finding]); syncReviewLabel(); }
-    else setReviewStatus('Dismissal undone. Check again to cover the changed text.');
-  });
-}
-
-// A full review costs two model calls. Losing it to a reload is the writer
-// paying twice for the same answer, so the findings outlive the page.
-function saveFindings() {
-  const live = reviewFindings
-    .filter(finding => findingRange(finding.id))
-    .map(({ code, quote, pattern, reason, fix }) => ({ code, quote, pattern, reason, fix }));
-  docStorage.setItem('wa-findings', JSON.stringify({ document: workView.state.doc.toString(), findings: live, state: reviewState }));
-}
-
-function restoreFindings() {
-  let saved = [];
-  try { saved = JSON.parse(docStorage.getItem('wa-findings') || '[]'); } catch {}
-  reviewState = saved.document === workView.state.doc.toString() ? (saved.state || 'partial') : saved.document ? 'stale' : 'idle';
-  if (saved.document === workView.state.doc.toString() && saved.findings?.length && mergeFindings(saved.findings)) syncReviewLabel();
-}
-
-function clearReview() {
-  clearNotice('undo');
-  discardFindingCards();
-  for (const stale of document.querySelectorAll('.chat-variants')) stale.remove();
-  clearPlainPreview();
-  reviewFindings = [];
-  checkedSentences.clear();
-  workView.dispatch({ effects: setReviewFx.of([]) });
-  markVariantTarget(null);
-  docStorage.removeItem('wa-findings');
-  syncReviewLabel();
-}
-
-// Anchor findings against the document as it is *now* and merge them in —
-// the request may have been in flight while the writer kept typing.
-function mergeFindings(rawFindings) {
-  const document = workView.state.doc.toString();
-  const dismissed = safeJson(docStorage.getItem('dismissed'), []);
-  const filtered = (rawFindings || []).filter(finding =>
-    !reviewFindings.some(item => findingRange(item.id) && item.code === finding.code && item.quote === finding.quote));
-  const located = locateFindings(document, filtered)
-    .filter(finding => !dismissed.some(item => item.code === finding.code && item.quote === finding.quote &&
-      (item.context ? item.context === findingContext(document, finding) : item.document === document)))
-    .map(finding => ({ ...finding, id: findingSeq++ }));
-  if (!located.length) return 0;
-  reviewFindings.push(...located);
-  workView.dispatch({ effects: addReviewFx.of(located) });
-  saveFindings();
-  return located.length;
-}
-
-async function reviewRequest(body, replaceAll = false) {
-  if (body.document !== workView.state.doc.toString()) throw new Error('Draft changed before the check started. Check again.');
-  const version = editVersion;
-  // A targeted pass is the automatic one: it runs while the writer types.
-  const job = startJob({ background: Boolean(body.target) });
-  try {
-    const data = await api('/review', {
-      method: 'POST', signal: job.signal,
-      body: JSON.stringify({ agent: currentAgent(), ...body }),
-    });
-    if (version !== editVersion) throw new Error('Draft changed during the check. Check again.');
-    if (replaceAll) clearReview();
-    const added = mergeFindings(data.findings);
-    reviewState = data.failedPasses?.length || body.target ? 'partial' : 'complete';
-    saveFindings();
-    // The marks in the draft are the result. A line announcing that the review
-    // finished says nothing the marks do not already say.
-    if (data.failedPasses?.length) setReviewStatus(`Partial slop check (${data.failedPasses.join(', ')}) — run again to retry`);
-    else if (reviewStatus.dataset.from === 'review') setReviewStatus('');   // the marks are the result
-    return { added, complete: !data.failedPasses?.length };
-  } finally { finishJob(job); syncStyleScore(); }
-}
-async function runReview() {
-  const document = workView.state.doc.toString();
-  if (loadingDocument || !document.trim()) return;
-  if (!await ensureAgent()) return;
-  jumpFrom = -1;
-  reviewButton.disabled = true;
-  syncReviewLabel();
-  setReviewStatus('');
-  try {
-    const result = await reviewRequest({ document }, true);
-    if (result.complete) for (const paragraph of reviewParagraphs(document)) checkedSentences.add(paragraph.key);
-    // Missing problem, cost or point in the opening is the symptom of a
-    // missing brief — nudge once, the marks stay the result either way.
-    if (reviewFindings.some(finding => finding.code === 'level-1-whole-essay' || finding.code === 'level-2-introduction')) maybeNudgeBrief();
-  } catch (error) {
-    if (error.name === 'AbortError') setReviewStatus('Slop check stopped — findings kept', error.message);
-    else reviewFailed(error, 'Slop check', runReview);
-  } finally { reviewButton.disabled = false; syncReviewLabel(); }
-}
-reviewButton.addEventListener('click', () => { workView.focus(); runReview(); });
-reviewButton.addEventListener('keydown', event => {
-  if (event.key === 'Escape') { event.preventDefault(); workView.focus(); }
-});
-
-// ─── Incremental review ────────────────────────────────────────────────────────
-//
-//  Every finished sentence is audited once, ~1.5 s after the writer stops
-//  touching it. Sentences already judged are cached by text, so nothing is
-//  paid for twice and the toolbar button stays as the "re-check everything"
-//  escape hatch.
-//
-const AUTO_REVIEW_DELAY = 1500;
-const AUTO_REVIEW_MIN   = 25;   // shorter sentences carry too little to judge
-
-const checkedSentences = new Set();
-let autoReviewTimer = null;
-let autoReviewBusy  = false;
-
-// Every pause costs a model call, so this has to be switchable — and visible
-// while it runs, or the writer cannot tell what they are paying for.
-let autoReviewOn = localStorage.getItem('wa-autoreview') !== 'off';
-// Experiment: dock Note/Context in the margin and Continue at the caret.
-const pillsMarginEl = document.getElementById('pills-margin');
-pillsMarginEl.checked = localStorage.getItem('wa-pills') === 'margin';
-pillsMarginEl.addEventListener('change', () => {
-  pillsMargin = pillsMarginEl.checked;
-  localStorage.setItem('wa-pills', pillsMargin ? 'margin' : 'float');
-});
-let autoSuggestOn = localStorage.getItem('wa-autosuggest') !== 'off';
-const autoSuggestEl = document.getElementById('auto-suggest');
-autoSuggestEl.checked = autoSuggestOn;
-autoSuggestEl.addEventListener('change', () => {
-  autoSuggestOn = autoSuggestEl.checked;
-  localStorage.setItem('wa-autosuggest', autoSuggestOn ? 'on' : 'off');
-  cancelSuggestion(); ghostClear(workView);
-});
-autoReviewEl.checked = autoReviewOn;
-autoReviewEl.addEventListener('change', () => {
-  autoReviewOn = autoReviewEl.checked;
-  clearTimeout(autoReviewTimer);
-  if (autoReviewOn) autoReviewSchedule();
-  localStorage.setItem('wa-autoreview', autoReviewOn ? 'on' : 'off');
-});
-
 // ─── Update check ──────────────────────────────────────────────────────────
 // Off unless the writer turns it on. Every other request Stilura sends is one
 // they started, and a background call to npm on every launch would quietly
@@ -1645,153 +1199,15 @@ updateCheckEl.addEventListener('change', () => {
 
 refreshUpdate();
 
-let activeStyleFrom = null;
-function isScoreOpen() { return scoreDetails.matches(':popover-open'); }
-function closeScorePopover() { if (isScoreOpen()) scoreDetails.hidePopover(); }
-function liveReviewFindings() {
-  return reviewFindings.map(finding => ({ finding, range: findingRange(finding.id) }))
-    .filter(item => item.range).sort((a, b) => a.range.from - b.range.from);
-}
-function reviewStateText() {
-  // No running or finished line — the button dims while it works and the
-  // marks speak when it lands. Only what needs attention takes the line.
-  if (reviewButton.disabled || autoReviewBusy) return '';
-  if (reviewNotice) return reviewNotice;
-  if (reviewState === 'idle') return 'Not checked yet';
-  if (reviewState === 'partial') return 'Partly checked';
-  return '';
-}
-function syncStyleScore() {
-  if (typeof workView === 'undefined' || !workView?.state) return;
-  const text = workView.state.doc.toString();
-  scoreEl.hidden = !text.trim();
-  if (scoreEl.hidden) { closeScorePopover(); return; }
-  const count = workView.state.field(styleMarkerField).length + liveReviewFindings().length;
-  // The trigger names the feature; the pill counts what is waiting. With
-  // nothing marked there is no zero — just the invitation to check.
-  scoreValueEl.textContent = 'Slop';
-  scoreCountEl.hidden = detailsCountEl.hidden = !count;
-  scoreCountEl.textContent = detailsCountEl.textContent = count ? String(count) : '';
-  scoreEl.title = reviewStateText();
-  syncReviewPanel();
-  if (isScoreOpen()) renderScoreDetails();
-}
-function syncReviewPanel() {
-  // The button keeps one name in every state; running shows as dimmed, and
-  // the status line underneath carries only what needs attention.
-  const busy = reviewButton.disabled || autoReviewBusy;
-  scoreReviewRun.disabled = busy || loadingDocument;
-  scoreReviewRun.textContent = 'Check for slop';
-  scoreReviewStatus.textContent = reviewStateText();
-  scoreReviewStatus.hidden = !scoreReviewStatus.textContent;
-}
-function remarkRow(quote, label, reason, open, kind = '') {
-  const row = chatEl('button', `style-marker-jump${kind ? ` ${kind}` : ''}`);
-  row.type = 'button';
-  row.title = reason;  // the card carries the reason in full; the row identifies
-  const go = chatEl('i', 'style-marker-go', '›');
-  go.setAttribute('aria-hidden', 'true');
-  row.append(chatEl('span', '', `“${quote}”`), chatEl('small', '', label), go);
-  row.addEventListener('click', () => { closeScorePopover(); open(); });
-  return row;
-}
-function renderScoreDetails() {
-  syncReviewPanel();
-  const rows = [
-    ...workView.state.field(styleMarkerField).map(marker => ({
-      from: marker.from, quote: marker.quote, label: 'Stock wording', reason: marker.reason, kind: '',
-      open: () => selectStyleMarker(marker),
-    })),
-    ...liveReviewFindings().map(({ finding, range }) => ({
-      from: range.from, quote: finding.quote, label: finding.pattern, reason: finding.reason, kind: 'is-model',
-      open: () => openFinding(finding, true),
-    })),
-  ].sort((a, b) => a.from - b.from);
-  scoreRemarkList.replaceChildren(...rows.map(row => remarkRow(row.quote, row.label, row.reason, row.open, row.kind)));
-  if (!rows.length) scoreRemarkList.append(chatEl('p', 'style-details-note',
-    reviewState === 'complete' ? 'No slop found.' : 'Nothing marked yet.'));}
-function keepStyleMarker(marker) {
-  const kept = { ...marker, state: 'kept' };
-  keptStyle.push(kept);
-  workView.dispatch({ effects: refreshStyleFx.of(null) });
-  saveKeptStyle(); removeLocalFinding(); syncStyleScore();
-  notifyUndo('Kept this wording here', () => {
-    keptStyle = keptStyle.filter(item => item !== kept); saveKeptStyle();
-    workView.dispatch({ effects: refreshStyleFx.of(null) }); syncStyleScore();
-  });
-}
-function removeLocalFinding() {
-  const card = findingCards.get(-1);
-  if (card) { railAnchors.delete(card); railHomes.delete(card); fadeRemove(card); findingCards.delete(-1); }
-  localFinding = null;
-  if (activeFinding?.id === -1) detach();
-}
-// `at` is the click point in the draft, and only a click carries one: a row in
-// the Slop popover is somewhere else entirely, so it asks for the card centred
-// instead. A click is already at the passage and needs no bubble of its own —
-// openFinding raises it from the same point.
-function selectStyleMarker(marker, at = null) {
-  closeScorePopover();
-  if (localFinding?.from !== marker.from || localFinding?.quote !== marker.quote) removeLocalFinding();
-  localFinding = { ...marker, id: -1, pattern: 'Stock wording', state: 'pending' };
-  openFinding(localFinding, !at, at);
-}
-scoreDetails.addEventListener('beforetoggle', event => { if (event.newState === 'open') renderScoreDetails(); });
-scoreDetails.addEventListener('toggle', () => scoreEl.setAttribute('aria-expanded', String(isScoreOpen())));
-scoreReviewRun.addEventListener('click', () => runReview());
-
-function autoReviewSchedule() {
-  if (!autoReviewOn || loadingDocument || savePaused) return;
-  clearTimeout(autoReviewTimer);
-  autoReviewTimer = setTimeout(autoReviewRun, AUTO_REVIEW_DELAY);
-}
-
-function reviewParagraphs(document) {
-  return [...document.matchAll(/[^\n]+(?:\n(?!\s*\n)[^\n]+)*/g)]
-    .map(match => ({ text: match[0].trim(), from: match.index, to: match.index + match[0].length }))
-    .map((paragraph, i, paragraphs) => ({ ...paragraph, key: JSON.stringify([
-      paragraph.text, paragraphs[i - 1]?.text.slice(-400), paragraphs[i + 1]?.text.slice(0, 400), currentAgent(),
-    ]) }));
-}
-function autoReviewPending(state) {
-  const cursor = state.selection.main.head;
-  return reviewParagraphs(state.doc.toString()).filter(paragraph =>
-    paragraph.text.length >= AUTO_REVIEW_MIN && !checkedSentences.has(paragraph.key) &&
-    (paragraph.to < state.doc.length || /[.!?…。！？]["'»”’)\]]*$/.test(paragraph.text)) &&
-    !(cursor >= paragraph.from && cursor < paragraph.to));
-}
-async function autoReviewRun() {
-  if (!autoReviewOn || loadingDocument || savePaused || autoReviewBusy || reviewButton.disabled || !currentAgent()) return;
-  const pending = autoReviewPending(workView.state).slice(0, 3);
-  if (!pending.length) return;
-  const version = editVersion;
-  autoReviewBusy = true;
-  reviewButton.classList.add('is-busy');
-  let complete = false;
-  try {
-    const result = await reviewRequest({
-      document: workView.state.doc.toString(),
-      target: pending.map(paragraph => paragraph.text).join('\n\n'),
-    });
-    complete = result.complete;
-    if (complete) for (const paragraph of pending) checkedSentences.add(paragraph.key);
-    syncReviewLabel();
-  } catch (error) {
-    if (error.name === 'AbortError') setReviewStatus('Automatic slop check stopped', error.message);
-    else reviewFailed(error, 'Automatic slop check');
-  } finally {
-    autoReviewBusy = false;
-    reviewButton.classList.remove('is-busy');
-    if (complete || version !== editVersion) autoReviewSchedule();
-  }
-}
-
 // ─── Suggestion system ─────────────────────────────────────────────────────────
 
 let suggestTimer = null;
-let suggestWorking = '';   // "Suggesting…" while a request is out (see setReviewStatus)
+let suggestWorking = '';   // "Suggesting…" while a request is out
 let suggestAbort = null;
 let suggestVersion = 0;
+// A rate-limited provider answers every further keystroke with the same 429
+// and burns the quota it is waiting on. Automatic requests rest for a minute.
+let suggestPausedUntil = 0;
 
 const SUGGEST_DELAY = 200;   // ms after last keystroke — feels instant, still debounces bursts
 const SUGGEST_MIN   = 15;   // minimum doc length before suggesting
@@ -1814,12 +1230,13 @@ function cancelSuggestion() {
   suggestTimer = null;
   suggestAbort?.abort();
   suggestAbort = null;
-  if (suggestWorking) setReviewStatus('', undefined, 'suggest');
+  if (suggestWorking) setSuggestStatus('');
 }
 
 function suggestSchedule() {
   cancelSuggestion();
-  if (!autoSuggestOn || loadingDocument || savePaused || !workView.hasFocus || document.hidden) return;
+  if (loadingDocument || savePaused || !workView.hasFocus || document.hidden) return;
+  if (Date.now() < suggestPausedUntil) return;
   const doc = workView.state.doc.toString();
   if (doc.trim().length < SUGGEST_MIN) return;
   if (!atParagraphEnd(workView.state)) return;
@@ -1836,7 +1253,7 @@ function suggestionUpdate(update) {
   if (update.focusChanged && !update.view.hasFocus) {
     queueMicrotask(() => { if (!update.view.hasFocus) ghostClear(update.view); });
   }
-  if (update.docChanged && update.transactions.some(tr => tr.isUserEvent('input.type'))) suggestSchedule();
+  if (update.docChanged && update.transactions.some(tr => tr.isUserEvent('input.type')) && !update.state.field(ghostField)) suggestSchedule();
 }
 
 async function suggestFetch(manual = false) {
@@ -1846,23 +1263,19 @@ async function suggestFetch(manual = false) {
   // The focus guard keeps background suggestions from firing while the writer
   // is elsewhere. An explicit ask is not background: the press itself may be
   // what took focus out of the editor (a bubble button, the settings dialog).
-  if (state.readOnly || loadingDocument || savePaused || (!manual && !view.hasFocus) || document.hidden || view.composing) return;
-  if (!manual && !autoSuggestOn) return;
+  if (generationJob || state.readOnly || loadingDocument || savePaused || (!manual && !view.hasFocus) || document.hidden || view.composing) return;
   if (!atParagraphEnd(state)) {
-    if (manual) setReviewStatus('Place the caret at the end of a paragraph to request a continuation.', undefined, 'suggest');
+    if (manual) setSuggestStatus('Place the caret at the end of a paragraph to request a continuation.');
     return;
   }
 
   const doc = state.doc.toString();
   const pos = state.selection.main.head;
+  if (slashRequest(state)) return;
   if (!doc.trim() || (!manual && doc.trim().length < SUGGEST_MIN)) {
-    if (manual) setReviewStatus('Write a few words before requesting a continuation.', undefined, 'suggest');
+    if (manual) setSuggestStatus('Write a few words before requesting a continuation.');
     return;
   }
-
-  // Don't suggest while on a /idea line
-  const line = state.doc.lineAt(pos);
-  if (/^\s*\/idea(?:\s|$)/i.test(line.text)) return;
 
   const version = suggestVersion;
   if (manual && !await ensureAgent()) return;
@@ -1875,11 +1288,11 @@ async function suggestFetch(manual = false) {
   suggestAbort = job;
   const isCurrent = () => suggestAbort === job && !job.signal.aborted && version === suggestVersion
     && !loadingDocument && !savePaused && !document.hidden && (manual || view.hasFocus) && !view.composing
-    && !view.state.readOnly && (manual || autoSuggestOn)
+    && !view.state.readOnly
     && view.state.doc === state.doc && view.state.selection.eq(state.selection)
     && JSON.stringify(activeSuggestAgent() ?? currentAgent()) === JSON.stringify(agent)
     && briefContext() === brief;
-  if (manual) setReviewStatus('Suggesting…', undefined, 'suggest');
+  if (manual) setSuggestStatus('Suggesting…');
 
   try {
     const res = await fetch('/suggest', {
@@ -1909,8 +1322,9 @@ async function suggestFetch(manual = false) {
         else if (parsed.message) errorMsg = parsed.message;
         else if (parsed.error) errorMsg = typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error);
       } catch {}
+      if (/\b429\b|rate.?limit|quota/i.test(errorMsg)) suggestPausedUntil = Date.now() + 60_000;
       const problem = modelError(new Error(errorMsg));
-      if (suggestAbort === job && !job.signal.aborted) { setReviewStatus('', undefined, 'suggest'); reportSuggestFailure(problem, manual); }
+      if (suggestAbort === job && !job.signal.aborted) { setSuggestStatus(''); reportSuggestFailure(problem, manual); }
       return;
     }
 
@@ -1918,9 +1332,9 @@ async function suggestFetch(manual = false) {
 
     // Only show if nothing changed while we were waiting
     if (!isCurrent()) return;
-    setReviewStatus('', undefined, 'suggest');
+    setSuggestStatus('');
     if (data.suggestion) ghostShow(view, data.suggestion);
-    else if (manual) setReviewStatus('No continuation to suggest.', undefined, 'suggest');
+    else if (manual) setSuggestStatus('No continuation to suggest.');
   } catch (error) {
     if (error.name === 'AbortError') return;
     let errorMsg = error.message;
@@ -1932,14 +1346,212 @@ async function suggestFetch(manual = false) {
       else if (parsed.message) errorMsg = parsed.message;
     } catch {}
     const problem = modelError(new Error(errorMsg));
-    if (suggestAbort === job && !job.signal.aborted) { setReviewStatus('', undefined, 'suggest'); reportSuggestFailure(problem, manual); }
+    if (suggestAbort === job && !job.signal.aborted) { setSuggestStatus(''); reportSuggestFailure(problem, manual); }
   } finally {
     finishJob(job);
     if (suggestAbort === job) suggestAbort = null;
   }
 }
 
-// ─── Read-only compartment (blocks input during /idea streaming) ────────────────
+// ─── Generate in the draft ────────────────────────────────────────────────────
+
+let generationJob = null;
+const setGenerationFx = StateEffect.define();
+class GenerationWidget extends WidgetType {
+  constructor(value) { super(); this.value = value; }
+  eq(other) { return this.value.job === other.value.job && this.value.text === other.value.text && this.value.phase === other.value.phase && this.value.inline === other.value.inline && this.value.previousText === other.value.previousText; }
+  toDOM() {
+    const wrap = document.createElement(this.value.inline ? 'span' : 'div');
+    wrap.className = 'cm-generation';
+    wrap.setAttribute('aria-busy', String(this.value.phase === 'streaming'));
+    if (this.value.phase === 'streaming' && (!this.value.text || this.value.previousText != null)) {
+      const loader = document.createElement('span');
+      loader.className = 'generation-loading';
+      loader.setAttribute('role', 'status');
+      const grid = document.createElement('span');
+      grid.className = 'generation-pixels';
+      grid.setAttribute('aria-hidden', 'true');
+      for (let i = 0; i < 9; i++) {
+        const cell = document.createElement('span');
+        cell.style.setProperty('--cell-delay', String((i % 3 + Math.abs(Math.floor(i / 3) - 1)) * 90));
+        grid.append(cell);
+      }
+      const label = document.createElement('span');
+      label.className = 'generation-loading-label';
+      label.textContent = this.value.previousText != null ? 'Rewriting' : 'Writing';
+      const elapsed = document.createElement('span');
+      elapsed.className = 'generation-elapsed';
+      elapsed.setAttribute('aria-hidden', 'true');
+      const startedAt = this.value.startedAt ?? Date.now();
+      const tick = () => {
+        const seconds = Math.max(0, Date.now() - startedAt) / 1000;
+        elapsed.textContent = seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(1)}s`;
+      };
+      tick();
+      this.timer = setInterval(tick, 100);
+      loader.append(grid, label, elapsed);
+      wrap.append(loader);
+    }
+    if (this.value.text) {
+      const text = document.createElement(this.value.inline ? 'span' : 'div');
+      text.className = 'cm-suggest';
+      text.textContent = this.value.text;
+      wrap.append(text);
+    }
+    return wrap;
+  }
+  destroy() { clearInterval(this.timer); }
+  get lineBreaks() { return this.value.inline ? (this.value.text.match(/\n/g) ?? []).length : 0; }
+  ignoreEvent() { return false; }
+}
+const generationField = StateField.define({
+  create: () => null,
+  update(value, tr) {
+    if (value && tr.docChanged) {
+      let touched = false;
+      tr.changes.iterChangedRanges((from, to) => {
+        if (from === to ? from >= value.from && from <= value.to : from < value.to && to > value.from) touched = true;
+      });
+      value = touched ? null : { ...value, from: tr.changes.mapPos(value.from, 1), to: tr.changes.mapPos(value.to, -1) };
+      if (value && tr.newDoc.sliceString(value.from, value.to) !== value.quote) value = null;
+      if (value) value.inline = value.source === 'passage' || value.from > tr.newDoc.lineAt(value.from).from;
+    }
+    for (const effect of tr.effects) if (effect.is(setGenerationFx)) value = effect.value;
+    return value;
+  },
+});
+
+function slashRequest(state) {
+  const line = state.doc.lineAt(state.selection.main.head);
+  const match = /(?:^|\s)\/(?!\/)(.*)$/u.exec(line.text);
+  if (!match) return null;
+  const from = line.from + match.index + match[0].indexOf('/');
+  return { from, to: line.to, text: state.doc.sliceString(from, line.to), instruction: match[1].trim(),
+    inline: !!state.doc.sliceString(line.from, from).trim() };
+}
+
+const hiddenSlash = Decoration.replace({});
+
+// The slash only opens the request; it stays in the text (Backspace removes
+// it and ends the request) but is not drawn. The background is the cue.
+function requestDecorations(state) {
+  if (state.field(generationField, false)) return Decoration.none;
+  const request = slashRequest(state);
+  if (!request) return Decoration.none;
+  const decorations = [hiddenSlash.range(request.from, request.from + 1)];
+  if (request.to > request.from + 1) decorations.push(Decoration.mark({ class: 'cm-generation-request' }).range(request.from + 1, request.to));
+  else if (!request.inline) decorations.push(Decoration.line({ class: 'cm-generation-request' }).range(state.doc.lineAt(request.from).from));
+  return Decoration.set(decorations, true);
+}
+const requestField = StateField.define({
+  create: requestDecorations,
+  update: (value, tr) => tr.docChanged || tr.selection || tr.effects.some(effect => effect.is(setGenerationFx)) ? requestDecorations(tr.state) : value,
+});
+
+function generationKey(view, action) {
+  const target = view.state.field(generationField);
+  const selection = view.state.selection.main;
+  if (!target || !selection.empty || view.composing || selection.head < target.from || selection.head > target.to) return false;
+  if (action === 'Regenerate' && target.phase === 'streaming' && target.previousText != null) return true;
+  if (target.phase !== 'review') return false;
+  if (action === 'Next' || action === 'Previous') {
+    if (!target.variants || target.variants.length < 2) return false;
+    const index = (target.index + (action === 'Next' ? 1 : target.variants.length - 1)) % target.variants.length;
+    view.dispatch({ effects: [setGenerationFx.of({ ...target, index, text: target.variants[index] }),
+      EditorView.announce.of(`Option ${index + 1} of ${target.variants.length}: ${target.variants[index]}`)] });
+    return true;
+  }
+  void reviewGeneration(view, action, target.job);
+  return true;
+}
+
+function handleWrite(view) {
+  const selection = view.state.selection.main;
+  if (!selection.empty || view.state.readOnly || view.composing) return false;
+  const request = slashRequest(view.state);
+  if (!request || selection.head !== request.to) return false;
+  if (!request.instruction) { notify('Write a request after /, then press Enter.'); return true; }
+  if (loadingDocument || savePaused) { notify('Wait until the draft can be saved.'); return true; }
+  if (view.state.field(generationField)?.phase === 'review') { notify('Review the generated suggestion first: Tab accepts, Escape dismisses, R regenerates.'); return true; }
+  if ([...jobs].some(job => !job.background)) { notify('Wait for the current request or stop it first.'); return true; }
+  void generateFromLine(view, request, request.instruction);
+  return true;
+}
+
+function reviewGeneration(view, action, job) {
+  const target = view.state.field(generationField);
+  if (!target || target.job !== job || target.phase !== 'review' || target.key !== documentKey) return;
+  if (action === 'Reject') {
+    if (target.source === 'passage') { closePassage(view); return; }
+    view.dispatch({ effects: [setGenerationFx.of(null), EditorView.announce.of('Suggestion rejected. Your request is unchanged.')] });
+    return;
+  }
+  if (loadingDocument || savePaused || view.state.readOnly) { notify('Wait until the draft can be saved.'); return; }
+  if (view.state.doc.sliceString(target.from, target.to) !== target.quote) return;
+  if (action === 'Regenerate') {
+    if ([...jobs].some(job => !job.background)) { notify('Wait for the current request or stop it first.'); return; }
+    if (target.source === 'passage') return requestPassage(view, target.text);
+    return generateFromLine(view, { from: target.from, to: target.to, text: target.quote }, target.instruction);
+  }
+  if (action !== 'Accept') return;
+  saveSnapshot('Before generated text');
+  view.dispatch({ changes: { from: target.from, to: target.to, insert: target.text },
+    effects: [setGenerationFx.of(null), ...(target.source === 'passage' ? [setPassageFx.of(null)] : []), EditorView.announce.of('Text accepted. Undo restores the original passage.')],
+    annotations: isolateHistory.of('full'), userEvent: 'input.generate' });
+}
+
+async function generateFromLine(view, line, instruction) {
+  const document = view.state.doc.toString(), key = documentKey;
+  const inline = line.from > view.state.doc.lineAt(line.from).from;
+  const previous = view.state.field(generationField);
+  const previousText = previous?.phase === 'review' ? previous.text : null;
+  const job = startJob();
+  generationJob = job;
+  cancelSuggestion();
+  view.dispatch({ effects: [clearGhostFx.of(null), setGenerationFx.of({ from: line.from, to: line.to, quote: line.text, text: previousText ?? '', previousText, instruction, key, inline, phase: 'streaming', job, startedAt: Date.now() }),
+    EditorView.announce.of('Generating text. Escape stops generation.')] });
+  // The preview stays outside the saved draft until the author accepts it.
+  const current = () => !job.signal.aborted && documentKey === key && !loadingDocument && !savePaused
+    && !view.state.readOnly && view.state.field(generationField)?.job === job;
+  const clear = () => {
+    const target = view.state.field(generationField);
+    if (target?.job !== job || target.phase !== 'streaming') return;
+    const restored = previousText !== null && documentKey === key && !loadingDocument
+      ? { ...target, text: previousText, previousText: null, phase: 'review' } : null;
+    view.dispatch({ effects: [setGenerationFx.of(restored), EditorView.announce.of(restored
+      ? 'Previous suggestion restored. Tab accepts, Escape dismisses, R regenerates.'
+      : 'Generation stopped. Your request is unchanged.')] });
+  };
+  job.signal.addEventListener('abort', clear, { once: true });
+  try {
+    if (!await ensureAgent() || !current()) return;
+    const res = await fetch('/write', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: job.signal,
+      body: JSON.stringify({ document, from: line.from, cursor: line.to, instruction, previous: previousText ?? undefined, agent: currentAgent(), context: combinedContext() || undefined }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let answer = '';
+    for await (const chunk of sseChunks(res)) {
+      if (!current()) { job.abort(); return; }
+      if (chunk.error) throw new Error(chunk.error);
+      answer = typeof chunk.replace === 'string' ? chunk.replace : answer + (chunk.text ?? '');
+      view.dispatch({ effects: setGenerationFx.of({ ...view.state.field(generationField), text: answer, previousText: null }) });
+    }
+    if (!current()) return;
+    if (!answer.trim()) throw new Error('The model returned no text.');
+    view.dispatch({ effects: [setGenerationFx.of({ ...view.state.field(generationField), text: answer.trim(), previousText: null, phase: 'review' }),
+      EditorView.announce.of('Suggestion ready. Tab accepts, Escape dismisses, R regenerates.')] });
+  } catch (error) {
+    if (!job.signal.aborted) notify(`${/^The model repeated/.test(error.message) ? error.message : modelError(error).say} ${previousText === null ? 'Your request is unchanged; press Enter to retry.' : 'The previous suggestion is kept.'}`);
+  } finally {
+    job.signal.removeEventListener('abort', clear);
+    clear();
+    if (generationJob === job) generationJob = null;
+    finishJob(job);
+  }
+}
+
+// ─── Read-only compartment (blocks input while loading) ────────────────
 
 const readonlyComp = new Compartment();
 
@@ -1948,56 +1560,156 @@ function editorSetReadonly(view, on) {
   view.dom.classList.toggle('streaming', on);
 }
 
-// ─── /idea command ─────────────────────────────────────────────────────────────
+// ─── Local passage actions ────────────────────────────────────────────────────
 
-// Synchronous keymap handler — starts async work and returns true
-function handleEnter(view) {
-  const pos  = view.state.selection.main.head;
-  const line = view.state.doc.lineAt(pos);
-  if (!/^\/idea(\s|$)/i.test(line.text)) return false; // not our line
+let passageJob = null;
+const setPassageFx = StateEffect.define();
+const passageField = StateField.define({
+  create: () => null,
+  update(value, tr) {
+    if (tr.state.readOnly) return null;
+    if (value && tr.docChanged) {
+      value = { ...value, state: 'pending' };
+      mapChatEdit(value, tr.changes);
+      if (value.state === 'stale' || tr.newDoc.sliceString(value.from, value.to) !== value.quote) value = null;
+    }
+    for (const effect of tr.effects) if (effect.is(setPassageFx)) value = effect.value;
+    return value;
+  },
+  provide: field => [
+    showTooltip.computeN([field, generationField], state => {
+      const value = state.field(field);
+      return value && !value.busy && state.field(generationField)?.source !== 'passage' ? [{ pos: value.from, end: value.to, above: false, create: passageTooltip }] : [];
+    }),
+  ],
+});
 
-  // Cancel any pending suggestion
-  cancelSuggestion();
-  ghostClear(view);
-
-  runIdeaExpansion(view, line).catch(console.error);
+function openPassage(view, range) {
+  if (!range || range.to <= range.from || loadingDocument || view.state.readOnly) return false;
+  if (view.state.field(generationField)?.source !== 'passage' && view.state.field(generationField)) {
+    notify('Accept or dismiss the current suggestion first.'); return false;
+  }
+  closePassage(view);
+  cancelSuggestion(); ghostClear(view);
+  view.dispatch({ effects: setPassageFx.of({ from: range.from, to: range.to,
+    quote: view.state.doc.sliceString(range.from, range.to), key: documentKey,
+    instruction: '', answer: '', busy: false }), selection: { anchor: range.to } });
   return true;
 }
 
-async function runIdeaExpansion(view, line) {
-  const document = view.state.doc.toString();
-  await expandIdea(line.text.slice(5).trim(), { from: line.from, to: line.to, text: line.text, document });
+function closePassage(view) {
+  passageJob?.abort();
+  const effects = [setPassageFx.of(null)];
+  if (view.state.field(generationField)?.source === 'passage') effects.push(setGenerationFx.of(null));
+  view.dispatch({ effects });
 }
 
-async function expandIdea(ideaText, target) {
-  if (!await ensureAgent()) return;
-  // A short draft with no brief is entry C of the positioning-brief skill:
-  // nudge once, but still expand — blocking would punish the ask.
-  if (target.document.replace(/\s+/g, ' ').trim().length < 200) maybeNudgeBrief();
-  const job = startJob();
-  const bubble = chatAdd(chatEl('div', 'chat-entry is-agent', 'Expanding idea… Your draft is unchanged.'));
-  let answer = '';
-  try {
-    const res = await fetch('/idea', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: job.signal,
-      body: JSON.stringify({ document: target.document, idea: ideaText, agent: currentAgent(), context: combinedContext() || undefined }),
-    });
-    if (!res.ok) throw new Error('Could not expand idea');
-    for await (const chunk of sseChunks(res)) {
-      if (chunk.error) throw new Error(chunk.error);
-      answer += chunk.text ?? '';
-      bubble.textContent = answer;
+function passageTooltip(view) {
+  const dom = chatEl('form', 'passage-panel');
+  dom.setAttribute('aria-label', 'Selected passage');
+  const input = chatEl('textarea', 'passage-input');
+  input.rows = 1; input.maxLength = 4000;
+  const fit = () => { input.style.height = 'auto'; input.style.height = `${input.scrollHeight}px`; };
+  input.setAttribute('aria-label', 'Passage request');
+  input.setAttribute('aria-description', 'Enter sends, Shift+Enter adds a line, Escape closes.');
+  dom.append(input);
+  const render = () => {
+    const value = view.state.field(passageField);
+    if (!value) return;
+    const text = !value.busy && value.answer || value.instruction;
+    if (input.value !== text) { input.value = text; fit(); }
+    input.readOnly = value.busy;
+    input.setAttribute('aria-busy', String(value.busy));
+  };
+  input.addEventListener('input', () => {
+    fit();
+    const value = view.state.field(passageField);
+    if (value && !value.busy) view.dispatch({ effects: setPassageFx.of({ ...value, instruction: input.value, answer: '' }) });
+  });
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void requestPassage(view); }
+  });
+  dom.addEventListener('submit', event => { event.preventDefault(); void requestPassage(view); });
+  dom.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation();
+      if (passageJob) passageJob.abort(); else closePassage(view);
+      view.focus();
     }
-    if (!answer.trim()) throw new Error('The model returned no passage');
-    bubble.remove();
-    // Single option, same cards path — no Try again when there is nothing to repeat.
-    showVariants([answer.trim()], null, target, null);
+  });
+  // A press anywhere else puts the field away. Not blur: a replacement
+  // preview hands focus to the editor on purpose, and its own buttons
+  // (inside .cm-generation) must still work.
+  const outside = event => {
+    if (!dom.contains(event.target) && !event.target.closest?.('.cm-generation')) closePassage(view);
+  };
+  render();
+  return {
+    dom, update: render,
+    mount: () => { document.addEventListener('pointerdown', outside, true); queueMicrotask(() => { fit(); input.focus(); }); },
+    destroy: () => document.removeEventListener('pointerdown', outside, true),
+  };
+}
+
+async function requestPassage(view, previous = null) {
+  let target = view.state.field(passageField);
+  if (!target || loadingDocument || savePaused || view.state.readOnly || target.key !== documentKey) return;
+  if (!target.instruction.trim()) return;
+  if ([...jobs].some(job => !job.background)) { notify('Wait for the current request or stop it first.'); return; }
+  const job = startJob(); passageJob = job;
+  view.dispatch({ effects: setPassageFx.of({ ...target, busy: true, job, answer: '' }) });
+  view.focus();
+  const current = () => !job.signal.aborted && !loadingDocument && !savePaused && !view.state.readOnly
+    && view.state.field(passageField)?.job === job && documentKey === target.key;
+  try {
+    if (!await ensureAgent() || !current()) return;
+    target = view.state.field(passageField);
+    let instruction = target.instruction;
+    if (previous) instruction += `\nReplace the previous candidate with different wording, preserving the request and facts. Previous candidate:\n${previous}`;
+    const response = await fetch('/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: job.signal,
+      body: JSON.stringify({ document: view.state.doc.toString(), selected: target.quote, from: target.from,
+        instruction, agent: currentAgent(), context: combinedContext() || undefined }),
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+    if (!current()) return;
+    const live = view.state.field(passageField);
+    if (!data.variants?.length) {
+      if (typeof data.answer !== 'string' || !data.answer.trim()) throw new Error('The model returned no answer.');
+      view.dispatch({ effects: setPassageFx.of({ ...live, answer: data.answer }) });
+      return;
+    }
+    if (!Array.isArray(data.variants) || data.variants.some(text => typeof text !== 'string' || !text.trim())) throw new Error('The model returned invalid replacements.');
+    const normalize = text => text.trim().replace(/\s+/g, ' ').toLowerCase();
+    const seen = new Set([normalize(target.quote), ...(previous ? [normalize(previous)] : [])]);
+    const variants = data.variants.map(text => text.trim()).filter(text => {
+      const key = normalize(text); if (seen.has(key)) return false; seen.add(key); return true;
+    });
+    if (!variants.length) throw new Error('The model returned no different replacements.');
+    if (view.state.doc.sliceString(live.from, live.to) !== live.quote) { notify('The passage changed while the model was working.'); return; }
+    // A suggestion in place of the passage: Tab accepts, R regenerates, Escape dismisses.
+    view.dispatch({ effects: [setGenerationFx.of({ from: live.from, to: live.to, quote: live.quote,
+      text: variants[0], variants, index: 0, source: 'passage', instruction: target.instruction,
+      key: target.key, inline: true, phase: 'review', job }),
+      setPassageFx.of({ ...live, answer: data.answer || '' }),
+      EditorView.announce.of('Suggestion ready. Tab accepts, Escape dismisses, R regenerates.')],
+      selection: { anchor: live.to } });
+    view.focus();
+    notify('Tab accepts · R regenerates · Esc dismisses', { sticky: true, key: 'passage-hint' });
   } catch (error) {
-    bubble.title = error.message;
-    bubble.textContent = (answer ? answer + '\n\n' : '')
-      + (job.signal.aborted ? 'Stopped. ' : `${modelError(error).say} `)
-      + 'The original idea is unchanged.';
-  } finally { finishJob(job); }
+    if (current()) {
+      if (previous && view.state.field(generationField)) {
+        view.dispatch({ effects: setPassageFx.of({ ...view.state.field(passageField), answer: 'Could not regenerate — the previous suggestion is kept.' }) });
+      }
+      notifyProblem(modelError(error), () => requestPassage(view, previous), 'Try again', 'passage-error');
+    }
+  } finally {
+    const live = view.state.field(passageField);
+    if (live?.job === job) view.dispatch({ effects: setPassageFx.of({ ...live, busy: false }) });
+    if (passageJob === job) passageJob = null;
+    finishJob(job);
+  }
 }
 
 // ─── Chat ──────────────────────────────────────────────────────────────────────
@@ -2013,14 +1725,8 @@ async function expandIdea(ideaText, target) {
 
 const CHAT_PLACEHOLDER = 'Ask about your draft, or request a rewrite';
 
-let attached = null;   // { from, to, text } — the passage the chip refers to
-let activeFinding = null;
-// Which remark card stands in the rail — independent of `attached`. Reading a
-// mark opens its card; only an explicit action (the bubble, the card's own
-// Options, Cmd+K) arms the composer. The marks stay the navigation either way.
-let focusedFindingId = null;
 // { role, content, display? } — `content` goes to the model, `display` is what
-// the writer typed when the two differ (a finding adds context to the message).
+// the writer typed when the two differ.
 let chatHistory = [];
 let chatAbort = null;
 const chatRequests = new Set();
@@ -2144,18 +1850,20 @@ function chatEditCard(edit) {
     else changeChatEdit(edit, true);
   });
   undoFoot.append(undo);
-  const refresh = button('Request new edit', () => {
-    if (edit.state === 'unlocated') {
-      chatInput.value = `Prepare an edit for the passage I select. Previous suggestion: ${edit.label}`;
-      chatInput.focus(); return;
-    }
-    chatInput.value = `Prepare a new edit for the current draft. Previous suggestion: ${edit.label}. Original passage: ${edit.quote}`;
-    chatSend();
+  // The replacement is already written; only its place in the draft is lost
+  // (never found, or edited since). The writer points at the passage and it
+  // applies there, with the usual Undo — no second request, no typed prompt.
+  const retarget = button('Replace selection', () => {
+    const sel = workView.state.selection.main;
+    if (sel.empty) return;
+    Object.assign(edit, { from: sel.from, to: sel.to, quote: workView.state.sliceDoc(sel.from, sel.to), state: 'pending' });
+    changeChatEdit(edit);
   });
+  retarget.classList.add('is-primary');
   const status = chatEl('p', 'chat-edit-status'); status.setAttribute('role', 'status');
   actions.prepend(status);
   card.append(actions, undoFoot);
-  chatEditCards.set(edit, { card, actions, preview, apply, keep, undo, undoFoot, refresh, status });
+  chatEditCards.set(edit, { card, actions, preview, apply, keep, undo, undoFoot, retarget, status });
   syncChatEditCard(edit, chatEditCards.get(edit));
   return card;
 }
@@ -2166,22 +1874,31 @@ function syncChatEditCard(edit, ui) {
   const appliedNow = valid && edit.state === 'applied';
   ui.preview.hidden = ui.apply.hidden = ui.keep.hidden = !pending;
   ui.undo.hidden = !showUndo;
+  ui.undo.setAttribute('aria-label', `${edit.state === 'applied' ? 'Undo edit' : 'Undo keeping original'}: ${edit.label}`);
   ui.undoFoot.hidden = !showUndo;
   // Applied is a receipt: tag in the title, Undo in its footer, nothing else.
   ui.card.classList.toggle('is-applied', appliedNow);
-  ui.actions.hidden = appliedNow;
-  ui.refresh.hidden = valid;
-  ui.refresh.textContent = edit.state === 'unlocated' ? 'Choose passage' : 'Request new edit';
-  // Unlocated proposals need an explicit selection, then a fresh response.
+  // Lost its place and still undecided: the one way forward is to point at
+  // the passage. An applied or kept edit that the writer has since rewritten
+  // is history — nothing to offer.
+  const lost = !valid && ['pending', 'stale', 'unlocated'].includes(edit.state);
+  ui.actions.hidden = appliedNow || (!valid && !lost);
+  ui.retarget.hidden = !lost;
   ui.preview.textContent = plainPreview?.edit === edit ? 'End preview' : 'Preview';
   ui.preview.setAttribute('aria-pressed', String(plainPreview?.edit === edit));
   ui.apply.disabled = ui.undo.disabled = workView.state.readOnly || loadingDocument || savePaused;
-  // A stale card names no problem — the Request button beside it is the way
-  // forward, so the status line stays out of the way. Applied needs no status
-  // either: the tag in the title says it.
-  ui.status.textContent = !valid ? (edit.state === 'unlocated' ? 'Select the intended passage and request this edit again.' : '')
+  syncRetarget(ui);
+  // Applied needs no status: the tag in the title says it.
+  ui.status.textContent = lost
+    ? (edit.state === 'unlocated' ? 'Couldn’t find this passage. Select it in the draft.' : 'The passage changed. Select it in the draft.')
     : edit.state === 'kept' ? 'Original kept' : '';
   ui.status.hidden = !ui.status.textContent;
+}
+// Replace selection is live only while there is a selection to replace; the
+// status line beside it says what to do until then. Cheap enough to run on
+// every selection change.
+function syncRetarget(ui) {
+  ui.retarget.disabled = workView.state.selection.main.empty || workView.state.readOnly || loadingDocument || savePaused;
 }
 function syncChatEditCards() {
   for (const [edit, ui] of chatEditCards) {
@@ -2189,23 +1906,26 @@ function syncChatEditCards() {
     syncChatEditCard(edit, ui);
   }
 }
-function changeChatEdit(edit, undo = false) {
+function changeChatEdit(edit, undo = false, automatic = false) {
   if (workView.state.readOnly || loadingDocument || savePaused || !chatEditMatches(edit, workView.state.doc.toString())
     || edit.state !== (undo ? 'applied' : 'pending')) return;
   clearPlainPreview();
   const text = undo ? edit.quote : edit.replacement;
   changingChatEdit = edit;
   try {
-    if (undo) {
-      saveSnapshot('Before undoing chat edit');
-      workView.dispatch({ changes: { from: edit.from, to: edit.to, insert: text }, selection: { anchor: edit.from + text.length } });
+    if (undo || automatic) {
+      saveSnapshot(undo ? 'Before undoing chat edit' : 'Before AI replacement');
+      workView.dispatch({ changes: { from: edit.from, to: edit.to, insert: text },
+        ...(automatic ? {} : { selection: { anchor: edit.from + text.length } }) });
       save();
     } else applyText(text, { from: edit.from, to: edit.to, text: edit.quote, document: workView.state.doc.toString() });
     edit.to = edit.from + text.length;
     edit.state = undo ? 'pending' : 'applied';
   } finally { changingChatEdit = null; }
   saveChat(); syncChatEditCards(); setChatOpen(true);
-  const ui = chatEditCards.get(edit); (undo ? ui?.apply : ui?.undo)?.focus();
+  if (!automatic) {
+    const ui = chatEditCards.get(edit); (undo ? ui?.apply : ui?.undo)?.focus();
+  }
 }
 
 // ── Rail ──
@@ -2220,13 +1940,12 @@ const railAnchors = new Map();   // node → () => document position | null
 const railHomes = new Map();     // node → where it lives when there is no rail
 const RAIL_WIDTH = 220, RAIL_GUTTER = 24;   // .rail width in style.css; the editor padding in the theme below assumes 2 × (RAIL_WIDTH + RAIL_GUTTER)
 let railOn = false;
-let railPaneLeft = 0;   // rail's left edge in pane coordinates (for notePlus and docked bubbles, which live outside the scroller)
+let railPaneLeft = 0;   // rail's left edge in pane coordinates for notePlus
 
 // The rail lives in the margin the centred text column leaves empty, so it is
 // available exactly when that margin can hold a note card and a gutter.
 // Measured, not guessed at a breakpoint: the text column's padding is the
-// margin. Only margin-note cards stand here — finding cards keep their
-// stream behavior at every width (see railAdd).
+// margin. Only margin-note cards stand here (see railAdd).
 function syncRail() {
   const margin = parseFloat(getComputedStyle(workView.contentDOM).paddingRight) || 0;
   const fits = margin >= RAIL_WIDTH + RAIL_GUTTER;
@@ -2246,11 +1965,10 @@ function syncRail() {
     return;
   }
   railOn = fits;
-  // Crossing the width moves note cards; finding cards stay where they are.
+  // Crossing the width moves note cards.
   // Moving must never open the chat: streamAppend keeps the panel as it was.
   for (const note of marginNotes) placeNoteCard(note);
   rail.hidden = !fits || rail.children.length === 0;
-  if (!fits) chatScroll(true);   // cards moved into the stream land below the fold
 }
 
 // Without a rail a card belongs in the stream, stacked in DOM order. Moving
@@ -2259,7 +1977,7 @@ function syncRail() {
 function placeHome(node) {
   const home = railHomes.get(node) ?? chatStream;
   if (home === chatStream) streamAppend(node);
-  else home.insertBefore(node, document.getElementById('review-status'));
+  else home.append(node);
 }
 
 function railAdd(node, anchor, home = chatStream) {
@@ -2329,7 +2047,7 @@ new ResizeObserver(() => layoutRail()).observe(document.getElementById('pane-wor
 //
 //  The pill opens both the field and the stream: a restored history reopens
 //  with it. A notice takes the island over (see notify): while one is up the
-//  composer, the pill and the recipes row step aside for it — either input or
+//  composer and the pill step aside for it — either input or
 //  notice, never both. Summoning the composer dismisses a passing notice; a
 //  sticky problem keeps the input covered until its own action or ×.
 //  Closing never discards — turns, cards and Undo stay, like
@@ -2339,13 +2057,13 @@ function syncPill() {
   if (!chatPillLabel) return;
   const n = chatStream.children.length;
   // Background work speaks through the pill until it ends.
-  const working = suggestWorking || reviewStatus.textContent;
+  const working = suggestWorking;
   chatPanel.classList.toggle('is-working', Boolean(working));
   chatPillLabel.textContent = working || (n > 0 ? `Conversation${n > 1 ? ` • ${n}` : ''}` : 'Ask anything');
 }
 
 function canCollapseIsland() {
-  return !chatInput.value.trim() && !attached && ![...jobs].some(job => !job.background);
+  return !chatInput.value.trim() && ![...jobs].some(job => !job.background);
 }
 
 function setIsland(open, opts = {}) {
@@ -2416,7 +2134,9 @@ new MutationObserver(() => {
   let from = prev?.getBoundingClientRect();
   if (!from?.width) from = islandRect;
   islandRect = to.width ? to : islandRect;
-  if (reduceMotion() || !from?.width || !to.width) return;
+  const instant = next === chatComposer && chatPanel.dataset.openVia === 'key';
+  if (next !== chatComposer) delete chatPanel.dataset.openVia;
+  if (instant || reduceMotion() || !from?.width || !to.width) return;
   const inset = (box, of) => `inset(${box.top - of.top}px ${of.right - box.right}px ${of.bottom - box.bottom}px ${box.left - of.left}px round ${box.height / 2}px)`;
   const open = el => `inset(-60px round ${getComputedStyle(el).borderTopLeftRadius})`;
   next.animate([{ clipPath: inset(from, to) }, { clipPath: open(next) }], ISLAND_MORPH);
@@ -2439,8 +2159,10 @@ function setChatOpen(open) {
   // a layout row and never scrolls away with a long stream.
   // A stream inside the folded pill is display:none — opening it there shows
   // nothing and leaves its fields unfocusable, so the island unfolds too.
+  const wasShown = !chatStream.hidden && !chatPanel.classList.contains('is-collapsed');
   if (open) openIsland();
   if (open) chatStream.hidden = false;      // measure against a laid-out stream
+  if (open && !wasShown) enterStream();
   chatClear.textContent = open ? '×' : 'Conversation';
   chatClear.setAttribute('aria-label', open ? 'Close the conversation' : 'Show the conversation');
   chatClear.title = open ? 'Close — nothing is discarded' : 'Show the conversation';
@@ -2453,14 +2175,39 @@ function setChatOpen(open) {
   layoutRail();
 }
 
-// One way to drop the remark cards, used everywhere the conversation closes
-// or resets — the rail anchor map must not keep pointing at removed nodes.
-function discardFindingCards() {
-  for (const card of findingCards.values()) {
-    railAnchors.delete(card); railHomes.delete(card); card.remove();
-  }
-  findingCards.clear();
-  focusedFindingId = null;
+// The composer morphs between pill and field (see the island morph), but the
+// stream above it is display:none while closed, so on its own the whole
+// conversation would appear and vanish in one frame. It rises in with the
+// morph and sinks toward the field before it is hidden.
+const STREAM_MOTION = 'pseudoElement' in KeyframeEffect.prototype;
+function enterStream() {
+  if (!chatStream.childElementCount || reduceMotion()) return;
+  // Showing a display:none stream replays every turn's own entrance; the
+  // stream arrives as one piece instead.
+  for (const animation of chatStream.getAnimations({ subtree: true })) animation.finish();
+  chatStream.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+    { duration: 250, easing: 'cubic-bezier(.32, .72, 0, 1)' });
+}
+// fold: the whole island goes back to the pill, so the field fades with the
+// turns. Otherwise the field stays, and losing the panel's 8px inset would
+// drop it in one frame: it slides there instead.
+function afterStreamLeaves(close, fold = false) {
+  const shown = !chatStream.hidden && chatStream.childElementCount > 0 && !chatPanel.classList.contains('is-collapsed');
+  if (!shown || reduceMotion()) return close();
+  const timing = { duration: 150, easing: 'ease-out', fill: 'forwards' };
+  const leaving = [chatStream.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(8px)' }], timing)];
+  if (STREAM_MOTION) leaving.push(chatPanel.animate([{ opacity: 1 }, { opacity: 0 }], { ...timing, pseudoElement: '::before' }));
+  if (fold) leaving.push(chatComposer.animate([{ opacity: 1 }, { opacity: 0 }], timing));
+  const top = chatComposer.getBoundingClientRect().top;
+  leaving[0].finished.then(() => {
+    close();
+    for (const animation of leaving) animation.cancel();
+    const shift = top - chatComposer.getBoundingClientRect().top;
+    if (!fold && shift) {
+      chatComposer.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }],
+        { duration: 200, easing: 'cubic-bezier(.32, .72, 0, 1)' });
+    }
+  }, () => {});
 }
 
 function chatAdd(node) {
@@ -2489,10 +2236,9 @@ function streamAppend(node) {
 //  threads, no model calls yet). Each note anchors to a paragraph with a
 //  quote snapshot:
 //
-//  - the quote is found verbatim → the mark stands on it, drifted is false;
-//  - the quote is gone (reworded) → the mark falls back to the paragraph and
-//    the card carries a "text changed" badge, so one retyped word never kills
-//    a note the way it kills a finding mark;
+//  - live edits map the passage boundaries, including reworded text;
+//  - lost anchors stay as points with a "text changed" badge, never
+//    highlighting a different copy of the quote or a whole paragraph;
 //  - the paragraph is gone too (empty draft) → no mark; the card waits in the
 //    stream until the text returns.
 //
@@ -2518,57 +2264,17 @@ const noteField = StateField.define({
       if (effect.is(setNoteFx)) return Decoration.set(effect.value.map(noteMark), true);
     }
     if (!tr.docChanged) return decorations;
-    // Edits elsewhere only shift a note; edits inside one drop its mark until
-    // the microtask below re-resolves it (verbatim or paragraph fallback).
-    const edited = [];
-    tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => edited.push([fromB, toB]));
-    return decorations.map(tr.changes).update({
-      filter: (from, to) => !edited.some(([a, b]) => a < to && b > from),
-    });
+    return decorations.map(tr.changes);
   },
-  provide: field => EditorView.decorations.from(field),
 });
 
-// Paragraph index at creation time; the same blank-line splitting the
-// automatic review uses, so "paragraph N" means the same thing everywhere.
-// Scope rule, one line: a non-empty quote is a passage note (verbatim, else
-// drifted fallback); an empty quote is a paragraph note (always live, never
-// drifted); a null paragraph is a document note (no mark, pinned at top).
-function resolveNoteRange(document, note) {
-  if (note.para === null) return { from: 0, to: 0, drifted: false, bare: true };
-  const paras = reviewParagraphs(document);
-  const para = paras[Math.min(note.para, paras.length - 1)];
-  if (!para) return null;
-  // A "+" note is a point, not a span: the line the writer pressed beside,
-  // kept as an offset into its paragraph (clamped if the paragraph shrank).
-  // No mark — a long paragraph would light up whole.
-  if (!note.quote) {
-    const at = Math.min(para.from + (note.off || 0), para.to);
-    return { from: at, to: at, drifted: false, bare: true };
-  }
-  if (document.includes(note.quote)) {
-    const from = document.indexOf(note.quote);
-    return { from, to: from + note.quote.length, drifted: false };
-  }
-  return { from: para.from, to: para.to, drifted: true };
-}
-
-// Live position of a note — decorations move with the document, the offsets
-// captured at creation time do not. Document notes have no mark; their
-// position is the top by definition.
+// Paragraph, offset and length follow editor transactions. A null paragraph
+// is a document note; a deleted passage remains a point without a mark.
 function noteRange(id) {
   const note = marginNotes.find(item => item.id === id);
   if (!note) return null;
-  if (note.para === null) return { from: 0, to: 0 };
-  if (!note.quote) {
-    const at = resolveNoteRange(workView.state.doc.toString(), note);
-    return at && { from: at.from, to: at.to };
-  }
-  let found = null;
-  workView.state.field(noteField).between(0, workView.state.doc.length, (from, to, deco) => {
-    if (deco.spec.attributes?.['data-note-id'] === id) { found = { from, to }; return false; }
-  });
-  return found;
+  const range = resolveNoteRange(workView.state.doc.toString(), note);
+  return range && { from: range.from, to: range.to };
 }
 
 function markForNote(id) { return workView.dom.querySelector(`.cm-note[data-note-id="${CSS.escape(id)}"]`); }
@@ -2581,11 +2287,11 @@ function noteAnchor(id) {
   const note = marginNotes.find(item => item.id === id);
   if (!note) return null;
   if (note.para === null) return 0;
-  const paras = reviewParagraphs(workView.state.doc.toString());
+  const paras = paragraphRanges(workView.state.doc.toString());
   if (!paras.length) return null;
   // Stands where it was made: at its passage, or at the line its "+" was
   // pressed beside. Anchored to the paragraph's top it landed screens above a
-  // click in a long paragraph. A reworded passage falls back to the paragraph.
+  // click in a long paragraph.
   return noteRange(id)?.from ?? paras[Math.min(note.para, paras.length - 1)].from;
 }
 
@@ -2596,6 +2302,7 @@ function syncNoteMarks() {
   const document = workView.state.doc.toString();
   const marks = [];
   for (const note of marginNotes) {
+    if (note.resolved) continue;
     const resolved = resolveNoteRange(document, note);
     note.drifted = !resolved || resolved.drifted;
     // Document notes and empty drafts resolve bare: no mark to draw, the
@@ -2628,6 +2335,7 @@ function placeNoteCard(note) {
 
 function saveNotes() {
   docStorage.setItem('wa-notes', JSON.stringify({ notes: marginNotes }));
+  liveSync?.notesChanged();
 }
 
 function restoreNotes() {
@@ -2640,9 +2348,14 @@ function restoreNotes() {
   marginNotes = notes.filter(note =>
     note && typeof note.id === 'string' && typeof note.quote === 'string'
     && typeof note.text === 'string' && note.text.trim() !== ''
-    && (Number.isInteger(note.para) || note.para === null));
+    && (Number.isInteger(note.para) && note.para >= 0 || note.para === null));
   for (const note of marginNotes) if (!Number.isInteger(note.off) || note.off < 0) note.off = 0;
+  const baseline = typeof saved?.document === 'string' ? saved.document : null;
+  const paras = baseline === null ? [] : paragraphRanges(baseline);
   for (const note of marginNotes) {
+    const para = paras[note.para];
+    note.anchor ??= para && baseline.slice(para.from, para.to);
+    if (note.resolved && !note.work) continue;
     note.drifted = false;
     noteCards.set(note.id, railAdd(noteCard(note), () => noteAnchor(note.id)));
   }
@@ -2691,7 +2404,8 @@ function renderNoteCard(note, card = noteCards.get(note.id)) {
   // Re-rendered on every keystroke via placeNoteCard — skip when nothing the
   // note shows changed, so hover and focus survive typing elsewhere.
   const inStream = card.parentElement === chatStream;
-  const key = `${inStream}|${note.drifted}|${note.text}|${noteExcerpt(note)}`;
+  const work = note.work, latest = work?.attempts?.at(-1);
+  const key = `${inStream}|${note.drifted}|${note.text}|${noteExcerpt(note)}|${work?.status}|${work?.generation}|${work?.error}|${work?.messages?.length}|${latest?.id}|${latest?.status}|${latest?.edits.map(edit => edit.valid).join()}`;
   if (card.dataset.renderKey === key) return;
   card.dataset.renderKey = key;
   card.replaceChildren();
@@ -2710,8 +2424,51 @@ function renderNoteCard(note, card = noteCards.get(note.id)) {
   del.title = 'Delete note';
   del.addEventListener('click', event => { event.stopPropagation(); deleteNote(note.id); });
   body.append(del);
-  card.append(body);
-  if (note.drifted) card.append(chatEl('div', 'note-meta', 'text changed — pinned to the paragraph'));
+  if (note.resolved && work) {
+    const completed = chatEl('details', 'note-completed');
+    completed.append(chatEl('summary', '', 'Completed note'), body); card.append(completed);
+  } else card.append(body);
+  if (note.drifted) card.append(chatEl('div', 'note-meta', 'text changed — check this note'));
+  if (work) {
+    const labels = { queued: 'Queued', working: 'Agent writing', review: 'Review changes', done: 'Done', reverted: 'Reverted', blocked: 'Needs input' };
+    const status = chatEl('div', 'note-meta', labels[work.status] || 'Queued');
+    status.setAttribute('role', 'status'); card.append(status);
+    if (work.error) card.append(chatEl('div', 'note-meta', work.error));
+    for (const attempt of work.attempts || []) {
+      const details = chatEl('details', 'note-work-result');
+      details.append(chatEl('summary', '', attempt === latest ? 'Agent result' : 'Previous result'));
+      if (attempt.comment) details.append(chatEl('p', '', attempt.comment));
+      for (const edit of attempt.edits) {
+        details.append(chatEl('del', 'note-before', edit.before), chatEl('ins', 'note-after', edit.after));
+      }
+      card.append(details);
+    }
+    for (const message of work.messages || []) card.append(chatEl('p', 'note-feedback', message.text));
+    const actions = chatEl('div', 'note-work-actions');
+    const button = (label, type, extra = {}) => {
+      const el = chatEl('button', 'chat-action', label); el.type = 'button';
+      el.addEventListener('click', () => updateNoteWork(note.id, type, extra)); actions.append(el);
+      return el;
+    };
+    if (work.status === 'review' && latest?.status === 'applied') button('Accept', 'accept', { attempt: latest.id });
+    if (latest && ['applied', 'accepted'].includes(latest.status) && latest.edits.length) {
+      const undo = button('Undo', 'revert', { attempt: latest.id });
+      undo.disabled = !reversible(latest, workView.state.doc.toString());
+      if (undo.disabled) undo.title = 'This passage changed after the agent edit';
+    }
+    if (!['queued', 'working'].includes(work.status)) button('Regenerate', 'regenerate');
+    if (actions.children.length) card.append(actions);
+  }
+}
+
+async function updateNoteWork(id, type, extra = {}) {
+  try {
+    await liveSync.flush();
+    const note = marginNotes.find(note => note.id === id);
+    if (!note?.work) throw new Error('Save this note before updating its work.');
+    await liveSync.work({ id, type, generation: note.work.generation, ...extra });
+    noteCards.get(id)?.focus({ preventScroll: true });
+  } catch (error) { notify(`Unable to update this note: ${error.message} The note itself is kept.`, { sticky: true, action: () => updateNoteWork(id, type, extra), label: 'Try again' }); }
 }
 
 function editNoteCard(id) {
@@ -2746,7 +2503,8 @@ function editNoteCard(id) {
     }
     delete card.dataset.renderKey;
     field.remove();   // renderNoteCard skips a card that still holds a field
-    renderNoteCard(note);
+    if (note.resolved && !note.work) { railAnchors.delete(card); railHomes.delete(card); card.remove(); noteCards.delete(id); }
+    else renderNoteCard(note);
   };
   field.addEventListener('blur', () => finish(true));
   field.addEventListener('keydown', event => {
@@ -2763,48 +2521,24 @@ function editNoteCard(id) {
   fit();
 }
 
-function createNote(from, to) {
-  const document = workView.state.doc.toString();
-  // A drag that starts on the blank line above a paragraph would pin the note
-  // there and quote a leading newline; anchor at the first real character.
-  // The whole-draft check below needs the untrimmed range, so it goes first.
-  if (!(from === 0 && to === document.length)) {
-    const slice = document.slice(from, to);
-    const lead = slice.length - slice.trimStart().length;
-    const trimmed = slice.trim();
-    if (trimmed) { from += lead; to = from + trimmed.length; }
-  }
-  // A selection spanning the whole draft is a note on the draft, not on a
-  // passage: no anchor paragraph, no quote, no mark — pinned at the rail top.
-  if (from === 0 && to === document.length && document.length > 0) {
-    return addNote({ para: null, quote: '' });
-  }
-  // A drag rarely lands on a word edge; a quote cut mid-word ("carry exac")
-  // reads as a typo in the card, so the passage snaps out to whole words.
-  const inWord = i => /[\p{L}\p{N}_]/u.test(document[i] ?? '');
-  while (from > 0 && inWord(from - 1) && inWord(from)) from--;
-  while (to < document.length && inWord(to - 1) && inWord(to)) to++;
-  const paras = reviewParagraphs(document);
-  let para = paras.findIndex(paragraph => from >= paragraph.from && from <= paragraph.to);
-  if (para < 0) para = 0;
-  return addNote({ para, quote: document.slice(from, to).slice(0, 500) });
-}
-
-// A note on a line: empty quote, so it never drifts — the paragraph and the
-// offset into it are the anchor, not a snapshot of the wording.
+// A point within its paragraph: saved paragraph text survives insertions above.
 function createParagraphNote(para, off = 0) {
-  const paras = reviewParagraphs(workView.state.doc.toString());
+  const paras = paragraphRanges(workView.state.doc.toString());
   if (!paras.length || para < 0 || para >= paras.length) return null;
   return addNote({ para, quote: '', off });
 }
 
-function addNote({ para, quote, off = 0 }) {
+function addNote({ para, quote, off = 0, text = '', kind, edit = true }) {
+  const document = workView.state.doc.toString();
+  const paragraph = paragraphRanges(document)[para];
   const note = {
     id: `n${Date.now().toString(36)}${(noteSeq++).toString(36)}`,
     para,
     quote,
     off,
-    text: '',
+    length: quote.length,
+    anchor: paragraph && document.slice(paragraph.from, paragraph.to),
+    text, kind,
     at: new Date().toISOString(),
     drifted: false,
   };
@@ -2818,7 +2552,7 @@ function addNote({ para, quote, off = 0 }) {
   syncNoteMarks();
   // The bubble's button returns focus to the editor after this runs — take
   // the field back on the next tick.
-  queueMicrotask(() => editNoteCard(note.id));
+  if (edit) queueMicrotask(() => editNoteCard(note.id));
   return note;
 }
 
@@ -2826,7 +2560,7 @@ function addNote({ para, quote, off = 0 }) {
 //  Hovering the empty margin beside a paragraph shows one faint "+", Notion-
 //  style: the paragraph is the commonest note target, and selecting it first
 //  just to press Note is a tax on every remark. Clicking the "+" opens a
-//  paragraph note (empty quote: the paragraph is the anchor, never drifted).
+//  paragraph note (empty quote: the saved paragraph text is the anchor).
 //  No shortcut to remember, no button to find — the margin itself invites.
 const notePlus = document.createElement('button');
 notePlus.type = 'button';
@@ -2846,7 +2580,7 @@ let paraCacheVersion = -1;
 let paraCache = [];
 function cachedParagraphs() {
   if (paraCacheVersion !== editVersion) {
-    paraCache = reviewParagraphs(workView.state.doc.toString());
+    paraCache = paragraphRanges(workView.state.doc.toString());
     paraCacheVersion = editVersion;
   }
   return paraCache;
@@ -2880,10 +2614,9 @@ function moveNotePlus(event) {
     syncRail();
     // The "+" belongs to the rail: no rail, no plus. Hidden while dragging or
     // holding a selection (its bubble already offers Note) and before the
-    // draft loads. An open bubble does not hide it: the Continue bubble after
-    // any click at a paragraph's end used to take the "+" away with it, and a
-    // press on the "+" closes the bubble anyway. A selection hides it only while
-    // its bubble stands: Discuss puts the bubble away but leaves the passage
+    // draft loads. An open bubble does not hide it; pressing the "+" closes
+    // the bubble anyway. A selection hides it only while
+    // its bubble stands: Change puts the bubble away but leaves the passage
     // selected, and that must not take the "+" from every paragraph.
     if (!railOn || loadingDocument || event.buttons !== 0
         || (!workView.state.selection.main.empty && !markBubble.hidden)) {
@@ -2989,10 +2722,10 @@ function deleteNote(id) {  const index = marginNotes.findIndex(note => note.id =
 // so a "tighten this" reads as the author's voice, not an instruction from
 // nowhere. Empty notes never persist (see editNoteCard), so everything here
 // is content. Sent with chat and rewrites only — suggestions fire on every
-// pause and review must judge the prose unbiased.
+// pause.
 function notesBrief() {
   if (!marginNotes.length) return '';
-  const lines = marginNotes.map(note => {
+  const lines = marginNotes.filter(note => !note.resolved).map(note => {
     if (note.para === null) return `- On the whole draft: ${note.text}`;
     const range = noteRange(note.id);
     const live = range ? workView.state.sliceDoc(range.from, note.quote ? range.to : range.from + 200).trim().replace(/\s+/g, ' ') : '';
@@ -3034,7 +2767,7 @@ function briefContext() {
 function applyChatBrief(update, message, expected) {
   let changes;
   try { ({ changes } = validateBriefUpdate(update, message)); }
-  catch { notify('The brief update could not be verified. Nothing was saved.'); return; }
+  catch { notify('The brief update could not be verified. Nothing was saved. Ask again to update it.'); return; }
   if (JSON.stringify(positionBrief) !== expected || briefSession) {
     notify('The brief changed while the reply was loading. Ask again to update it.');
     return;
@@ -3186,18 +2919,8 @@ function cancelBrief() {
   saveBrief();
 }
 
-// One passing notice per document: the writer did not ask, so it fades.
-function maybeNudgeBrief() {
-  if (briefComplete() || positionBrief?.nudged) return;
-  positionBrief = { ...(positionBrief || {}), nudged: true };
-  saveBrief();
-  notify('Who is this for? Answer 4 quick questions so rewrites aim at your reader.', {
-    action: () => startBrief(), label: 'Answer 4 questions', key: 'brief', icon: 'info',
-  });
-}
-
 // Clicking a note's mark reads the note: the editor scrolls the passage into
-// view and the card takes focus. Arms nothing, like a finding mark.
+// view and the card takes focus. Arms nothing.
 function focusNote(id) {
   const range = noteRange(id);
   if (range) workView.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: 'center' }) });
@@ -3212,65 +2935,14 @@ function focusNote(id) {
 // Keep the way back visible even when the conversation is put away.
 const notifyUndo = (message, onUndo) => notify(message, { action: onUndo, key: 'undo', icon: 'check', tone: 'ok' });
 
-// ── Attached passage ──
-
-// The passage stays where the writer is looking — highlighted in the draft.
-// Copying it into the composer duplicated the sentence they were reading and
-// pushed the answer off screen.
-// The composer's invitation names what it will carry: a bare field, or one
-// with a passage attached.
-function basePlaceholder() {
-  if (attached) return activeFinding ? 'Ask about this finding' : 'Ask about this passage, or request a change';
-  return CHAT_PLACEHOLDER;
-}
-
-// Attaching is always an explicit act — the bubble's Discuss, a card's
-// Discuss, Cmd+K on a selection — never a side effect of reading.
-// Clicking a mark opens its remark and arms nothing: the writer may just as
-// well be putting the caret there to fix the sentence themselves.
-function attach(range, finding = null, focusComposer = true) {
-  dismissPassingNotice();
-  openIsland();
-  attached = range;
-  activeFinding = finding;
-  // Context remains visible after the placeholder disappears while typing.
-  chatChip.classList.remove('hidden');
-  chatChipText.textContent = finding ? `Finding: ${finding.pattern}` : 'Selected text';
-  chatChipText.title = chatChipText.textContent;
-  workView.dispatch({ effects: setAttachFx.of({ from: range.from, to: range.to, finding: !!finding }) });
-  chatInput.placeholder = basePlaceholder();
-  if (focusComposer) chatInput.focus();
-}
-
-function detach() {
-  clearPlainPreview();
-  attached = null;
-  activeFinding = null;
-  chatChip.classList.add('hidden');
-  syncActiveCard();
-  chatInput.placeholder = basePlaceholder();
-  workView.dispatch({ effects: setAttachFx.of(null) });
-}
-
-// The chip holds a snapshot; the decoration holds the live position. Re-read it
-// so an edit made while the chat was open does not misplace the replacement.
-function attachedRange() {
-  if (!attached) return null;
-  let range = null;
-  workView.state.field(attachField).between(0, workView.state.doc.length, (from, to) => {
-    range = { from, to, text: workView.state.sliceDoc(from, to) };
-  });
-  return range;
-}
-
 // ── Mark bubble ──
 //
 //  Clicking a mark or selecting text arms nothing. The bubble beside the click
-//  holds the explicit acts instead: Discuss (names the chip, stays in
-//  the editor) and a rewrite (attaches, then asks the model). One bubble at a
+//  holds explicit actions: Change opens a local passage field; rewrite
+//  actions ask for scoped replacements. One bubble at a
 //  time; an edit, copy, or Escape puts it away — a scroll carries it along.
 const markBubble = document.getElementById('mark-bubble');
-let bubbleMode = null;   // 'finding' | 'style' | 'selection' | 'continue' | 'spell' while open
+let bubbleMode = null;   // 'selection' | 'spell' while open
 
 function hideMarkBubble() {
   cancelDeferredBubble();
@@ -3304,20 +2976,18 @@ function cancelDeferredBubble() {
 document.addEventListener('keydown', cancelDeferredBubble, true);
 document.addEventListener('mousedown', cancelDeferredBubble, true);
 
-// The box the bubble may live in: the writing pane, not the window. The header
-// is fixed over the draft's first line and the file sidebar is a column beside
-// it, and a toolbar under either is a toolbar nobody can press — the click that
-// should dismiss it lands on the chrome instead, so the bubble looks present
-// and does nothing. Both edges come from the pane the text is in, and the top
-// from under the header, which is why clamping to the window was not enough.
+// The box the bubble may live in: the writing pane, not the window — the file
+// sidebar is a column beside it, and a toolbar under it is a toolbar nobody can
+// press. The transparent header band is fair game: the bubble draws above the
+// header (z-index in style.css), and using the band is what lets a bubble for
+// the draft's second line stand above it instead of flipping onto the next.
 function bubbleArea() {
   const pane = document.getElementById('pane-work').getBoundingClientRect();
-  const header = document.getElementById('pane-header').getBoundingClientRect();
   const left = pane.left + 8;
   return {
     left,
     right: Math.max(left, pane.right - 8),
-    top: Math.max(pane.top, header.bottom) + 8,
+    top: pane.top + 8,
     bottom: window.innerHeight - 8,
   };
 }
@@ -3327,53 +2997,41 @@ function bubbleArea() {
 // old screen point would be off. Cleared whenever it is put away.
 let bubbleAnchor = null;
 
-// Where bubbles stand: 'float' above the words (the default), or, with the
-// "Actions in the margin" setting, 'margin' beside the selected line in the
-// notes rail and 'inline' right after the caret for Continue. The docked kinds
-// are placed exactly (left edge at x, centred on the line at y) instead of
-// centred above a point, and fall back to float where there is no rail.
-let pillsMargin = localStorage.getItem('wa-pills') === 'margin';
-function bubbleDock(kind) {
-  return pillsMargin && (kind === 'inline' || railOn) ? kind : 'float';
+// A floating bubble stands over the text it acts on, never on it: anchored to
+// the top of the passage's first line (centred on the passage when it fits on
+// one line, at the pointer otherwise), with the passage's height kept so it can
+// flip below the last line instead. Pointer-relative placement put the bubble
+// over the upper half of the very line that was clicked.
+function textAnchor(from, to, fallbackX) {
+  const start = workView.coordsAtPos(from, 1);
+  const end = workView.coordsAtPos(to, -1);
+  if (!start || !end) return null;
+  const x = Math.abs(end.top - start.top) < 2 ? (start.left + end.right) / 2 : fallbackX;
+  return { pos: from, dx: x - start.left, dy: 0, dh: Math.max(end.bottom, start.bottom) - start.top };
 }
 
-function placeBubble(x, y, anchor = null, dock = 'float') {
+function placeBubble(x, y, anchor = null) {
   markBubble.hidden = false;
   if (!anchor) {
+    // A bare point: the line under it is the text to clear.
     const pos = workView.posAtCoords({ x, y });
-    const at = pos == null ? null : workView.coordsAtPos(pos);
-    anchor = at && { pos, dx: x - at.left, dy: y - at.top, dock };
+    anchor = pos == null ? null : textAnchor(pos, pos, x);
+    if (anchor) anchor.dx = x - workView.coordsAtPos(pos, 1).left;
+  }
+  if (anchor) {
+    const at = workView.coordsAtPos(anchor.pos, 1);
+    if (at) ({ x, y } = { x: at.left + anchor.dx, y: at.top + anchor.dy });
   }
   bubbleAnchor = anchor;
-  dock = anchor?.dock ?? 'float';
-  markBubble.dataset.dock = dock;
   const area = bubbleArea();
   // Scrolled under the header or off the pane: hidden with its words, back
   // when they return — never pinned to an edge pointing at nothing.
   const box = markBubble.getBoundingClientRect();
-  const cy = dock === 'float' ? y : y + box.height / 2;   // docked: judged by its line
-  markBubble.style.visibility = cy < area.top - 8 || cy > area.bottom ? 'hidden' : '';
-  let left, top;
-  if (dock === 'float') ({ left, top } = clampBubble(x, y, { w: box.width, h: box.height }, area));
-  else {
-    left = Math.min(x, window.innerWidth - box.width - 8);
-    top = y;
-  }
+  markBubble.style.visibility = y < area.top - 8 || y > area.bottom ? 'hidden' : '';
+  const { left, top, side } = clampBubble(x, y, { w: box.width, h: box.height }, area, y + (anchor?.dh ?? 0));
+  markBubble.dataset.side = side;
   markBubble.style.left = `${left}px`;
   markBubble.style.top = `${top}px`;
-}
-
-// A docked bubble is centred on the text line it belongs to.
-function placeDockedBubble(pos, dock) {
-  const coords = workView.coordsAtPos(pos);
-  if (!coords) return false;
-  markBubble.hidden = false;
-  const h = markBubble.getBoundingClientRect().height;
-  const pane = document.getElementById('pane-work').getBoundingClientRect();
-  const x = dock === 'margin' ? pane.left + railPaneLeft : coords.left + 12;
-  const y = (coords.top + coords.bottom) / 2 - h / 2;
-  placeBubble(x, y, { pos, dx: x - coords.left, dy: y - coords.top, dock }, dock);
-  return true;
 }
 
 // Back over its words after a scroll or reflow, at the same offset from them.
@@ -3401,88 +3059,20 @@ function bubbleButton(label, run) {
   return button;
 }
 
-function attachLive(finding, range) {
-  attach({ ...range, text: workView.state.sliceDoc(range.from, range.to) }, finding, false);
-}
-
-function showFindingBubble(finding, x, y) {
-  // A local style mark is the same remark with a different origin; only the
-  // copy handler cares which, and it must not read a finding as a selection.
-  bubbleMode = finding.id === -1 ? 'style' : 'finding';
-  const actions = chatEl('div', 'mark-bubble-actions');
-  actions.append(
-    bubbleButton('Discuss', () => {
-      const range = findingRange(finding.id);
-      if (range) attachLive(finding, range);
-    }),
-    bubbleButton('Suggest rewrites', () => {
-      const range = findingRange(finding.id);
-      if (!range) return;
-      attachLive(finding, range);
-      const card = findingCards.get(finding.id);
-      const offer = card?.querySelector('.chat-action');
-      if (offer && !offer.disabled) offer.click();
-      else if (card) requestVariants(`Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`, null, card);
-    }),
-  );
-  markBubble.replaceChildren(actions);
-  placeBubble(x, y);
-}
-
 function showSelectionBubble(x, y) {
   const sel = workView.state.selection.main;
   if (sel.empty) return;
   // A mark click owns the bubble when the click lands on one; a bare
-  // selection gets the context action alone — the composer below then asks
-  // what to do with it.
+  // selection opens its own local instruction field.
   bubbleMode = 'selection';
   const actions = chatEl('div', 'mark-bubble-actions');
-  actions.append(bubbleButton('Discuss', () => {
+  actions.append(bubbleButton('Change', () => {
     const live = workView.state.selection.main;
     if (live.empty) return;
-    attach({ from: live.from, to: live.to, text: workView.state.sliceDoc(live.from, live.to) }, null, true);
-  }));
-  // A note is the writer talking to themselves about the passage — no model
-  // call, just a card on the rail. The card opens its editor on the next
-  // tick, after the bubble returns focus to the draft.
-  actions.append(bubbleButton('Note', () => {
-    const live = workView.state.selection.main;
-    if (live.empty) return;
-    createNote(live.from, live.to);
+    openPassage(workView, live);
   }));
   markBubble.replaceChildren(actions);
-  if (bubbleDock('margin') === 'margin' && placeDockedBubble(sel.from, 'margin')) return;
-  placeBubble(x, y);
-}
-
-function showContinueBubble(x, y) {
-  bubbleMode = 'continue';
-  const actions = chatEl('div', 'mark-bubble-actions');
-  actions.append(bubbleButton('Continue', () => {
-    // The request reads the caret and refuses to run unless the editor holds
-    // focus; the click left it on the button, so take it back first.
-    workView.focus();
-    cancelSuggestion();
-    ghostClear(workView);
-    void suggestFetch(true);
-  }));
-  markBubble.replaceChildren(actions);
-  // Anchor to the text caret, not the mouse: the click may land anywhere on
-  // the empty tail of the line, while writing continues at the caret. The
-  // bubble stands right above the caret line. Falls back to the click point
-  // when caret coordinates are unavailable.
-  const head = workView.state.selection.main.head;
-  if (bubbleDock('inline') === 'inline') {
-    const hint = chatEl('kbd', '', '⌘↵');
-    actions.firstChild.append(' ', hint);
-    if (placeDockedBubble(head, 'inline')) return;
-  }
-  let cx = x, cy = y;
-  try {
-    const coords = workView.coordsAtPos(head);
-    if (coords) { cx = coords.left; cy = coords.top; }
-  } catch {}
-  placeBubble(cx, cy);
+  placeBubble(x, y, textAnchor(sel.from, sel.to, x));
 }
 
 // A dictionary miss offers direct replacements — no model call, no card, the
@@ -3511,20 +3101,11 @@ function showSpellBubble(marker, x, y) {
     workView.dispatch({ effects: refreshSpellFx.of(null) });
   }));
   markBubble.replaceChildren(actions);
-  placeBubble(x, y);
+  placeBubble(x, y, textAnchor(marker.from, marker.to, x));
 }
 
-// ── Rewrite variants (cards, 0.2 style) ───────────────────────────────────────
-//
-//  Three options in the chat, not a try-on in the draft. Clicking a card
-//  replaces only the attached range; the rest is reading.
-//
-//  NOTE (coloured diff): the inline word-level diff with animated added/removed
-//  colours (wordDiff in editing.js + VariantWidget + cm-variant-old/new) is
-//  deliberately out of this path for now — it is kept in the tree as a noted
-//  option for another place (e.g. history compare). Variants here preview on a
-//  plain white sheet with no red/green: hover/focus shows the option where it
-//  will live, the document itself stays untouched until the writer clicks.
+// ── Rewrite variants ────────────────────────────────────────────────────────
+// Chat replacements preview in place before the writer applies them.
 
 class PlainVariantWidget extends WidgetType {
   constructor(text, block) { super(); this.text = text; this.block = block; }
@@ -3546,13 +3127,6 @@ const variantPlainField = StateField.define({
     for (const effect of tr.effects) if (effect.is(setPlainVariantFx)) return effect.value;
     return value;
   },
-  provide: field => EditorView.decorations.from(field, value => {
-    if (!value) return Decoration.none;
-    return Decoration.set([Decoration.replace({
-      widget: new PlainVariantWidget(value.text, value.block),
-      block: value.block,
-    }).range(value.from, value.to)], true);
-  }),
 });
 
 // A brief wash over just-applied text, so the eye lands on what changed
@@ -3565,20 +3139,8 @@ const flashField = StateField.define({
     if (tr.docChanged) return null;
     return value;
   },
-  provide: field => EditorView.decorations.from(field, value => {
-    if (!value || value.from === value.to) return Decoration.none;
-    return Decoration.set([Decoration.mark({ class: 'cm-applied-flash' }).range(value.from, value.to)]);
-  }),
 });
 let flashTimer = null;
-
-// Hover previews get a grace delay: moving between cards crosses an 8px gap,
-// and clearing on mouseleave would snap the text back for one frame before
-// the next card re-applies it. Leaving arms a short timer; any new preview
-// — hover or keyboard focus — cancels it. Explicit exits (click in the
-// draft, Escape handled by callers, new requests, applies) clear at once.
-let unpreviewTimer = null;
-const UNPREVIEW_DELAY = 120;
 
 let plainPreview = null;  // { target } while a hover preview is up
 function showPlainPreview(text, target) {
@@ -3593,535 +3155,41 @@ function showPlainPreview(text, target) {
   });
 }
 function clearPlainPreview() {
-  clearTimeout(unpreviewTimer);
   if (!plainPreview) return;
   plainPreview = null;
   try { workView.dispatch({ effects: setPlainVariantFx.of(null) }); } catch {}
   syncChatEditCards();
 }
 
-function applyText(text, target, wrap = null, card = null) {
+function applyText(text, target) {
   if (!replacementTarget(workView.state.doc.toString(), target) || workView.state.readOnly) {
-    markVariantTarget(null);
-    notify('The draft changed since this answer. Select the passage and request new options.');
+    notify('The draft changed since this answer. Select the passage and request a new change.');
     return;
   }
-  const range = target;
-  // One transaction: the preview decoration comes off in the same redraw that
-  // lands the new text, so there is no intermediate frame flashing the old
-  // passage back. The flash marks what changed for the eye that follows,
-  // and the decided-target mark goes with the same redraw.
   plainPreview = null;
   saveSnapshot('Before AI replacement');
   workView.dispatch({
-    changes:   { from: range.from, to: range.to, insert: text },
-    selection: { anchor: range.from + text.length },
-    effects: [
-      setPlainVariantFx.of(null),
-      setVariantTargetFx.of(null),
-      setFlashFx.of({ from: range.from, to: range.from + text.length }),
-    ],
+    changes: { from: target.from, to: target.to, insert: text },
+    selection: { anchor: target.from + text.length },
+    effects: [setPlainVariantFx.of(null), setFlashFx.of({ from: target.from, to: target.from + text.length })],
   });
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => { try { workView.dispatch({ effects: setFlashFx.of(null) }); } catch {} }, 1300);
   workView.focus();
   save();
-  detach();
-  // First kept option: the writer now knows hover-to-preview and click-to-
-  // apply, so later groups skip the usage hint.
-  try { localStorage.setItem('wa-variant-hint', 'seen'); } catch {}
-  // Decided options step aside at once; undecided ones point at a range that
-  // no longer exists. Inside a finding card the buttons go immediately while
-  // the remark itself stays standing with its Undo. In the stream the kept
-  // card is the confirmation, so the chat stays open on it instead of
-  // closing behind it.
-  if (card) card.classList.add('is-applied');
-  if (wrap) {
-    wrap.classList.add('is-spent');
-    attachUndo(card, text, target);
-    const hostCard = wrap.closest('.chat-entry.is-finding');
-    if (hostCard && findingCards.has(Number(hostCard.dataset.findingId))) {
-      const findingId = Number(hostCard.dataset.findingId);
-      // Decided at once: the other buttons go immediately, while the applied
-      // option stays visible on the remark with its Undo. The remark chrome
-      // stays too — only further actions go, decided ones take none.
-      for (const sibling of wrap.querySelectorAll('.variant-card')) {
-        if (sibling !== card) sibling.hidden = true;
-      }
-      const foot = wrap.querySelector('.variant-foot');
-      if (foot) foot.hidden = true;
-      const soloHint = wrap.querySelector(':scope > .variant-hint');
-      if (soloHint) soloHint.hidden = true;
-      hostCard.querySelector('.finding-actions')?.remove();
-      railAnchors.delete(hostCard); railHomes.delete(hostCard);
-      // The finding is answered: drop it from the lists (its mark already
-      // went with the edit) and refresh the counts. The card itself stays.
-      if (findingId === -1) localFinding = null;
-      else {
-        reviewFindings = reviewFindings.filter(finding => finding.id !== findingId);
-        try { workView.dispatch({ effects: dropReviewFx.of(findingId) }); } catch {}
-        if (focusedFindingId === findingId) { focusedFindingId = null; syncActiveCard(); }
-      }
-      saveFindings();
-      syncReviewLabel();
-      syncStyleScore();
-      layoutRail();
-    } else {
-      // No host card: the kept option in the stream is the whole
-      // confirmation — keep it on screen with its Undo.
-      setChatOpen(true);
-    }
-  }
-}
-// The way back lives on the kept card itself, with no timer: it puts back
-// exactly what was replaced and only while it is still there to put back —
-// it is not the editor's undo stack, which by then may belong to something
-// the writer typed afterwards. The History snapshot taken before every
-// replacement is the longer way back.
-function attachUndo(card, text, target) {
-  if (!card) return;
-  let row = card.querySelector('.variant-undo-row');
-  if (!row) {
-    row = chatEl('div', 'variant-undo-row');
-    const undo = chatEl('button', 'chat-action', 'Undo');
-    undo.type = 'button';
-    undo.title = 'Put the passage back as it was';
-    undo.addEventListener('click', () => {
-      const at = Number(undo.dataset.from);
-      const { applied, previous } = undo.dataset;
-      if (!undo.isConnected || undo.dataset.stale || workView.state.sliceDoc(at, at + applied.length) !== applied) {
-        notify('That passage has changed since. Use the editor’s undo instead.');
-        return;
-      }
-      workView.dispatch({ changes: { from: at, to: at + applied.length, insert: previous }, selection: { anchor: at + previous.length } });
-      workView.focus();
-      save();
-      const spentWrap = undo.closest('.chat-variants');
-      const hostCard = undo.closest('.chat-entry.is-finding');
-      fadeRemove(spentWrap);
-      syncVariantTarget();
-      // An undone rail card remarked on text that is back to its original
-      // wording but no longer marked — put it away rather than leave an
-      // empty remark standing beside the line. The fading wrap still counts
-      // as present until it detaches.
-      if (hostCard && hostCard.dataset.findingId && !hostCard.querySelector('.chat-variants:not(.is-leaving)')) {
-        const hostId = Number(hostCard.dataset.findingId);
-        railAnchors.delete(hostCard); railHomes.delete(hostCard);
-        findingCards.delete(hostId);
-        fadeRemove(hostCard);
-        refocusAfterRemoval(hostId);
-      }
-      layoutRail();
-      // The wrap may have been the last thing in the stream — don't leave the
-      // toggle over an empty panel.
-      if (chatStream.children.length === 0) { setChatOpen(false); maybeCollapseIsland(); }
-    });
-    row.append(undo);
-    card.append(row);
-  }
-  const undo = row.querySelector('button');
-  undo.dataset.from = String(target.from);
-  undo.dataset.applied = text;
-  undo.dataset.previous = target.text;
-  delete undo.dataset.stale;
-  return undo;
-}
-
-// ── Cards ──
-
-// Hovering a card lights the passage it belongs to. The mark's element is
-// re-rendered by CodeMirror as the viewport changes, which is fine: a hover
-// class only has to outlive the hover.
-function markFor(id) { return workView.dom.querySelector(`.cm-slop[data-slop-id="${id}"]`); }
-
-function syncActiveCard() {
-  const focused = focusedFindingId;
-  for (const [id, card] of findingCards) {
-    const isFocused = id === focused;
-    card.classList.toggle('is-active', isFocused);
-    // No rail, no single-card rule: remarks stack in the stream, all visible.
-    // The marks in the draft stay the navigation; the focused one only gets
-    // the firmer edge.
-    const finding = reviewFindings.find(item => item.id === id);
-    if (finding) {
-      railAnchors.set(card, () => {
-        if (card.hidden) return null;
-        if (focused !== null && id !== focused) return null;
-        return findingRange(id)?.from ?? null;
-      });
-    }
-    card.style.display = '';
-  }
-  layoutRail();
-}
-
-// After a focused card goes away (dismissed, undone), stand the nearest
-// remaining open card against the draft instead of leaving a rail of
-// hidden cards behind.
-function refocusAfterRemoval(removedId) {
-  if (focusedFindingId !== removedId) return;
-  const live = reviewFindings.map(finding => ({ finding, range: findingRange(finding.id) })).filter(item => item.range)
-    .sort((a, b) => a.range.from - b.range.from || a.finding.id - b.finding.id);
-  const next = live.find(item => findingCards.has(item.finding.id));
-  focusedFindingId = next ? next.finding.id : null;
-  syncActiveCard();
-}
-
-function findingCard(finding, instruction) {
-  const card = chatEl('div', 'chat-entry is-finding');
-  card.dataset.findingId = String(finding.id);
-  card.addEventListener('mouseenter', () => markFor(finding.id)?.classList.add('is-hot'));
-  card.addEventListener('mouseleave', () => markFor(finding.id)?.classList.remove('is-hot'));
-  // The card opens on the remark itself: pattern, why it matters, what to do.
-  const dismiss = chatEl('button', 'chat-dismiss', 'Keep as is');
-  dismiss.type = 'button';
-  dismiss.title = 'Keep this wording and dismiss the finding';
-  dismiss.addEventListener('click', () => {
-    chatAbort?.abort();  // in-flight variants for a dismissed finding are waste
-    clearPlainPreview();   // options generated for a dismissed finding are waste
-    dismissFinding(finding.id);
-  });
-  card.append(
-    chatEl('strong', '', finding.pattern),
-    chatEl('span', '', finding.reason),
-    chatEl('small', '', finding.fix),
-  );
-
-  // Alternatives are offered, not spent on a click. Reading the remark and
-  // fixing the sentence yourself is a complete outcome. There is one scope —
-  // the passage the finding quotes, which is the passage it marked in the
-  // draft — so there is nothing to choose before asking.
-  // Discussing a finding needs no button of its own: the card is attached, and
-  // typing in the composer with a finding attached opens the conversation.
-  const offer = chatEl('button', 'chat-action', 'Options');
-  offer.type = 'button';
-  offer.addEventListener('click', () => {
-    const live = findingRange(finding.id);
-    if (!live) {
-      notify('This passage has changed. Check again.');
-      return;
-    }
-    // Options already on screen are the answer — asking again would wipe
-    // them for skeletons and land the same three cards. Retries live on the
-    // group's own refresh icon; a second press while they show does nothing.
-    if (offer.disabled) return;
-    if (card.querySelector('.finding-variants .variant-card:not(.is-loading)')) return;
-    // Retries live on the variants group as the refresh icon; the offer itself
-    // just waits, dimmed, and comes back if the request fails.
-    offer.disabled = true;
-    offer.textContent = 'Looking…';
-    // Options ask about this remark without touching the composer: no chip,
-    // no placeholder swap. The target travels with the request itself, so
-    // reading stays reading until the writer types something of their own.
-    const target = { ...live, text: workView.state.sliceDoc(live.from, live.to), document: workView.state.doc.toString() };
-    requestVariants(instruction, target, card);
-  });
-  const actions = chatEl('div', 'finding-actions');
-  actions.append(offer, dismiss);
-  if (finding.id === -1) dismiss.textContent = 'Keep here';
-  // Variants open inside this card — beside the passage they replace — not
-  // in the bottom stream. The stream stays for conversation about the draft.
-  const variantsBox = chatEl('div', 'finding-variants');
-  card.append(actions, variantsBox);
-  return card;
-}
-
-// ── Variant cards ──
-//
-//  A vertical stack of options. Each card names its option and applies on
-//  click. Hover or keyboard focus previews the option in place on a plain
-//  white sheet — no coloured diff — so the writer reads it with the
-//  sentences around it.
-function variantCards(variants, instruction, target, card = null) {
-  const doc = workView.state.doc.toString();
-
-  // Rank what the model already produced by the resulting whole-document
-  // local score — shown nowhere and never fed to the model, or it would
-  // optimise the word list instead of the writing.
-  const ordered = isLatinScript(doc)
-    ? variants
-        .map(text => ({ text, score: styleScore(doc.slice(0, target.from) + text + doc.slice(target.to)).score }))
-        .sort((a, b) => a.score - b.score)
-        .map(item => item.text)
-    : variants.slice();
-
-  const wrap = chatEl('div', 'chat-variants');
-  wrap.setAttribute('role', 'list');
-  wrap.dataset.targetFrom = String(target.from);
-  let current = 0;
-
-  // One option at a time: the writer reads it in place and answers Yes or No.
-  const items = ordered.map((text, index) => {
-    const item = chatEl('div', 'variant-card');
-    item.setAttribute('role', 'listitem');
-    item.append(chatEl('div', 'variant-text', text));
-    if (index > 0) item.hidden = true;
-    wrap.append(item);
-    return { element: item, text };
-  });
-
-  const previewCurrent = () => {
-    if (wrap.classList.contains('is-spent')) return;
-    if (!replacementTarget(workView.state.doc.toString(), target)) return;
-    showPlainPreview(items[current].text, target);
-  };
-
-  const foot = chatEl('div', 'variant-foot');
-  const yes = chatEl('button', 'chat-action is-primary', 'Yes');
-  yes.type = 'button';
-  yes.addEventListener('click', () => {
-    if (wrap.classList.contains('is-spent')) return;
-    clearPlainPreview();
-    applyText(items[current].text, target, wrap, items[current].element);
-  });
-  const no = chatEl('button', 'chat-dismiss', 'No');
-  no.type = 'button';
-  no.addEventListener('click', () => {
-    if (wrap.classList.contains('is-spent')) return;
-    clearPlainPreview();
-    if (current < items.length - 1) {
-      items[current].element.hidden = true;
-      current++;
-      items[current].element.hidden = false;
-      previewCurrent();
-    } else {
-      // All declined — clear variants, re-enable Options on the finding card
-      const host = wrap.closest('.chat-entry.is-finding');
-      if (host) restoreFindingCard(host);
-      fadeRemove(wrap);
-      markVariantTarget(null);
-    }
-  });
-  foot.append(yes, no);
-  wrap.append(foot);
-  requestAnimationFrame(previewCurrent);
-  return wrap;
-}
-
-function skeletonCards(count = 3) {
-  const wrap = chatEl('div', 'chat-variants is-loading');
-  wrap.setAttribute('aria-busy', 'true');
-  for (let i = 0; i < count; i++) {
-    const item = chatEl('div', 'variant-card is-loading');
-    item.append(
-      chatEl('div', 'skeleton skeleton-label'),
-      chatEl('div', 'skeleton skeleton-line'),
-      chatEl('div', 'skeleton skeleton-line is-short'),
-    );
-    wrap.append(item);
-  }
-  return wrap;
-}
-
-// Options open inside the finding card they belong to — beside the passage
-// they would replace — not in the bottom stream. The stream stays for
-// conversation. hide/restore now only serve the stream fallback path.
-function hideFindingCard(card) {
-  if (!card || card.hidden) return;
-  card.hidden = true;
-  layoutRail();
-}
-function restoreFindingCard(card) {
-  if (!card) return;
-  // The offer waits dimmed while its request is in flight; a failed request
-  // hands it back.
-  const offer = card.querySelector('.chat-action:disabled');
-  if (offer) { offer.disabled = false; offer.textContent = 'Options'; }
-  if (!card.hidden) return;
-  card.hidden = false;
-  layoutRail();
-}
-
-// One live group at a time: when fresh options land, earlier undecided groups
-// step aside — hovering between two stacks for two passages previews nothing
-// coherent, and a click on a stale card only errors. Applied groups stay:
-// their Undo is the way back. On a failed request nothing is touched, so old
-// options plus the error beat an error alone. Groups now live both in the
-// stream (selections, /idea) and inside finding cards, so retire across both.
-function retireStaleVariants(except) {
-  for (const stale of document.querySelectorAll('.chat-variants:not(.is-spent):not(.is-loading):not(.is-leaving)')) {
-    if (stale !== except) fadeRemove(stale);
-  }
-  layoutRail();
-}
-
-function showVariants(variants, instruction, target) {
-  const wrap = variantCards(variants, instruction, target);
-  retireStaleVariants(wrap);
-  chatAdd(wrap);
-  markVariantTarget(target);
-  // Keep the passage in view while the writer decides; the dashed target
-  // mark plus hover previews do the rest.
-  try { workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: 'center' }) }); } catch {}
-}
-
-// ── Rewrite ──
-
-async function requestVariants(instruction, existingTarget = null, card = null) {
-  const range = existingTarget ?? attachedRange();
-  const target = existingTarget ?? (range && { ...range, document: workView.state.doc.toString() });
-  if (!range) {
-    notify('That passage is no longer attached — select it again.');
-    return;
-  }
-  if (!await ensureAgent()) return;
-  if (!replacementTarget(workView.state.doc.toString(), target)) return;
-  clearPlainPreview();
-  markVariantTarget(null);   // a new decision supersedes the marked one
-  // Finding options open inside their own card. Selections and style markers
-  // have no card and keep the stream path.
-  const inCard = !!(card && card.isConnected && card.querySelector('.finding-variants'));
-  const box = inCard ? card.querySelector('.finding-variants') : null;
-  if (inCard) {
-    box.replaceChildren();
-    retireStaleVariants(null);
-  } else if (card) hideFindingCard(card);
-  const placeholder = inCard ? box.appendChild(skeletonCards()) : chatAdd(skeletonCards());
-  chatAbort?.abort();
-  const job = startJob();
-  chatAbort = job;
-  try {
-    const res = await fetch('/rewrite', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal:  chatAbort.signal,
-      body:    JSON.stringify({
-        document:    target.document,
-        selected:    target.text,
-        from:        range.from,   // exact span, so the server marks the right occurrence
-        instruction,
-        agent:       currentAgent(),
-        context:     combinedContext() || undefined,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
-    if (!replacementTarget(workView.state.doc.toString(), target)) throw new Error('The draft changed while the rewrites were coming back. Select the passage again.');
-    const stick = chatAtBottom();
-    const wrap = variantCards(data.variants, instruction, target, card);
-    retireStaleVariants(wrap);
-    if (inCard) {
-      // The answer belongs to the remark beside the passage. The card grows;
-      // the rail re-anchors so it keeps standing against its line. The offer
-      // comes back — it asked and was answered, it must not read as working.
-      if (placeholder.isConnected) placeholder.replaceWith(wrap);
-      else box.append(wrap);
-      const done = card.querySelector('.chat-action:disabled');
-      if (done) { done.disabled = false; done.textContent = 'Options'; }
-      layoutRail();
-      markVariantTarget(target);
-      // The options may land above the fold — glide them into view (nearest:
-      // no scrolling when they are already fully visible).
-      scrollToNode(wrap);
-      try { workView.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: 'center' }) }); } catch {}
-    } else {
-      // The chat may have been closed while the answer was in flight. A detached
-      // placeholder means its spot is gone — put the options at the end instead
-      // of losing them silently.
-      if (placeholder.isConnected) { placeholder.replaceWith(wrap); chatScroll(stick); }
-      else { placeholder.remove(); chatAdd(wrap); }
-      markVariantTarget(target);
-    }
-  } catch (error) {
-    if (error.name === 'AbortError') { placeholder.remove(); if (card) restoreFindingCard(card); else layoutRail(); syncVariantTarget(); return; }
-    console.error('[/rewrite]', error);
-    // Nothing came back; the remark is what the card has to say.
-    placeholder.remove();
-    syncVariantTarget();
-    restoreFindingCard(card);
-    notifyProblem(modelError(error), () => requestVariants(instruction, target, card));
-  } finally { finishJob(job); if (chatAbort === job) chatAbort = null; }
-}
-
-// A finding marks a passage and is answered on that passage. Clicking the mark
-// opens its card and arms nothing — reading a remark is not a request. The
-// tint in the draft and the range a rewrite would replace are the same span,
-// and a problem that needs material moved between paragraphs is a
-// conversation, for which the bubble offers Discuss.
-const findingCards = new Map();  // finding id → its card, while it is on screen
-
-// `at` carries the click point for the action bubble; keyboard navigation
-// (F8, jump buttons) passes none and gets the card alone.
-function openFinding(finding, center = false, at = null) {
-  closeScorePopover();
-  if (finding.id !== -1) removeLocalFinding();
-  clearPlainPreview();
-  const range = findingRange(finding.id);
-  if (!range) return;
-  focusedFindingId = finding.id;
-  // A direct click is already at the passage, so moving it would break spatial
-  // continuity. Keyboard navigation still centres an off-screen finding.
-  if (center) workView.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: 'center' }) });
-
-  // Clicking the same mark again is navigation, not a new remark: return to the
-  // card that is already on screen and refocus it.
-  if (findingCards.get(finding.id)?.isConnected) {
-    syncActiveCard();
-    collapseStreamBehind(findingCards.get(finding.id));
-    findingCards.get(finding.id)?.querySelector('.chat-action')?.focus({ preventScroll: true });
-    chatScroll(true);
-    return;
-  }
-
-  const instruction = `Fix ${finding.pattern}: ${finding.fix}. Preserve facts and voice. Replace only the quoted passage.`;
-  const card = findingCard(finding, instruction);
-  // A hidden card takes no rail space; an unfocused one takes none either —
-  // only the focused remark stands beside the draft (see syncActiveCard).
-  findingCards.set(finding.id, railAdd(card, () => {
-    if (card.hidden) return null;
-    if (focusedFindingId !== null && focusedFindingId !== finding.id) return null;
-    return findingRange(finding.id)?.from ?? null;
-  }));
-  // A fresh remark in the stream is a new arrival: open for it. In the rail it
-  // is already visible beside the line, so nothing opens — instead the open
-  // conversation gets out of its way (see collapseStreamBehind).
-  if (card.parentElement === chatStream) setChatOpen(true);
-  else collapseStreamBehind(card);
-  syncActiveCard();
-  card.querySelector('.chat-action')?.focus({ preventScroll: true });
-  // The card is for reading the remark; the bubble is for the two acts that
-  // follow it, and only a click knows where to put it. F8 and the remark list
-  // pass no point and get the card alone.
-  if (at) showFindingBubble(finding, at.x, at.y);
-}
-
-// A remark open beside the draft owns the writer's attention: the bottom
-// conversation folds away while it stands. This hides only the stream
-// element — no teardown, so cards, attachment and history all stay exactly
-// as they were, and the toggle brings them back untouched.
-function collapseStreamBehind(card) {
-  if (!card || card.parentElement === chatStream) return;
-  if (chatStream.hidden || chatStream.children.length === 0) return;
-  chatStream.hidden = true;
-  chatClear.hidden = false;
-  chatClear.textContent = 'Conversation';
-  chatClear.setAttribute('aria-label', 'Show the conversation');
-  chatClear.title = 'Show the conversation';
 }
 
 // ── Slash commands ──────────────────────────────────────────────────────────
 //
 //  Granola-style menu over the composer: icon, name and one line of
 //  description per row, filtered as the writer types after /. ↑↓ move,
-//  Enter/Tab runs, Esc closes. Picking a command that takes text with none
-//  typed yet fills the field so the writer finishes the thought there.
+//  Enter/Tab runs, Esc closes. Every choice runs immediately.
 //  The menu only lives while the field holds a bare /name — once arguments
 //  follow, Enter runs instead of picking.
 const SLASH_COMMANDS = [
   {
-    name: 'idea', icon: 'bulb', title: 'Expand idea',
-    desc: 'Turn a rough thought into a passage at the caret',
-    takesArgs: true,
-    run(args) {
-      if (!args.trim()) { notify('Write the idea after /idea.'); return; }
-      const head = workView.state.selection.main.head;
-      expandIdea(args.trim(), { from: head, to: head, text: '', document: workView.state.doc.toString() }).catch(console.error);
-    },
-  },
-  {
     name: 'brief', icon: 'target', title: 'Positioning brief',
     desc: 'Answer 4 questions about reader and goal',
-    takesArgs: false,
     run() {
       clearNotice('brief');
       startBrief();
@@ -4158,17 +3226,13 @@ function setSlashActive(index) {
   } else chatInput.removeAttribute('aria-activedescendant');
 }
 function pickSlash(item) {
+  if ([...jobs].some(job => !job.background)) return;
   slashMenu.hidden = true;
+  chatInput.setAttribute('aria-expanded', 'false');
   chatInput.removeAttribute('aria-activedescendant');
-  if (item.takesArgs) {
-    // Leave the thought to the writer: fill the command and hand back focus.
-    chatInput.value = `/${item.name} `;
-    chatResize();
-    chatInput.focus();
-    return;
-  }
   chatInput.value = '';
   chatResize();
+  chatInput.focus();
   item.run('');
 }
 function renderSlashMenu() {
@@ -4182,7 +3246,7 @@ function renderSlashMenu() {
   const matched = slashMatches();
   slashMenu.replaceChildren();
   if (!matched.length) {
-    slashMenu.append(chatEl('p', 'slash-empty', 'No matching command — try /idea or /brief.'));
+    slashMenu.append(chatEl('p', 'slash-empty', 'No matching command — try /brief.'));
   } else {
     if (slashActive < 0 || slashActive >= matched.length) slashActive = 0;
     matched.forEach((item, index) => {
@@ -4225,7 +3289,7 @@ async function chatSend() {
   const slash = text.match(/^\/([A-Za-z]+)\s*([\s\S]*)$/);
   if (slash) {
     const command = SLASH_COMMANDS.find(item => item.name === slash[1].toLowerCase());
-    if (!command) { notify('No such command — try /idea or /brief.'); return; }
+    if (!command) { notify('No such command — try /brief.'); return; }
     chatInput.value = '';
     chatResize();
     command.run(slash[2] || '');
@@ -4247,13 +3311,7 @@ async function chatSend() {
   chatResize();
   chatAdd(chatEl('div', 'chat-entry is-user', text));
 
-  chatHistory.push(attached && activeFinding
-    ? {
-        role: 'user',
-        content: `${text}\n\nFinding: ${activeFinding.pattern}\nQuoted passage: ${attached.text}\nEditing direction: ${activeFinding.fix}`,
-        display: text,
-      }
-    : { role: 'user', content: text });
+  chatHistory.push({ role: 'user', content: text });
   saveChat();
   streamReply(newReplyBubble());
 }
@@ -4269,7 +3327,7 @@ function newReplyBubble() {
 async function streamReply(reply) {
   chatAbort?.abort();
   const job = startJob(); chatAbort = job;
-  const request = { document: workView.state.doc.toString(), selection: attachedRange(), changes: [],
+  const request = { document: workView.state.doc.toString(), selection: null, changes: [],
     brief: JSON.stringify(positionBrief), message: chatHistory.at(-1)?.content };
   chatRequests.add(request);
   let answer = '', result = null;
@@ -4277,7 +3335,7 @@ async function streamReply(reply) {
     const res = await fetch('/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: job.signal,
       body: JSON.stringify({
-        messages: chatHistory.map(({ role, content, edits }) => ({ role, content: content + (edits?.length ? `\n${EDITS_OPEN}${JSON.stringify(edits.map(({ label, quote, replacement, state }) => ({ label, quote, replacement, state })))}</litura-edits>` : '') })),
+        messages: chatHistory.map(({ role, content, edits }) => ({ role, content: content + (edits?.length ? `\n${EDITS_OPEN}${JSON.stringify(edits.map(({ label, quote, replacement, state }) => ({ label, quote, replacement, state })))}</stilura-edits>` : '') })),
         document: request.document, selection: request.selection?.text,
         selectionRange: request.selection && { from: request.selection.from, to: request.selection.to }, agent: currentAgent(),
         context: combinedContext() || undefined,
@@ -4296,7 +3354,11 @@ async function streamReply(reply) {
     const edits = locateChatEdits(result?.edits || [], request.document, request.selection);
     for (const edit of edits) for (const changes of request.changes) mapChatEdit(edit, changes);
     const message = { role: 'assistant', content: answer, edits, editWarning: result?.editWarning };
-    chatHistory.push(message); renderChatAnswer(reply, message); saveChat(); chatScroll(true);
+    // The finished answer follows the same rule as its tokens: a reader who
+    // scrolled back up mid-stream keeps their place.
+    const stick = chatAtBottom();
+    chatHistory.push(message); renderChatAnswer(reply, message); saveChat(); chatScroll(stick);
+    if (edits.length === 1) changeChatEdit(edits[0], false, true);
     if (message.editWarning) notify(message.editWarning);
     if (result?.briefWarning) notify(result.briefWarning);
     else if (result?.brief) applyChatBrief(result.brief, request.message, request.brief);
@@ -4346,7 +3408,7 @@ function syncSend() {
   // the field is doing instead, and the button is the work now.
   chatInput.readOnly = busy;
   chatInput.closest('.chat-composer')?.classList.toggle('is-busy', busy);
-  chatInput.placeholder = busy ? 'Working…' : basePlaceholder();
+  chatInput.placeholder = busy ? 'Working…' : CHAT_PLACEHOLDER;
 }
 
 chatSendButton.addEventListener('click', () => {
@@ -4406,22 +3468,14 @@ chatInput.addEventListener('keydown', event => {
       event.stopPropagation();
       return;
     }
-    if (attached) {
-      detach();
-      workView.focus();
-      event.stopPropagation();
-      return;
-    }
     // An empty, unstarted composer folds back into the pill.
     if (!chatInput.value.trim() && canCollapseIsland()) {
-      setIsland(false);
       workView.focus();
+      afterStreamLeaves(() => setIsland(false), true);
       event.stopPropagation();
     }
   }
 });
-
-chatChipClear.addEventListener('click', () => { detach(); chatInput.focus(); });
 
 // Keep focus where it is while the button is pressed: the mousedown would
 // otherwise blur the composer first, and the click would read as leaving the
@@ -4429,33 +3483,21 @@ chatChipClear.addEventListener('click', () => { detach(); chatInput.focus(); });
 chatClear.addEventListener('mousedown', event => event.preventDefault());
 chatClear.addEventListener('click', () => {
   const open = chatStream.hidden;
-  // Closing an empty, unstarted chat folds the whole island back into the
-  // pill; the draft gets the focus back either way.
-  if (!open && canCollapseIsland()) {
-    setChatOpen(false);
-    setIsland(false);
-    workView.focus();
-    return;
-  }
-  setChatOpen(open);
   // Dismissing returns to the draft; opening returns to the composer. Focusing
   // the composer on close pops the keyboard after the user asked to leave.
-  (open ? chatInput : workView).focus();
+  if (open) { setChatOpen(true); chatInput.focus(); return; }
+  workView.focus();
+  // Closing an empty, unstarted chat folds the whole island back into the
+  // pill; otherwise only the stream goes.
+  const fold = canCollapseIsland();
+  afterStreamLeaves(() => { setChatOpen(false); if (fold) setIsland(false); }, fold);
 });
 
-// Manual selection attach is explicit: Cmd/Ctrl+K takes the current
-// selection into the composer, or just focuses it when there is none.
-// Clicks never attach — reading arms nothing; the bubble offers it.
-const MANUAL_ATTACH = false;
-// Cmd/Ctrl+K from anywhere: take the current selection into the composer.
+// Cmd/Ctrl+K opens the same local field as Change.
 document.addEventListener('keydown', event => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && !settingsDialog.open) {
     event.preventDefault();
-    dismissPassingNotice();
-    openIsland();
-    const sel = workView.state.selection.main;
-    if (!sel.empty) attach({ from: sel.from, to: sel.to, text: workView.state.sliceDoc(sel.from, sel.to) });
-    else chatInput.focus();
+    openPassage(workView, workView.state.selection.main);
   }
 });
 
@@ -4530,8 +3572,61 @@ function markdownDecorations(doc) {
 const markdownField = StateField.define({
   create: state => markdownDecorations(state.doc),
   update: (decorations, tr) => tr.docChanged ? markdownDecorations(tr.state.doc) : decorations,
-  provide: field => EditorView.decorations.from(field),
 });
+
+// One visible highlight per character. Tracking fields keep all anchors intact.
+function textHighlights(state) {
+  const generation = state.field(generationField);
+  const passage = state.field(passageField);
+  const preview = state.field(variantPlainField);
+  const flash = state.field(flashField);
+  const mark = (value, className) => value && value.to > value.from
+    ? Decoration.set([Decoration.mark({ class: className, ...(className === 'cm-passage-busy' ? { attributes: { 'aria-busy': 'true' } } : {}) }).range(value.from, value.to)]) : Decoration.none;
+  const markers = (field, className, attribute, title) => Decoration.set(state.field(field).map(value =>
+    Decoration.mark({ class: className, attributes: { [attribute]: String(value.from), title } }).range(value.from, value.to)), true);
+  const selectionMask = Decoration.mark({});
+  // Later sets win: diagnostics < working range < native selection < loading.
+  const sets = [
+    state.field(markdownField), state.field(noteField, false) ?? Decoration.none,
+    markers(spellMarkerField, 'cm-spell-marker', 'data-spell-from', 'Possible misspelling — click for suggestions'),
+    mark(flash, 'cm-applied-flash'),
+    mark(passage, 'cm-attached'), state.field(requestField),
+    Decoration.set(state.selection.ranges.filter(range => !range.empty).map(range => selectionMask.range(range.from, range.to)), true),
+    mark(passage?.busy ? passage : null, 'cm-passage-busy'),
+  ];
+  const priorities = new Map();
+  sets.forEach((set, priority) => set.between(0, state.doc.length, (_from, _to, value) => priorities.set(value, priority)));
+  // Replacement widgets occupy their range exclusively, including during regeneration.
+  if (generation && !(generation.source === 'passage' && passage?.busy)) sets.unshift(Decoration.set([
+    Decoration.replace({ widget: new GenerationWidget(generation), block: !generation.inline }).range(generation.from, generation.to),
+  ]));
+  if (preview) sets.unshift(Decoration.set([
+    Decoration.replace({ widget: new PlainVariantWidget(preview.text, preview.block), block: preview.block }).range(preview.from, preview.to),
+  ]));
+  const ranges = [], last = new Map();
+  const emit = (from, to, value) => {
+    const previous = last.get(value);
+    if (previous?.to === from) previous.to = to;
+    else { const range = value.range(from, to); ranges.push(range); last.set(value, range); }
+  };
+  RangeSet.spans(sets, 0, state.doc.length, {
+    span(from, to, active) {
+      let winner;
+      for (const value of active) if (priorities.get(value) > 0 && (!winner || priorities.get(value) > priorities.get(winner))) winner = value;
+      if (winner !== selectionMask && winner) emit(from, to, winner);
+      // Keep Markdown formatting except inside the word-shaped loading placeholder.
+      if (winner?.spec.class !== 'cm-passage-busy') {
+        for (const value of active) if (priorities.get(value) === 0) emit(from, to, value);
+      }
+    },
+    point: emit,
+  });
+  return Decoration.set(ranges, true);
+}
+const textHighlightLayer = EditorView.decorations.compute([
+  markdownField, noteField, spellMarkerField,
+  flashField, passageField, requestField, generationField, variantPlainField, 'selection',
+], textHighlights);
 
 const editorTheme = EditorView.theme({
   // Root element — fills the #editor-wrapper flex container
@@ -4575,12 +3670,12 @@ const editorTheme = EditorView.theme({
   // Cursor
   '.cm-cursor, .cm-dropCursor': {
     borderLeftColor: 'var(--accent)',
-    borderLeftWidth: '2px',
+    borderLeftWidth: '3px',
   },
 
   // Selection highlight
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
-    background: 'color-mix(in srgb, var(--accent) 22%, transparent) !important',
+    background: 'var(--attached-tint) !important',
   },
 
   // ── Suggestion ─────────────────────────────────────────────────────────────
@@ -4595,86 +3690,25 @@ const editorTheme = EditorView.theme({
     userSelect:    'none',
   },
 
-  // The attached passage. Survives losing focus, unlike a native selection —
-  // that is the only job this mark has for a plain selection, which carries
-  // no marking of its own. A background wash: underlines belong to errors
-  // (dictionary, typos) and are never used for working states.
+  // Working ranges share one blue wash; no outsets that touch adjacent lines.
   '.cm-attached': {
     background: 'var(--attached-tint)',
-    borderRadius: '3px',
-    boxShadow: '0 0 0 2px var(--attached-tint)',
-  },
-
-  // Over a finding two washes would merge into one unreadable stain, so the
-  // attachment keeps a thin accent edge here on top of its wash — the single
-  // outlined exception, and only over findings. Tracking the live position
-  // is unchanged: that is what lets an edit end the attachment.
-  '.cm-attached.cm-attached-finding': {
-    background: 'var(--attached-tint)',
-    borderRadius: '3px',
-    boxShadow: '0 0 0 2px var(--attached-tint), 0 0 0 3.5px var(--accent)',
-  },
-
-  // Model findings read as a background band. The wavy underline is reserved
-  // for errors (local dictionary, typos) — findings never underline.
-  '.cm-slop': {
-    background: 'var(--remark-tint)',
     borderRadius: '2px',
-    boxShadow: 'inset 0 -1px 0 var(--remark-line)',
-    cursor: 'pointer',
-    transition: 'background .12s ease',
+    boxDecorationBreak: 'clone',
   },
-
-  '.cm-slop:hover': { background: 'var(--remark-tint-hover)' },
-
-  // Margin notes read blue against the findings' amber: the writer's own
-  // remarks, not the model's. A background wash like every other working
-  // state — underlines belong to errors. Drifted notes (quote gone, holding
-  // the paragraph) get the dashed outline instead of the wash edge.
   '.cm-note': {
-    background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
-    borderRadius: '2px',
-    boxShadow: 'inset 0 -1px 0 color-mix(in srgb, var(--accent) 45%, transparent)',
+    textDecoration: 'underline dotted var(--muted)',
+    textUnderlineOffset: '4px',
     cursor: 'pointer',
-    transition: 'background .12s ease',
   },
+  '.cm-note.is-drifted': { textDecorationStyle: 'dashed' },
 
-  '.cm-note.is-drifted': {
-    background: 'color-mix(in srgb, var(--accent) 6%, transparent)',
-    outline: '1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent)',
-    outlineOffset: '2px',
-  },
-
-  // The passage whose variants are currently open: a dashed accent outline
-  // with a faint wash — the only dashed mark in the draft, reading as
-  // "deciding here". Paints over the attachment wash when they coincide;
-  // hover previews paint over everything while they last.
-  '.cm-variant-target': {
-    background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
-    borderRadius: '3px',
-    outline: '1.5px dashed var(--accent)',
-    outlineOffset: '3px',
-  },
-
-  // Hover preview of a variant: the same white sheet, but dashed — a sketch
-  // of the text, not the text. Only shows while a card is hovered or focused.
-  '.cm-variant-plain': {
-    background: 'var(--overlay)',
-    borderRadius: '2px',
-    boxShadow: '0 0 0 2px var(--overlay)',
-    border: '1px dashed var(--accent)',
-  },
-
-  // Slightly dim the content while /idea is streaming
+  // Slightly dim the content while the document is loading.
   '&.streaming .cm-content': { opacity: '0.8' },
 
-  // Placeholder text (shown when doc is empty)
-  // It carries the only instruction in the product now, so it has to be
-  // readable, not a watermark.
-  '.cm-placeholder': {
-    color:      'var(--muted)',
-    lineHeight: '1.7',
-  },
+  '.cm-generation': { whiteSpace: 'pre-wrap' },
+
+  '.cm-generation-request': { background: 'var(--attached-tint)', borderRadius: '2px' },
 
   // Hide gutters and fold markers — this is a prose editor
   '.cm-gutters': { display: 'none' },
@@ -4690,6 +3724,7 @@ const workView = new EditorView({
     extensions: [
       // Undo/redo
       historyComp.of(history()),
+      drawSelection(),
 
       // ── Keymaps (highest priority first) ──────────────────────────────────
       //
@@ -4701,14 +3736,19 @@ const workView = new EditorView({
           // Tab accepts a suggestion; otherwise it moves focus normally.
           key: 'Tab',
           run(view) {
+            if (generationKey(view, 'Accept')) return true;
             if (ghostAccept(view)) return true;
             return false; // Native Tab navigation when no suggestion is present.
           },
         },
         {
-          // Escape: dismiss ghost suggestion.
+          // Escape: cancel generation or dismiss the continuation.
           key: 'Escape',
           run(view) {
+            if (generationJob) { generationJob.abort(); return true; }
+            if (passageJob) { passageJob.abort(); return true; }
+            if (generationKey(view, 'Reject')) return true;
+            if (view.state.field(passageField)) { closePassage(view); return true; }
             const ghost = view.state.field(ghostField);
             const pending = suggestTimer !== null || suggestAbort !== null;
             if (!ghost && !pending) return false;
@@ -4726,11 +3766,14 @@ const workView = new EditorView({
             return true;
           },
         },
-        {
-          // Enter: handle /idea command; otherwise pass through.
-          key: 'Enter',
-          run: handleEnter,
-        },
+      ])),
+
+      Prec.high(keymap.of([
+        { key: 'Enter', run: handleWrite },
+        { key: 'ArrowDown', run: view => generationKey(view, 'Next') },
+        { key: 'ArrowUp', run: view => generationKey(view, 'Previous') },
+        { key: 'r', run: view => generationKey(view, 'Regenerate') },
+        { key: 'Alt-Enter', run: view => generationKey(view, 'Regenerate') },
       ])),
 
       // Standard text-editing and history keymaps
@@ -4739,23 +3782,22 @@ const workView = new EditorView({
       // the OS/browser dictionary. Autocorrect/autocapitalize stay off — a
       // silent rewrite is not what "quick fix" means here.
       EditorView.contentAttributes.of({
-        'aria-label': 'Draft editor', 'aria-describedby': 'suggest-shortcut',
+        'aria-label': 'Draft editor', 'aria-describedby': 'editor-shortcuts',
         spellcheck: 'true', autocorrect: 'off', autocapitalize: 'off',
       }),
 
       // Ghost text state + decoration provider
       ghostField,
-      reviewField,
+      generationField,
+      requestField,
+      passageField,
       markdownField,
-      noteField,
-      styleMarkerField,
       spellMarkerField,
-      attachField,
-      variantTargetField,
       variantPlainField,
       flashField,
+      textHighlightLayer,
 
-      // Read-only compartment — toggled during /idea streaming
+      // Read-only compartment — toggled while loading the document
       readonlyComp.of(EditorState.readOnly.of(true)),
 
       // Word wrap (essential for prose)
@@ -4766,15 +3808,10 @@ const workView = new EditorView({
       // line never parks flush under it.
       EditorView.scrollMargins.of(() => ({ top: 64, bottom: chatHeight })),
 
-      // The only instruction the product gives here: where files come from.
-      // Gone by the first keystroke. SPEC.md §Editor.
-      placeholder('Start writing, or open a file from the sidebar.'),
-
       // Visual theme
       editorTheme,
 
-      // Both gestures attach the passage to the composer instead of opening a
-      // window — one place for context, one place for answers.
+      // Passage gestures stay in the editor.
       EditorView.domEventHandlers({
         compositionstart(_event, view) { cancelSuggestion(); ghostClear(view); return false; },
         compositionend() { suggestSchedule(); return false; },
@@ -4791,48 +3828,22 @@ const workView = new EditorView({
             if (noteMarkEl.dataset.noteId && noteCards.has(noteMarkEl.dataset.noteId)) focusNote(noteMarkEl.dataset.noteId);
             return false;
           }
-          const mark = event.target.closest?.('.cm-slop');
-          if (!mark) {
-            const spellLocal = event.target.closest?.('.cm-spell-marker');
-            const spellMarker = spellLocal && view.state.field(spellMarkerField).find(item => item.from === Number(spellLocal.dataset.spellFrom));
-            if (spellMarker) { showSpellBubble(spellMarker, at.x, at.y); return false; }
-            const local = event.target.closest?.('.cm-style-marker');
-            const marker = local && view.state.field(styleMarkerField).find(item => item.from === Number(local.dataset.styleFrom));
-            // Reading the reason arms nothing — the bubble holds Add to
-            // context and Rewrite for when the writer decides.
-            if (marker) selectStyleMarker(marker, at);
-            // Only where a continuation is even possible — the same spot
-            // Cmd/Ctrl+Enter already requires — so an ordinary click to fix a
-            // word mid-paragraph never raises the bubble.
-            // Deferred longer than a selection's: a click at the end is
-            // most often the writer about to keep typing themselves.
-            else if (atParagraphEnd(view.state)) deferBubble(() => showContinueBubble(at.x, at.y), 450);
-            return false;
-          }
-          const finding = reviewFindings.find(item => item.id === Number(mark.dataset.slopId));
-          if (!finding) return false;
-          // Do not swallow the click: the caret still lands where the writer
-          // clicked, so an underlined sentence stays as editable as any other.
-          // The card opens for reading; the bubble offers context and rewrites.
-          openFinding(finding, false, at);
+          const spellLocal = event.target.closest?.('.cm-spell-marker');
+          const marker = spellLocal && view.state.field(spellMarkerField).find(item => item.from === Number(spellLocal.dataset.spellFrom));
+          if (marker) showSpellBubble(marker, at.x, at.y);
           return false;
         },
         // Reaching for the text dismisses a hover preview; the cards stay —
         // choosing is a click on a card, not a click in the draft.
         mousedown() { clearPlainPreview(); return false; },
-        contextmenu(event, view) {
-          // Always the native menu: selections attach through the bubble or
-          // Cmd/Ctrl+K instead, so right-click keeps copy and paste.
-          if (!MANUAL_ATTACH) return false;
-          const sel = view.state.selection.main;
-          if (sel.empty) return false; // no selection — show native menu
-          event.preventDefault();
-          attach({ from: sel.from, to: sel.to, text: view.state.sliceDoc(sel.from, sel.to) });
-          return true;
-        },
+
       }),
 
       EditorView.updateListener.of(suggestionUpdate),
+      // The island's key hint lives exactly as long as the suggestion it names.
+      EditorView.updateListener.of(update => {
+        if (noticeKey === 'passage-hint' && update.state.field(generationField)?.phase !== 'review') notify('', { key: 'passage-hint' });
+      }),
 
       // Save on every edit.
       // Anything that moves the text moves the cards beside it.
@@ -4850,49 +3861,32 @@ const workView = new EditorView({
       }),
 
       EditorView.updateListener.of(update => {
+        if (passageJob && (!update.state.field(passageField) || update.state.readOnly || loadingDocument || savePaused)) passageJob.abort();
+        if (generationJob && (!update.state.field(generationField) || update.state.readOnly || loadingDocument || savePaused)) generationJob.abort();
+        if (update.selectionSet && !update.docChanged) for (const ui of chatEditCards.values()) if (!ui.retarget.hidden) syncRetarget(ui);
         if (update.docChanged) {
+          liveSync?.changed(update.changes);
           editVersion++;
-          activeStyleFrom = null;
-          if (reviewState !== 'idle') { reviewState = 'stale'; reviewNotice = ''; }
           for (const request of chatRequests) request.changes.push(update.changes);
           for (const message of chatHistory) for (const edit of message.edits || []) {
             if (edit !== changingChatEdit) mapChatEdit(edit, update.changes);
           }
-          if (localFinding) mapChatEdit(localFinding, update.changes);
           syncChatEditCards();
-          if (!loadingDocument) { saveChat(); saveKeptStyle(); saveFindings(); }
-          // Undo follows edits before the replacement, but never overwrites
-          // subsequent work inside it, even if identical wording occurs nearby.
-          for (const undo of chatStream.querySelectorAll('.variant-undo-row button')) {
-            const from = Number(undo.dataset.from), to = from + undo.dataset.applied.length;
-            update.changes.iterChangedRanges((a, b) => {
-              if (a < to && b > from) undo.dataset.stale = 'true';
-            });
-            undo.dataset.from = String(update.changes.mapPos(from, 1));
-          }
+          if (!loadingDocument) saveChat();
           if (update.transactions.some(tr => tr.isUserEvent('undo') || tr.isUserEvent('redo'))) clearNotice('undo');
-          // No "out of date" notice here: findings are live-anchored — edits
-          // outside their ranges only shift the marks, edits inside drop
-          // them — so there is nothing stale to announce on every keystroke.
-          // Typing inside the attached passage is the writer fixing it
-          // themselves — drop the attachment rather than let a rewrite land on
-          // top of the edit. Deferred: a dispatch inside an update is illegal.
-          if (attached && update.state.field(attachField).size === 0) {
-            queueMicrotask(() => { detach(); });
-          }
           // A hover preview is a decoration over the old range; any edit drops it.
           if (plainPreview) queueMicrotask(clearPlainPreview);
-          if (reviewFindings.length) { syncReviewLabel(); saveFindings(); }
-          // Notes re-anchor against the new text (verbatim, else paragraph
-          // fallback) on the next tick — a dispatch inside an update is
-          // illegal, same as the detach below.
+          // Map anchors now; redraw and persist on the next tick because a
+          // dispatch inside an update listener is illegal.
           if (marginNotes.length && !loadingDocument) {
-            saveNotes();
-            queueMicrotask(() => { if (!loadingDocument && marginNotes.length) syncNoteMarks(); });
+            // A disk reload replaces everything without identifying which passage changed.
+            let replacedAll = false;
+            update.changes.iterChangedRanges((from, to) => { if (from === 0 && to === update.startState.doc.length) replacedAll = true; });
+            if (!replacedAll) mapNoteAnchors(marginNotes, update.startState.doc.toString(), update.state.doc.toString(), update.changes);
+            queueMicrotask(() => { if (!loadingDocument && marginNotes.length) { syncNoteMarks(); saveNotes(); } });
           }
           if (!loadingDocument) save();
-          autoReviewSchedule();
-          syncStyleScore();
+
         }
       }),
     ],
@@ -4962,25 +3956,19 @@ function dialog(title) {
 function loadFromDisk(text) {
   loadingDocument = true;
   autosaveHold = false;   // the document is replaced — no delete to guard
-  reviewState = 'idle'; reviewNotice = ''; keptStyle = []; removeLocalFinding();
   chatEditCards.clear();
-  scoreDetails.hidePopover();
   clearNotice('undo');
   for (const job of jobs) job.abort();
   cancelSuggestion();
   saveSnapshot('Before replacing document');
-  detach();
   workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: text } });
-  clearReview();
   discardNoteCards();
   docStorage.removeItem('wa-notes');
   docStorage.removeItem('wa-brief');
   positionBrief = null;
   if (briefSession) { briefSession.controller?.abort(); briefSession.card?.remove(); briefSession = null; }
-  chatHistory = []; chatStream.replaceChildren(); findingCards.clear();
+  chatHistory = []; chatStream.replaceChildren();
   docStorage.removeItem('wa-chat');
-  docStorage.removeItem('wa-kept-wording');
-  docStorage.removeItem('dismissed');
   setChatOpen(false);   // the stream was just emptied — don't leave × over nothing
   maybeCollapseIsland();
   loadingDocument = false;
@@ -4993,6 +3981,7 @@ function replaceDraft(text, message) {
   notifyUndo(message, () => { loadFromDisk(previous); save(); });
 }
 function saveToDisk() {
+  if (liveSync?.active) return;
   clearTimeout(diskTimer);
   if (savePaused || loadingDocument || diskHold || autosaveHold) return;
   // Routine saves are silent: autosave is expected to work, and a Saved /
@@ -5013,6 +4002,7 @@ function openDocumentText(text) {
   });
 }
 function flushSave() {
+  if (liveSync?.active) return liveSync.flush();
   if (saving) return savePromise;
   if (savePaused || loadingDocument || diskHold) return;
   const text = workView.state.doc.toString();
@@ -5049,6 +4039,7 @@ function flushSave() {
 }
 function save() {
   docStorage.setItem('wa-working', workView.state.doc.toString());
+  liveSync?.notesChanged();
   saveToDisk();
 }
 // ─── Disk drift ──────────────────────────────────────────────────────────────
@@ -5081,12 +4072,14 @@ function handleFreshDisk(current) {
   if (verdict === 'fast-forward') { adoptDiskText(current, true); return; }
   showDriftBanner(current);
 }
-// Take the disk copy without touching chat, findings or focus: the writer
+// Take the disk copy without touching chat or focus: the writer
 // changed nothing, so there is nothing of theirs to disturb. Announced with
 // a toast when it happens behind their back, silently at startup.
 function adoptDiskText(current, announce = false) {
+  liveSync?.close();
   workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: current.text } });
   noteDiskBaseline(current.text, current.revision);
+  liveSync?.connect(current);
   diskHold = false; hideDriftBanner(); save();
   if (announce) notify('Reloaded from disk — it changed outside Stilura.');
 }
@@ -5140,69 +4133,93 @@ document.getElementById('drift-keep').addEventListener('click', () => {
   if (!driftCurrent) return;
   // Adopt the fresh revision and keep typing: the next save overwrites the
   // disk copy. Overwriting loses nothing — the server snapshots the previous
-  // disk text into .litura-history before every write, and the browser keeps
+  // disk text into .stilura-history before every write, and the browser keeps
   // its own checkpoint in History.
   noteDiskBaseline(driftCurrent.text, driftCurrent.revision);
+  liveSync?.connect(driftCurrent);
   diskHold = false; hideDriftBanner(); save(); workView.focus();
 });
+function restoreDocument(current) {
+  documentKey = 'stilura:' + current.id + ':';
+  documentName = current.name ?? current.path.split(/[\\/]/).pop();
+  // Capture the old baseline before installing the current disk revision.
+  const driftBase = lastDiskBaseline();
+  noteDiskBaseline(current.text, current.revision);
+  const cached = docStorage.getItem('wa-working');
+  // Normalize disk text once; cached work already has the writer's formatting.
+  const opened = cached === null ? unwrapProse(current.text) : { text: cached, joined: 0 };
+  openDocumentText(opened.text);
+  loadingDocument = false;
+  savePaused = false;
+  restoreChat(); restoreNotes(); restoreBrief(); renderFileList();
+  if (cached !== null) {
+    const verdict = resolveDrift(workView.state.doc.toString(), current.text, driftBase?.text);
+    if (verdict === 'fast-forward') adoptDiskText(current);
+    else if (verdict === 'diverged') showDriftBanner(current);
+  }
+  else clearNotice('disk');
+  if (!diskHold) liveSync.connect(current);
+  if (opened.joined > 0) {
+    notifyUndo(`Opened ${documentName} — ${opened.joined} wrapped ${opened.joined === 1 ? 'line' : 'lines'} joined into paragraphs. Saves go to this file.`, () => {
+      workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: current.text } });
+      save();
+    });
+  }
+  return opened;
+}
 async function initializeDocument() {
   try {
     const current = await api('/draft');
-    documentKey = 'litura:' + current.id + ':';   // stable prefix: renaming it would strand browser drafts
-    documentName = current.name ?? current.path.split(/[\\/]/).pop();
-    // Captured before the baseline below is rewritten: it tells a reopen
-    // with unsaved work apart from a file that moved while we were away.
-    const driftBase = lastDiskBaseline();
-    noteDiskBaseline(current.text, current.revision);
-    const cached = docStorage.getItem('wa-working');
-    openDocumentText(cached ?? current.text);
-    loadingDocument = false;
+    restoreDocument(current);
     editorSetReadonly(workView, false);
-    // The text that was already here is not something the writer just
-    // finished. Automatic review is on by default, and opening a draft must
-    // not spend a model call on it — auditing the whole document is what
-    // `Check for slop` is for. A paragraph the writer touches gets a new key
-    // and is checked then.
-    for (const paragraph of reviewParagraphs(workView.state.doc.toString())) checkedSentences.add(paragraph.key);
-    syncReviewLabel();
-    savePaused = false;
-    try {
-      const kept = JSON.parse(docStorage.getItem('wa-kept-wording') || 'null');
-      if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
-    } catch {}
-    workView.dispatch({ effects: refreshStyleFx.of(null) });
-    restoreFindings(); restoreChat(); restoreNotes(); restoreBrief(); syncStyleScore(); renderFileList();
-    // A reopen with unsaved work is not a conflict when the disk stood
-    // still — only a disk that moved while we were away earns the banner.
-    if (cached !== null) {
-      const verdict = resolveDrift(workView.state.doc.toString(), current.text, driftBase?.text);
-      if (verdict === 'fast-forward') adoptDiskText(current);
-      else if (verdict === 'diverged') showDriftBanner(current);
-    }
-    else clearNotice('disk');
     saveToDisk();
-    const legacy = localStorage.getItem('wa-working');
-    if (legacy !== null && legacy !== current.text && !docStorage.getItem('legacy-offered')) {
-      notify('A draft from the previous Stilura version was found.', {
-        action: () => { exportText(legacy, 'legacy-draft.md'); docStorage.setItem('legacy-offered', 'yes'); },
-        label: 'Export', sticky: true,
-      });
-    }
   } catch (error) {
     // The try also covers restoring saved state, so a failure here is not always the network.
     console.error('[open draft]', error);
     notifyProblem({ say: 'Stilura could not open the draft.', act: 'retry', detail: error.message }, initializeDocument, 'Retry', 'disk');
   }
 }
+liveSync = liveDocument({
+  view: workView,
+  url: () => draftUrl('/live'),
+  getNotes: () => marginNotes,
+  readPendingNotes() {
+    try { return JSON.parse(docStorage.getItem('wa-note-pending') || '[]'); } catch { return []; }
+  },
+  writePendingNotes: entries => docStorage.setItem('wa-note-pending', JSON.stringify(entries)),
+  onSaved(current) { noteDiskBaseline(current.text, current.revision); savePaused = false; clearNotice('disk'); },
+  onError(error) { notify('Synchronization paused — your local changes are kept.', { sticky: true, key: 'disk', detail: error.message, action: () => liveSync.flush().catch(error => notify(error.message)), label: 'Retry' }); },
+  onConflict: showDriftBanner,
+  onNotes(notes, ready) {
+    if (!ready) return;
+    for (const note of [...marginNotes]) {
+      if (notes.some(item => item.id === note.id) || !note.text || noteCards.get(note.id)?.querySelector('textarea')) continue;
+      removeNoteSilent(note.id);
+    }
+    for (const incoming of notes) {
+      let note = marginNotes.find(item => item.id === incoming.id);
+      const editing = noteCards.get(incoming.id)?.querySelector('textarea');
+      if (note) Object.assign(note, incoming);
+      else { note = { ...incoming }; marginNotes.push(note); }
+      if (note.resolved && !note.work && !editing) {
+        const card = noteCards.get(note.id);
+        if (card) { railAnchors.delete(card); railHomes.delete(card); card.remove(); noteCards.delete(note.id); }
+      } else if ((!note.resolved || note.work) && !noteCards.has(note.id)) noteCards.set(note.id, railAdd(noteCard(note), () => noteAnchor(note.id)));
+    }
+    syncNoteMarks();
+    docStorage.setItem('wa-notes', JSON.stringify({ notes: marginNotes }));
+  },
+});
 initializeDocument();
 async function checkDiskDrift() {
+  if (liveSync?.active) { await liveSync.flush().catch(() => {}); return; }
   if (loadingDocument || switchingDocument || saving || autosaveHold) return;
   const key = documentKey;
   try {
     const current = await api(draftUrl());
     if (key !== documentKey || switchingDocument) return;
     if (current.revision !== diskRevision) handleFreshDisk(current);
-  } catch (error) { notify('Cannot check disk: ' + error.message, { sticky: true, key: 'disk' }); }
+  } catch (error) { notify(`Unable to check the file on disk: ${error.message}. Your draft is kept.`, { sticky: true, key: 'disk', action: checkDiskDrift, label: 'Try again' }); }
 }
 window.addEventListener('focus', () => { checkDiskDrift(); if (!sidebar.classList.contains('is-closed')) refreshFileList(); });
 document.addEventListener('visibilitychange', () => {
@@ -5232,7 +4249,7 @@ document.getElementById('file-export').addEventListener('click', async () => {
   refreshFileList();
   workView.focus();
   } catch (error) {
-    if (error.name !== 'AbortError') notify(`Could not export: ${error.message}`, { sticky: true });
+    if (error.name !== 'AbortError') notify(`Unable to save a copy: ${error.message}. Your draft is unchanged.`, { sticky: true, action: () => document.getElementById('file-export').click(), label: 'Try again' });
   }
 });
 document.addEventListener('keydown', event => {
@@ -5252,7 +4269,7 @@ async function importFile(file) {
     const opened = unwrapProse(text);
     replaceDraft(opened.text, opened.joined > 0 ? `Imported ${file.name} — ${opened.joined} wrapped lines joined` : `Imported ${file.name}`);
     refreshFileList();
-  } catch (error) { notify('Import failed: ' + error.message, { sticky: true }); }
+  } catch (error) { notify(`Unable to open ${file.name}: ${error.message}. Your draft is unchanged.`, { sticky: true, action: () => importFile(file), label: 'Try again' }); }
 }
 // ─── File sidebar ────────────────────────────────────────────────────────────
 //
@@ -5260,7 +4277,7 @@ async function importFile(file) {
 //  Rows name the workspace Markdown and text files — opening one switches the
 //  single active document (and its saves) onto that file, so what is on screen
 //  is always what is being saved. Each file keeps its own browser copy, chat
-//  and findings, which come back when it is opened again.
+//  which come back when it is opened again.
 const sidebar = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
 const sidebarToggleSide = document.getElementById('sidebar-toggle-side');
@@ -5369,7 +4386,7 @@ async function refreshFileList() {
 }
 // Opening a file switches the single active document — and its saves — onto
 // it. The previous file is untouched: its disk copy keeps whatever was last
-// saved, and its browser copy, chat and findings wait under their own storage
+// saved, and its browser copy, chat waits under their own storage
 // key until it is opened again.
 async function switchDocument(name) {
   if (loadingDocument || switchingDocument || desktopSaving || name === documentName) { workView.focus(); return; }
@@ -5380,89 +4397,51 @@ async function switchDocument(name) {
   try {
   // Finish both the in-flight save and any newer keystrokes before switching.
   try {
+    if (savePaused || diskHold) throw new Error('Resolve the draft save error or disk conflict before switching files.');
     clearTimeout(diskTimer);
-    if (!savePaused && !diskHold && !autosaveHold) await flushSave();
+    if (!autosaveHold) await flushSave();
     if (!savePaused && !diskHold && !autosaveHold) await flushSave();
     clearTimeout(diskTimer);
-    saveChat(); saveFindings(); saveKeptStyle(); saveNotes(); saveBrief();
+    saveChat(); saveNotes(); saveBrief();
+    if (liveSync?.active) await liveSync.flush();
+    if (savePaused || diskHold || (!autosaveHold && workView.state.doc.toString() !== diskText)) throw new Error('The draft has not been saved.');
     saveSnapshot('Before switching document');
-  } catch {}
+    if (desktop) await localStorage.flush();
+  } catch (error) {
+    notify(`Unable to save ${documentName}: ${error.message}. The current draft stays open.`, {
+      sticky: true, key: 'disk', label: 'Retry saving',
+      action: diskHold ? null : () => { savePaused = false; return switchDocument(name); },
+    });
+    return;
+  }
   autosaveHold = false;   // moving on ends the deleted-file episode
   let current;
   try {
     current = await api('/draft/open', { method: 'POST', body: JSON.stringify({ name }) });
-  } catch (error) { notify(`Could not open ${name}: ${error.message}`, { sticky: true }); return; }
+  } catch (error) { notify(`Unable to open ${name}: ${error.message}. The current draft stays open.`, { sticky: true, action: () => switchDocument(name), label: 'Try again' }); return; }
+  liveSync?.close();
   loadingDocument = true;
   for (const job of jobs) job.abort();
   cancelSuggestion();
   // Per-document UI bound to the old text goes; the old file's own state was
   // stored under its key above and is restored when it is opened again.
-  detach();
-  reviewState = 'idle'; reviewNotice = ''; keptStyle = []; removeLocalFinding();
   chatEditCards.clear();
-  scoreDetails.hidePopover();
   clearNotice('undo');
   clearNotice('disk');
-  discardFindingCards();
   discardNoteCards();
-  for (const stale of document.querySelectorAll('.chat-variants')) stale.remove();
   positionBrief = null;
   briefSession?.controller?.abort();
   briefSession = null;
   clearPlainPreview();
-  reviewFindings = [];
-  focusedFindingId = null; jumpFrom = -1;
-  checkedSentences.clear();
   chatHistory = []; chatStream.replaceChildren();
   setChatOpen(false);   // the stream was just emptied — don't leave × over nothing
   maybeCollapseIsland();
   hideDriftBanner(); diskHold = false;
   // Retarget storage and the disk baseline onto the new file first: every
   // restore below reads under the new key.
-  documentKey = 'litura:' + current.id + ':';   // stable prefix: renaming it would strand browser drafts
-  documentName = current.path.split(/[\\/]/).pop();
-  // Captured before the baseline below is rewritten: it tells a reopen
-  // with unsaved work apart from a file that moved while we were away.
-  const driftBase = lastDiskBaseline();
-  noteDiskBaseline(current.text, current.revision);
-  const cached = docStorage.getItem('wa-working');
-  // Hard-wrapped prose opens flowing: a lone newline inside a paragraph is a
-  // Markdown soft break, so join wrapped lines back and keep real paragraph
-  // breaks and structure. A cached copy was already unwrapped when saved.
-  const opened = cached === null ? unwrapProse(current.text) : { text: cached, joined: 0 };
-  openDocumentText(opened.text);
-  workView.dispatch({ effects: setReviewFx.of([]) });
-  markVariantTarget(null);
-  loadingDocument = false;
-  savePaused = false;
-  // The text that was already here is not something the writer just
-  // finished. Opening spends no model call, same as at startup: auditing the
-  // whole document is what `Check for slop` is for.
-  for (const paragraph of reviewParagraphs(workView.state.doc.toString())) checkedSentences.add(paragraph.key);
-  syncReviewLabel();
-  try {
-    const kept = JSON.parse(docStorage.getItem('wa-kept-wording') || 'null');
-    if (kept?.document === workView.state.doc.toString() && Array.isArray(kept.marks)) keptStyle = kept.marks.filter(mark => chatEditMatches(mark, kept.document));
-  } catch {}
-  workView.dispatch({ effects: refreshStyleFx.of(null) });
-  restoreFindings(); restoreChat(); restoreNotes(); restoreBrief(); syncStyleScore(); renderFileList();
-  // A reopen with unsaved work is not a conflict when the disk stood
-  // still — only a disk that moved while we were away earns the banner.
-  if (cached !== null) {
-    const verdict = resolveDrift(workView.state.doc.toString(), current.text, driftBase?.text);
-    if (verdict === 'fast-forward') adoptDiskText(current);
-    else if (verdict === 'diverged') showDriftBanner(current);
-  }
-  else clearNotice('disk');
+  const opened = restoreDocument(current);
   refreshFileList();
-  if (opened.joined > 0) {
-    notifyUndo(`Opened ${documentName} — ${opened.joined} wrapped ${opened.joined === 1 ? 'line' : 'lines'} joined into paragraphs. Saves go to this file.`, () => {
-      workView.dispatch({ changes: { from: 0, to: workView.state.doc.length, insert: current.text } });
-      save();
-    });
-  } else {
-    notify(`Opened ${documentName}. Saves go to this file.`);
-  }
+  if (!opened.joined) notify(`Opened ${documentName}. Saves go to this file.`);
   workView.focus();
   } finally {
     switchingDocument = false;
@@ -5477,7 +4456,7 @@ sidebarToggleSide.addEventListener('click', toggleSidebar);
 // of the sidebar a click can miss, so it is the only place that needs wiring.
 document.getElementById('sidebar-scrim').addEventListener('click', () => setSidebar(false));
 fileFilter.addEventListener('input', renderFileList);
-setSidebar((() => { try { return localStorage.getItem('wa-sidebar') === 'open'; } catch { return false; } })(), false);
+setSidebar(false, false);
 
 const fileInput = document.getElementById('file-input');
 document.getElementById('file-open').addEventListener('click', () => fileInput.click());
@@ -5547,7 +4526,7 @@ document.getElementById('file-history').addEventListener('click', async () => {
     versions = [...local, ...snapshots].sort((a, b) => b.at.localeCompare(a.at));
     renderHistory();
     modal.append(chatEl('small', 'history-note',
-      'Last 20 disk versions and 10 browser checkpoints. Disk copies sit beside the draft in .litura-history and are never deleted automatically.'));
+      'Last 20 disk versions and 10 browser checkpoints. Disk copies sit beside the draft in .stilura-history and are never deleted automatically.'));
   } catch (error) { list.append(chatEl('p', 'history-note', error.message)); }
 });
 
@@ -5555,7 +4534,6 @@ document.getElementById('file-history').addEventListener('click', async () => {
 
 workView.scrollDOM.addEventListener('scroll', () => { hideNotePlus(); reanchorBubble(); }, { passive: true });
 workView.focus();
-syncStyleScore();
 
 window.addEventListener('stilura-storage-error', event => {
   notify(event.detail, { sticky: true, key: 'backup', action: () => localStorage.flush().catch(error => notify(error.message)), label: 'Retry saving' });

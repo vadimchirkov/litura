@@ -7,7 +7,6 @@ import { once } from 'node:events';
 import http from 'node:http';
 import { documentStore } from './document-store.js';
 import { replacementTarget, newerVersion, wordDiff } from './editing.js';
-import { mergeReviewFindings, locateFindings } from './review.js';
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stilura-safety-'));
 const filename = path.join(temp, 'draft.md');
@@ -26,8 +25,8 @@ const second = store.write('confirmed replacement', store.read().revision);
 assert(store.history().some(item => item.text === 'external edit'));
 assert(store.history().some(item => item.text === ''));
 // Corrupt snapshots must not hide the intact ones.
-fs.writeFileSync(path.join(temp, 'draft.md.litura-history', '1-abc.json'), 'not json');
-fs.writeFileSync(path.join(temp, 'draft.md.litura-history', '2-def.json'), JSON.stringify({ nope: true }));
+fs.writeFileSync(path.join(temp, 'draft.md.stilura-history', '1-abc.json'), 'not json');
+fs.writeFileSync(path.join(temp, 'draft.md.stilura-history', '2-def.json'), JSON.stringify({ nope: true }));
 assert(store.history().every(item => typeof item.text === 'string' && typeof item.at === 'string' && typeof item.revision === 'string'));
 assert(store.history().some(item => item.text === 'external edit'));
 assert.notEqual(documentStore(path.join(temp, 'other.md')).read().id, second.id);
@@ -73,10 +72,6 @@ for (const [before, after] of [
 assert.equal(wordDiff('the team shipped it in March', 'the team shipped the thing in April').filter(op => op.type === 'ins').length, 3);
 assert.deepEqual(wordDiff('same', 'same'), [{ type: 'keep', text: 'same' }]);
 
-assert.equal(locateFindings('Shared quote.', [{ code: 'generic-prose', quote: 'Shared quote.' }, { code: 'level-7-paragraph-flow', quote: 'Shared quote.' }]).length, 2);
-const globals = Array.from({ length: 8 }, (_, i) => ({ code: 'level-1-whole-essay', quote: `quote-${i}` }));
-assert.equal(mergeReviewFindings([globals, [{ code: 'generic-prose', quote: 'local' }]]).length, 9);
-
 // Real HTTP server, disposable draft, no provider calls or credential changes.
 const child = spawn(process.execPath, ['index.js'], {
   cwd: import.meta.dirname,
@@ -102,18 +97,18 @@ try {
   });
   assert.equal((await request('/', 'GET')).status, 200);
   assert.equal((await request('/', 'HEAD')).status, 405);
-  assert.equal((await request('/review', 'POST', null)).status, 400);
-  assert.equal((await request('/review', 'POST', [])).status, 400);
-  assert.equal((await request('/review', 'POST', { document: {} })).status, 400);
-  assert.equal((await request('/review', 'POST', { document: '' }, { Origin: 'https://evil.example' })).status, 403);
+  assert.equal((await request('/rewrite', 'POST', null)).status, 400);
+  assert.equal((await request('/rewrite', 'POST', [])).status, 400);
+  assert.equal((await request('/rewrite', 'POST', { document: {} })).status, 400);
+  assert.equal((await request('/rewrite', 'POST', { document: '' }, { Origin: 'https://evil.example' })).status, 403);
   const invalidHostStatus = await new Promise((resolve, reject) => {
     const req = http.get(url, { headers: { Host: 'evil.example' } }, res => { res.resume(); resolve(res.statusCode); });
     req.on('error', reject);
   });
   assert.equal(invalidHostStatus, 403);
-  assert.equal((await request('/review', 'POST', {}, { 'Content-Type': 'text/plain' })).status, 415);
-  assert.equal((await request('/review', 'POST', { document: '' })).status, 200);
-  assert.equal((await request('/review', 'POST', { document: 'x'.repeat(60_001) })).status, 413);
+  assert.equal((await request('/rewrite', 'POST', {}, { 'Content-Type': 'text/plain' })).status, 415);
+  assert.equal((await request('/review', 'POST', { document: '' })).status, 404);
+  assert.equal((await request('/rewrite', 'POST', { document: 'x'.repeat(60_001) })).status, 413);
   assert.equal((await request('/brief', 'POST', {})).status, 400);
   assert.equal((await request('/brief', 'POST', { document: '' })).status, 200);
   assert.equal((await request('/brief', 'POST', { document: 'x'.repeat(60_001) })).status, 413);

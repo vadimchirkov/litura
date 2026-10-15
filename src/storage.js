@@ -1,4 +1,13 @@
+import { migrateStorageEntries } from '../storage-migration.js';
+
 export async function openStorage({ desktop, browser = window.localStorage, request = fetch, onError }) {
+  const saved = Array.from({ length: browser.length }, (_, index) => {
+    const key = browser.key(index);
+    return [key, browser.getItem(key)];
+  }).filter(([key, value]) => key !== null && value !== null);
+  for (const [key, value] of migrateStorageEntries(saved)) {
+    if (browser.getItem(key) !== value) browser.setItem(key, value);
+  }
   if (!desktop) return browser;
   const response = await request('/api/desktop/storage');
   if (!response.ok) throw new Error('Could not open the desktop backup.');
@@ -33,7 +42,7 @@ export async function openStorage({ desktop, browser = window.localStorage, requ
   // Import once; an old origin must not resurrect keys deleted on disk.
   if (entries.size === 0) for (let i = 0; i < browser.length; i++) {
     const key = browser.key(i);
-    if (/^(wa-|litura:)/.test(key) && !entries.has(key)) change(key, browser.getItem(key));
+    if (/^(wa-|stilura:)/.test(key) && !entries.has(key)) change(key, browser.getItem(key));
   }
   await flush();
   return {
@@ -43,5 +52,16 @@ export async function openStorage({ desktop, browser = window.localStorage, requ
     setItem: (key, value) => change(key, String(value)),
     removeItem: key => change(key, null),
     flush,
+    async refresh() {
+      await flush();
+      const response = await request('/api/desktop/storage');
+      if (!response.ok) throw new Error('Could not refresh the desktop backup.');
+      const fresh = new Map((await response.json()).entries);
+      for (const [key, value] of pending) {
+        if (value === null) fresh.delete(key); else fresh.set(key, value);
+      }
+      entries.clear();
+      for (const [key, value] of fresh) entries.set(key, value);
+    },
   };
 }

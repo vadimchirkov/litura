@@ -36,7 +36,7 @@ Does not: decide whether text was written by AI; write the piece for you; work w
 3. Start in one command, text stays a local Markdown file.
 4. Works with the model/provider they already have.
 ---
-Below the line (reference sections): updating, configuration, agent/MCP integration, development.
+Below the line (reference sections): updating, configuration, agent integration, development.
 
 ## 6. Evidence
 No measured quality results yet. Do not claim accuracy, time saved, or "less AI-like" scores.
@@ -67,4 +67,4 @@ Primary: `npx stilura`. Second: download the desktop app.
 | `style.md` | your style rules | what the model must keep and avoid |
 
 ## 11. Out of scope
-HTTP endpoints, MCP tools, skill install, release process, update signing, environment variables. They stay in the README's reference part and in `SPEC.md`.
+HTTP endpoints, skill install, release process, update signing, environment variables. They stay in the README's reference part and in `SPEC.md`.

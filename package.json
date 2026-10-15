@@ -21,26 +21,28 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "stilura": "index.js",
-    "stilura-mcp": "mcp-server.mjs"
+    "stilura": "index.js"
   },
   "engines": {
     "node": ">=20"
   },
   "files": [
     "index.js",
-    "mcp-server.mjs",
     "tasks.js",
     "brief.js",
     "chat-edits.js",
     "pi.js",
     "markdown.js",
     "review.js",
-    "review-model.js",
-    "review-prompt.js",
     "document-store.js",
     "desktop.js",
+    "storage-migration.js",
     "editing.js",
+    "notes.js",
+    "live-session.js",
+    "session-client.js",
+    "text-change.js",
+    "work.js",
     "suggestions.js",
     "public",
     "skills/stilura/SKILL.md",
@@ -52,26 +54,22 @@
     "start": "node index.js",
     "build": "esbuild src/app.js --bundle --outfile=public/app.js --format=iife",
     "build:server": "node scripts/build-server.mjs",
-    "build:artifact": "node scripts/build-artifact.mjs",
     "desktop:prepare": "npm run build && npm run build:server && node scripts/fetch-node.mjs",
     "desktop": "tauri dev",
     "desktop:build": "tauri build",
     "tauri": "tauri",
     "smoke:desktop": "node scripts/smoke-desktop.mjs",
-    "check": "node --check index.js && node --check pi.js && node --check tasks.js && node --check mcp-server.mjs && node --check review-model.js && node --check deepcheck.js && npm run build && node selfcheck.js && node tests/suggestions.mjs && node tests/mcp.mjs && node tests/oauth.mjs && node safetycheck.js && node tests/persistence.mjs && node tests/ui.mjs",
-    "test:mcp": "node tests/mcp.mjs",
-    "mcp": "node mcp-server.mjs",
+    "check": "node --check index.js && node --check pi.js && node --check tasks.js && npm run build && node selfcheck.js && node tests/suggestions.mjs && node tests/generation.mjs && node tests/passage.mjs && node tests/generation-http.mjs && node tests/tasks-http.mjs && node tests/live.mjs && node tests/work.mjs && node tests/live-http.mjs && node tests/oauth.mjs && node safetycheck.js && node tests/storage-migration.mjs && node tests/persistence.mjs && node tests/ui.mjs",
     "test:browser": "node tests/browser-fixture.mjs",
     "check:suggestions": "node tests/suggestions.mjs",
     "eval:suggestions": "node scripts/evaluate-suggestions.mjs",
-    "check:deep": "node deepcheck.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@codemirror/collab": "^6.1.1",
+    "@codemirror/state": "^6.7.6",
     "@earendil-works/pi-ai": "^0.87.1",
-    "@earendil-works/pi-coding-agent": "^0.87.1",
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "zod": "^4.6.5"
+    "@earendil-works/pi-coding-agent": "^0.87.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.5",

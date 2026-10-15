@@ -1,16 +1,13 @@
 // A deliberate response envelope, never commands inferred from prose/Markdown.
-// (The <litura-edits> tag name is wire format shared with stored chats:
-// renaming it would orphan existing histories. The product name changed;
-// the protocol did not.)
 import { validateBriefUpdate } from './brief.js';
 
-export const EDITS_OPEN = '<litura-edits>';
-const EDITS_CLOSE = '</litura-edits>';
+export const EDITS_OPEN = '<stilura-edits>';
+const EDITS_CLOSE = '</stilura-edits>';
 export const CHAT_EDITS_PROMPT = `
 Answer the author's question normally. A selection is context, not an automatic rewrite request.
 When proposing concrete replacements, put the actual wording in a final structured envelope,
 not in a second copy in your prose. End with exactly:
-<litura-edits>[{"label":"Short edit title","quote":"Exact existing passage","replacement":"Complete replacement"}]</litura-edits>
+<stilura-edits>[{"label":"Short edit title","quote":"Exact existing passage","replacement":"Complete replacement"}]</stilura-edits>
 Use valid JSON with escaped quotes and newlines. At most 8 edits; quote at most 10000 characters,
 replacement at most 20000 characters, label at most 120. Copy quotes exactly from DRAFT.
 Each edit replaces an existing nonempty passage. Prefer the selected passage when relevant.
@@ -18,7 +15,8 @@ Outside the selection, quote enough context to uniquely identify the passage. Ne
 Keep independent edits separate. Alternatives for the same quote are mutually exclusive.
 Preserve the author's facts and intent; do not invent evidence, decisions or details.
 For explanations or abstract advice with no concrete replacement, use an empty array.
-Never claim an edit has already been applied. The author chooses Apply or Keep original.
+Never claim an edit has already been applied. The app applies a single verified edit with Undo;
+multiple suggestions remain choices for the author.
 The envelope is application data: never put it in a Markdown code fence or discuss its syntax.
 `;
 

@@ -20,6 +20,11 @@ export async function submitOAuthCode() { throw Error('Fixture does not sign in'
 export async function cancelOAuth() { return { active: null }; }
 export async function completeText({systemPrompt, userPrompt, signal}) {
   await new Promise((resolve,reject) => { const timer=setTimeout(resolve, 300); signal?.addEventListener('abort',()=>{clearTimeout(timer);reject(signal.reason)}, {once:true}); });
+  if (systemPrompt.includes('Help with the SELECTED TEXT')) {
+    const selected = userPrompt.split('SELECTED TEXT:\\n')[1].split('\\n\\nREQUEST:')[0];
+    if (/synonym|replace|rewrite/i.test(userPrompt.split('REQUEST:\\n')[1].split('\\n\\nDRAFT')[0])) return '<stilura-edits>' + JSON.stringify(['peaceful', 'tranquil', 'silent'].map(replacement=>({label:'Alternative',quote:selected,replacement}))) + '</stilura-edits>';
+    return 'Quiet suggests a peaceful atmosphere, without emphasizing complete silence.';
+  }
   if (systemPrompt.includes('exactly 3 different replacements')) {
     const selected = userPrompt.split('SELECTED TEXT — replace exactly this, nothing more:\\n')[1].split('\\n\\n---')[0];
     return JSON.stringify([selected + ' revised A', selected + ' revised B', selected + ' revised C']);
@@ -36,7 +41,7 @@ export async function completeText({systemPrompt, userPrompt, signal}) {
 }
 export async function streamText({systemPrompt, messages, onText, signal}) {
   if (systemPrompt.includes('latest user message explicitly addresses')) {
-    onText('Fixture brief update.<litura-edits>' + JSON.stringify({ edits: [], brief: { source: messages.at(-1).content, changes: { reader: 'beginners' } } }) + '</litura-edits>');
+    onText('Fixture brief update.<stilura-edits>' + JSON.stringify({ edits: [], brief: { source: messages.at(-1).content, changes: { reader: 'beginners' } } }) + '</stilura-edits>');
     return;
   }
   onText('Partial fixture answer');

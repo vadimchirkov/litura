@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { completeText, getAgentStatus } from '../pi.js';
-import { suggestionPrompts, parseSuggestion } from '../suggestions.js';
+import { suggestionPrompts, requestSuggestion } from '../suggestions.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const filters = process.env.SUGGEST_CASE?.split(',');
@@ -19,19 +19,22 @@ const modes = (process.env.SUGGEST_MODES || 'production').split(',');
 if (modes.some(mode => !['production', 'short-style', 'local-context'].includes(mode))) throw new Error('Unknown SUGGEST_MODES value');
 const styleFile = process.env.STYLE_FILE || path.join(root, 'style.md');
 const style = fs.readFileSync(styleFile, 'utf8').trim();
-const { defaultSelection: selection } = await getAgentStatus();
+// SUGGEST_AGENT=provider/model compares candidate continuation models.
+const [agentProvider, ...agentModel] = (process.env.SUGGEST_AGENT || '').split('/');
+const selection = agentProvider ? { provider: agentProvider, model: agentModel.join('/') } : (await getAgentStatus()).defaultSelection;
 if (!selection) throw new Error('No authenticated Pi model is available');
 const reportFile = path.resolve(process.env.SUGGEST_REPORT || path.join(root, 'tmp/suggestion-evaluation.json'));
-const report = { startedAt: new Date().toISOString(), model: selection, plannedCalls: cases.length * runs * modes.length, fixtures: 'Authored bilingual regression examples; not an independent benchmark.', results: [] };
+const report = { startedAt: new Date().toISOString(), model: selection, plannedCalls: cases.length * runs * modes.length, maxCalls: cases.length * runs * modes.length * 2, fixtures: 'Authored bilingual regression examples; not an independent benchmark.', results: [] };
 fs.mkdirSync(path.dirname(reportFile), { recursive: true });
-console.log(`Suggestion evaluation: ${selection.provider}/${selection.model}, ${cases.length * runs * modes.length} calls`);
+console.log(`Suggestion evaluation: ${selection.provider}/${selection.model}, ${cases.length * runs * modes.length} requests, at most two calls per request`);
 let failures = 0;
 evaluation: for (const test of cases) for (let run = 1; run <= runs; run++) for (const mode of modes) {
   if (report.results.length && delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
   // These experiments stay out of production until their output is reviewed.
   const prefix = mode === 'local-context' ? test.prefix.slice(-1500) : test.prefix;
   const suffix = mode === 'local-context' ? (test.suffix || '').slice(0, 750) : (test.suffix || '');
-  const prompts = suggestionPrompts({ document: prefix + suffix, cursor: prefix.length, style: mode === 'short-style' ? '' : style });
+  const input = { document: prefix + suffix, cursor: prefix.length, style: mode === 'short-style' ? '' : style };
+  const prompts = suggestionPrompts(input);
   const result = {
     id: test.id, run, mode, prefix: test.prefix, suffix: test.suffix || '', rubric: test.rubric,
     promptHash: createHash('sha256').update(prompts.systemPrompt + prompts.userPrompt).digest('hex'),
@@ -40,8 +43,12 @@ evaluation: for (const test of cases) for (let run = 1; run <= runs; run++) for 
   };
   const started = performance.now();
   try {
-    result.raw = await completeText({ ...prompts, selection, continuation: true, signal: AbortSignal.timeout(30_000) });
-    result.suggestion = result.raw ? parseSuggestion(test.prefix, result.raw) : '';
+    result.calls = 0;
+    result.suggestion = await requestSuggestion({ ...input, selection, signal: AbortSignal.timeout(30_000) }, async request => {
+      result.calls++;
+      result.raw = await completeText(request);
+      return result.raw;
+    });
     result.combined = test.prefix + result.suggestion + (test.suffix || '');
     if (test.empty && result.suggestion) result.errors.push('Expected abstention');
     if (test.expected && !result.suggestion.toLowerCase().includes(test.expected.toLowerCase())) result.errors.push(`Expected continuation containing ${JSON.stringify(test.expected)}`);

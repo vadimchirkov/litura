@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = (process.env.STILURA_NODE_VERSION ?? process.env.LITURA_NODE_VERSION) || 'v24.21.0';
+const VERSION = (process.env.STILURA_NODE_VERSION) || 'v24.21.0';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const OUT_DIR = path.join(ROOT, 'src-tauri', 'binaries');
 
@@ -51,7 +51,7 @@ if (!platform) throw new Error(`No Node build mapped for ${triple}. Add it to sc
 
 const windows = platform.startsWith('win');
 const target = path.join(OUT_DIR, `stilura-server-${triple}${windows ? '.exe' : ''}`);
-if (fs.existsSync(target) && !(process.env.STILURA_NODE_FORCE ?? process.env.LITURA_NODE_FORCE)) {
+if (fs.existsSync(target) && !(process.env.STILURA_NODE_FORCE)) {
   console.log(`[node] ${path.basename(target)} is already here — delete it or set STILURA_NODE_FORCE=1 to refetch.`);
   process.exit(0);
 }

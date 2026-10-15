@@ -4,6 +4,10 @@ Stilura (renamed from Litura) follows [semantic versioning](https://semver.org).
 
 ## Unreleased
 
+- Removed review/scoring APIs, Lens demo, unused helpers, legacy note-status polling, old environment aliases and desktop migration. Document storage now uses Stilura names, with a guarded transfer of existing files and saved chat state.
+
+- Removed the stdio MCP server, CLI command and direct SDK dependency. Agent integration uses the existing local HTTP API.
+
 - Fixed cross-document Undo and saves from concurrent tabs. File writes now keep revision checks and history; workspace APIs reject symbolic links.
 - Desktop state survives server port changes. Closing, changing folders, and installing updates wait for confirmed saves. Partial brief answers survive reloads, and Save as falls back to a download where the system file-picker API is unavailable.
 - Fixed the desktop app crash on macOS ("The server stopped before it was ready"): ad-hoc code signing now carries the JIT entitlements that V8 needs under the hardened runtime. The smoke test verifies the sidecar signature.

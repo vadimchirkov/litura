@@ -9,6 +9,36 @@ export function replacementTarget(document, target) {
   return document.slice(target.from, target.to) === target.text;
 }
 
+// Every range belongs to the original document: replacements never cascade.
+export function patchRanges(document, edits) {
+  if (!Array.isArray(edits) || !edits.length) throw new Error('At least one patch is required');
+  const ranges = [];
+  for (const edit of edits) {
+    if (!edit || typeof edit.old !== 'string' || !edit.old || typeof edit.new !== 'string') throw new Error('Each patch requires nonempty old and string new');
+    if (edit.from !== undefined && (!Number.isInteger(edit.from) || edit.from < 0 || edit.all)) throw new Error('Use a valid from offset or all, not both');
+    const matches = [];
+    if (edit.from !== undefined) {
+      if (document.slice(edit.from, edit.from + edit.old.length) === edit.old) matches.push(edit.from);
+    } else {
+      for (let at = document.indexOf(edit.old); at >= 0; at = document.indexOf(edit.old, at + (edit.all ? edit.old.length : 1))) {
+        matches.push(at);
+        if (matches.length + ranges.length > 10_000) throw new Error('A batch supports at most 10,000 replacements; split the edits');
+        if (!edit.all && matches.length > 1) break;
+      }
+    }
+    if (!matches.length) throw new Error('Patch old text not found');
+    if (!edit.all && matches.length !== 1) throw new Error('Patch old text is ambiguous; supply from or all: true');
+    for (const from of matches) ranges.push({ from, to: from + edit.old.length, text: edit.new });
+  }
+  ranges.sort((a, b) => a.from - b.from);
+  let end = 0;
+  for (const range of ranges) {
+    if (range.from < end) throw new Error('Patch ranges overlap');
+    end = range.to;
+  }
+  return ranges;
+}
+
 export function newerVersion(latest, current) {
   const parse = value => /^(\d+)\.(\d+)\.(\d+)$/.exec(value ?? '')?.slice(1).map(Number);
   const a = parse(latest), b = parse(current);
@@ -20,10 +50,6 @@ export function newerVersion(latest, current) {
 // Word-level edit script: which words a rewrite keeps, drops and adds, in
 // reading order, so the change can be shown one word at a time instead of as
 // one opaque block. Spaces the rewrite did not touch stay untouched.
-//
-// NOTE: kept as a noted option for another place (e.g. history compare or a
-// future coloured diff). Rewrite variants currently preview on a plain white
-// sheet with no red/green — this helper is not on that path right now.
 //
 // ponytail: plain LCS table, O(words²) — a sentence or a paragraph, not a
 // book. Past the guard it falls back to a single changed run, which is what
@@ -73,7 +99,7 @@ function coarseDiff(a, b) {
 // - 'fast-forward': the writer changed nothing since the last save — take
 //   the disk copy silently, no question asked.
 // - 'diverged': both sides moved since the baseline — ask, but never modal.
-// An unknown baseline (legacy installs) can only answer 'diverged': without
+// An unknown baseline can only answer 'diverged': without
 // proof the writer stood still, silence would discard their work.
 export function resolveDrift(local, disk, lastDisk) {
   if (local === disk) return 'in-sync';
@@ -81,16 +107,19 @@ export function resolveDrift(local, disk, lastDisk) {
   return 'diverged';
 }
 
-// Mark bubble box inside `area` (the writing pane below the header). Above
-// the line, clear of its words; below with a gap when the header leaves no
-// room above; pinned inside when the pane is narrower than the bubble.
-export function clampBubble(x, y, size, area) {
+// Mark bubble box inside `area` (the writing pane below the header). `top` and
+// `bottom` are the edges of the text the bubble acts on: it stands above that
+// text with a gap, so the words stay readable under it; below the text when the
+// header leaves no room above; pinned inside when the pane is narrower than the
+// bubble. `side` says which, so the entrance can come from the text.
+export const BUBBLE_GAP = 8;
+export function clampBubble(x, top, size, area, bottom = top) {
   const width = Math.min(size.w, area.right - area.left);
   const left = Math.max(area.left, Math.min(x - width / 2, area.right - width));
-  let top = y - size.h - 4;
-  if (top < area.top) top = y + 20;
-  if (top + size.h > area.bottom) top = Math.max(area.top, area.bottom - size.h);
-  return { left, top };
+  let y = top - BUBBLE_GAP - size.h, side = 'above';
+  if (y < area.top) { y = bottom + BUBBLE_GAP; side = 'below'; }
+  if (y + size.h > area.bottom) y = Math.max(area.top, area.bottom - size.h);
+  return { left, top: y, side };
 }
 
 // A source line that is plain prose, not Markdown structure. Anything

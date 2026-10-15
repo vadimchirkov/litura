@@ -1,4 +1,18 @@
-import { trimOverlap } from './review.js';
+import { insertionText } from './review.js';
+
+// A continuation needs the nearby text, not the whole draft; a long draft
+// overflows small models (413). The window start moves in 2,000-character
+// steps so consecutive requests share a prefix the provider can cache.
+const BEFORE = 8000, STEP = 2000, AFTER = 1500;
+export function cursorWindow(document, cursor) {
+  let start = Math.max(0, Math.floor((cursor - BEFORE) / STEP) * STEP);
+  if (start) start += Math.max(0, document.slice(start, cursor).search(/\s/u));
+  const after = document.slice(cursor, cursor + AFTER);
+  return {
+    before: (start ? '…' : '') + document.slice(start, cursor),
+    after: cursor + AFTER < document.length ? after.replace(/\s\S*$/u, '') + '…' : after,
+  };
+}
 
 // Shared by the HTTP route and the evaluation runner so they test the same task.
 //
@@ -23,6 +37,7 @@ export function suggestionPrompts({ document = '', cursor = document.length, con
       ? 'The sentence before the cursor is finished and the writer asked for the next one. Do not return NONE. Return only its first two to six words: a connective or a noun the draft already names, which commits to no new claim and leaves the point to the author. Example after "We rolled back within five minutes." → TEXT: The migration.'
       : 'If several completions are possible, take the one the draft most directly supports.')
     : 'If materially different completions are equally possible, abstain.';
+  const near = cursorWindow(document, cursor);
   return {
     systemPrompt: [
       style ? `Follow this writing style guide:\n\n${style}` : '',
@@ -34,6 +49,7 @@ Let the continuation's length follow how well the material supports it, up to 15
 ${silence}
 Complete grammar, punctuation, an unfinished word, or a consequence directly supported by the supplied facts. Never choose a decision or next event for the author. ${choice}
 Specific wording must come from the supplied material. Reuse the objects actually named by the author; do not introduce a more specific type of an object or an unstated way it works. When the existing words in a quotation form a complete phrase, close the quotation instead of inventing more quoted words.
+Everything under TEXT BEFORE CURSOR and TEXT AFTER CURSOR is already written and stays in place. Return only the missing insertion, never a rewritten sentence or a copy of either side.
 Do not invent evidence or claims, restate the draft, add generic conclusions, or repeat or contradict the text after the cursor.
 Return one line using exactly one of these formats, without commentary or Markdown fences:
 NONE — when there is no well-supported continuation (return only the word NONE).
@@ -47,30 +63,32 @@ The format label is not part of the draft. Preserve the author's quotation marks
     userPrompt: [
       brief ? `WRITING BRIEF (preferences, not factual evidence):\n${brief}` : '',
       context ? `AUTHOR'S MATERIAL:\n${context}` : '',
-      `TEXT BEFORE CURSOR:\n${document.slice(0, cursor)}`,
-      `TEXT AFTER CURSOR:\n${document.slice(cursor)}`,
+      `TEXT BEFORE CURSOR:\n${near.before}`,
+      `TEXT AFTER CURSOR:\n${near.after}`,
     ].filter(Boolean).join('\n\n---\n\n'),
   };
 }
 
-export function parseSuggestion(prefix, raw) {
+export function parseSuggestion(prefix, raw, after = '') {
   // Labels avoid making a prose model JSON-escape a closing quotation mark.
   // Invalid output must never become prose in the author's document.
-  if (raw.trim() === 'NONE') return '';
-  const match = /^(TEXT|WORD):[ \t]*(.+)$/u.exec(raw.trim());
+  if (typeof raw !== 'string') throw new Error('Expected TEXT:, WORD:, or NONE from the continuation model');
+  const value = raw.trim().replace(/^```(?:text|plaintext)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu, '$1').trim();
+  if (!value || /^NONE$/iu.test(value)) return '';
+  const match = /^(TEXT|WORD):\s*([^\r\n]+)$/iu.exec(value);
   if (!match) throw new Error('Expected TEXT:, WORD:, or NONE from the continuation model');
   let text = match[2].trim();
-  // A model that runs past the limit has still said something usable at its
-  // start; the ghost text keeps the first 15 words rather than failing the press.
-  const words = text.match(/\S+/gu) ?? [];
-  if (words.length > 15) text = words.slice(0, 15).join(' ');
-  if (match[1] === 'WORD') {
+  if (match[1].toUpperCase() === 'WORD') {
     if (!/[\p{L}\p{N}\p{M}]$/u.test(prefix) || !/^[\p{L}\p{N}\p{M}]/u.test(text)) {
       throw new Error('Word continuation does not meet an unfinished word');
     }
-    return text;
+    text = insertionText('', text, after);
+    return text.split(/\s+/u).slice(0, 15).join(' ');
   }
-  text = trimOverlap(prefix.trimEnd(), text).trimStart();
+  // Strip echoes before the length cap; a copied sentence can exceed 15 words.
+  text = insertionText(prefix, text, after);
+  const words = text.match(/\S+/gu) ?? [];
+  if (words.length > 15) text = words.slice(0, 15).join(' ');
   if (!text) return '';
   // Preserve the draft's whitespace. Closing punctuation and contractions
   // attach directly; words after opening punctuation do too.
@@ -78,5 +96,27 @@ export function parseSuggestion(prefix, raw) {
   const direct = !prefix || /[\s([{«“‘]$/u.test(prefix) || /(?:^|\s)'$/u.test(prefix)
     || (prefix.endsWith('"') && quoteOpen) || (text.startsWith('"') && quoteOpen)
     || /^[,.;:!?…\)\]}»”’']/u.test(text);
-  return (direct ? '' : ' ') + text;
+  const rightSpace = /[\p{L}\p{N}\p{M}]$/u.test(text) && /^[\p{L}\p{N}\p{M}]/u.test(after) ? ' ' : '';
+  return (direct ? '' : ' ') + text + rightSpace;
+}
+
+export async function requestSuggestion(input, complete) {
+  const { document = '', cursor = document.length, selection, signal } = input;
+  const prompts = suggestionPrompts(input);
+  let userPrompt = prompts.userPrompt;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    signal?.throwIfAborted();
+    // Provider errors are outside format recovery: retrying a key or quota cannot fix it.
+    const raw = await complete({ ...prompts, userPrompt, selection, signal, continuation: true });
+    signal?.throwIfAborted();
+    try { return parseSuggestion(document.slice(0, cursor), raw, document.slice(cursor)); }
+    catch (error) {
+      console.warn(`[suggest] invalid format ${attempt}/2; ${selection?.provider || 'default'}/${selection?.model || 'default'}; ${typeof raw === 'string' ? raw.length : 0} characters: ${error.message}`);
+      if (attempt === 2) throw Object.assign(error, { code: 'SUGGESTION_FORMAT', attempts: attempt });
+      userPrompt = `${prompts.userPrompt}\n\nFORMAT CORRECTION: ${error.message}.\n` +
+        'Return exactly one line: TEXT: followed by the continuation, WORD: followed by missing word letters, or NONE. ' +
+        'Use WORD only for an unfinished word immediately before the cursor; otherwise use TEXT. ' +
+        'No explanation, JSON or Markdown fences. If no continuation is supported, return NONE. Preserve all grounding rules above.';
+    }
+  }
 }

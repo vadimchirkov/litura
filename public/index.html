@@ -21,7 +21,7 @@
        the app's "only open means open" for a first visit with nothing stored.
        Nothing flashed only because this script is synchronous and runs first;
        the two answers still have to match. -->
-  <script>try { document.documentElement.dataset.sidebar = localStorage.getItem('wa-sidebar') === 'open' ? 'open' : 'closed'; } catch {}</script>
+  <script>try { document.documentElement.dataset.sidebar = 'closed'; } catch {}</script>
 </head>
 <body>
   <div class="app" id="app">
@@ -69,9 +69,7 @@
     -->
     <div class="pane" id="pane-work">
       <!-- One row. The toggle opens the file sidebar; everything about the
-           file lives there, so the header shows no label for it. Everything
-           about the review lives next to the Review button; status text sits
-           where the action that produced it is. -->
+           file lives there, so the header shows no label for it.  -->
       <div class="pane-header" id="pane-header">
         <button type="button" id="sidebar-toggle" class="icon-button sidebar-toggle" aria-controls="sidebar" aria-expanded="true" title="Files" aria-label="Toggle file sidebar">
           <span class="ph" data-icon="sidebar" aria-hidden="true"></span>
@@ -80,27 +78,6 @@
              update command; the running process is never replaced in place. -->
         <button type="button" class="update-badge" id="update-badge" hidden></button>
         <div class="header-actions">
-          <!-- Slop trigger: the word names the feature, the pill counts what is
-               waiting. The popover behind it lists every mark in document
-               order — local wording and model findings alike. -->
-          <button type="button" class="style-score" id="style-score" hidden popovertarget="style-details" aria-controls="style-details" aria-expanded="false">
-            <span id="style-score-value">Slop</span>
-            <span class="style-score-count" id="style-score-count" hidden></span>
-          </button>
-          <section id="style-details" class="style-details" popover aria-label="Slop in the draft">
-            <header class="style-details-header">
-              <div class="style-details-title">
-                <strong>Slop</strong>
-                <span class="style-details-count" id="style-details-count" hidden></span>
-              </div>
-              <button type="button" popovertarget="style-details" popovertargetaction="hide" aria-label="Close">×</button>
-            </header>
-            <div class="style-review-actions">
-              <button type="button" class="review-action is-primary" id="style-review-run">Check for slop</button>
-              <span id="style-review-status" role="status"></span>
-            </div>
-            <div class="style-remark-list" id="style-remark-list"></div>
-          </section>
           <button class="settings-open" id="settings-open" title="Model and access" aria-label="Model and access">
             <span class="ph" data-icon="gear" aria-hidden="true"></span>
           </button>
@@ -127,6 +104,11 @@
         </details>
       </div>
       <div id="editor-wrapper"></div>
+      <div class="editor-shortcuts" id="editor-shortcuts">
+        <span><kbd>/</kbd> generate text</span>
+        <span><kbd>Tab</kbd> accept</span>
+        <span><kbd>R</kbd> regenerate</span>
+      </div>
       <!-- Remarks about a place in the text stand next to that place. Below
            the rail's breakpoint the same cards move into the panel. -->
       <aside class="rail" id="rail" aria-label="Remarks on the draft" hidden></aside>
@@ -146,24 +128,8 @@
          the stream — never overlapping cards or the composer. -->
     <button type="button" class="chat-clear" id="chat-clear" hidden aria-label="Close conversation" title="Close — the conversation is kept">×</button>
     <div class="chat-stream" id="chat-stream" role="log" aria-label="Conversation"></div>
-    <!-- Actions that spend a model call sit with the assistant, not in the
-         header: the draft's frame stays the draft's. This row is part of the
-         composer — it appears when the writer reaches for the field — and
-         more actions will join Review here. -->
-    <div class="chat-recipes">
-      <!-- Review hidden for now; the row still carries the status line. -->
-      <button type="button" class="recipe" id="review-button" title="Check the whole draft for slop. F8 and Shift+F8 step through findings." hidden>Slop</button>
-      <span id="review-status" role="status"></span>
-    </div>
     <div class="chat-composer">
-      <!-- The passage itself stays highlighted in the draft; this only names
-           what is attached and offers the way out. -->
-      <div class="chat-chip hidden" id="chat-chip">
-        <span class="chat-chip-text" id="chat-chip-text"></span>
-        <button type="button" id="chat-chip-clear" aria-label="Detach selection">×</button>
-      </div>
-      <div class="chat-row">
-        <textarea id="chat-input" aria-label="Message or rewrite instruction" rows="1" placeholder="Ask anything" autocomplete="off" spellcheck="false" aria-expanded="false"></textarea>
+      <textarea id="chat-input" aria-label="Message or rewrite instruction" rows="1" placeholder="Ask anything" autocomplete="off" spellcheck="false" aria-expanded="false"></textarea>
         <!-- Send, and while the model is working, the same button is where the
              work is shown and where it is stopped. -->
         <button type="button" class="chat-send" id="chat-send" aria-label="Send" disabled>
@@ -187,9 +153,14 @@
     </button>
     <!-- The one notice (notify() in app.js). The island shows either the input
          or the notice, never both: while one is up the composer, the pill and
-         the recipes row step aside for it, buttons and all. -->
-    <div id="edit-feedback" class="edit-feedback" role="status" hidden></div>
+         composer step aside for it, buttons and all. -->
+    <div id="edit-feedback" class="edit-feedback" hidden></div>
   </div>
+  <!-- The notice's live region. It must exist, empty, before any text lands
+       in it: a region unhidden and filled in one step is not reliably
+       announced, and keeping it apart from the notice keeps its buttons out
+       of the announcement. -->
+  <span id="notice-live" class="visually-hidden" role="status"></span>
 
   <!-- Mark bubble: explicit actions for a clicked mark or a selection.
         Reading arms nothing — attaching and rewriting live here. -->
@@ -216,7 +187,7 @@
         <div class="settings-panel" id="settings-panel" role="tabpanel">
 
       <section data-tab="models">
-        <h3>Default model</h3>
+        <h3>Model for all writing actions</h3>
         <!-- Hundreds of models behind one field. A native datalist cannot do
              it: its popup never reaches the top layer over a modal dialog, and
              a pre-filled value means typing filters against the old answer. -->
@@ -253,50 +224,15 @@
         <p class="settings-hint" id="model-hint"></p>
       </section>
 
-      <section data-tab="models" class="tab-end">
-        <h3>Suggestion model</h3>
-        <!-- Continuations are the most frequent and the cheapest task: a few
-             words, no deliberation. They use this model; everything else uses
-             the default above. No reasoning control: the server always spends
-             the least reasoning the model allows. -->
-        <div class="settings-grid">
-          <div class="settings-field">
-            <span class="settings-label" id="suggest-provider-label">Provider</span>
-            <button type="button" class="combo-trigger" id="suggest-provider" popovertarget="suggest-provider-combo" aria-haspopup="listbox" aria-labelledby="suggest-provider-label suggest-provider">
-              <span class="combo-value"></span>
-            </button>
-          </div>
-          <div class="settings-field">
-            <span class="settings-label" id="suggest-model-label">Model</span>
-            <button type="button" class="combo-trigger" id="suggest-model" popovertarget="suggest-model-combo" aria-haspopup="listbox" aria-labelledby="suggest-model-label suggest-model">
-              <span class="combo-value"></span>
-            </button>
-          </div>
-        </div>
-        <div class="combo" id="suggest-provider-combo" popover>
-          <input type="search" class="combo-search" aria-label="Search providers" placeholder="Search providers" autocomplete="off" spellcheck="false">
-          <p class="combo-count" aria-live="polite"></p>
-          <div class="combo-list" role="listbox" aria-label="Providers"></div>
-          <p class="combo-empty" hidden>Nothing matches</p>
-        </div>
-        <div class="combo" id="suggest-model-combo" popover>
-          <input type="search" class="combo-search" aria-label="Search models" placeholder="Search models" autocomplete="off" spellcheck="false">
-          <p class="combo-count" aria-live="polite"></p>
-          <div class="combo-list" role="listbox" aria-label="Models"></div>
-          <p class="combo-empty" hidden>Nothing matches</p>
-        </div>
-        <p class="settings-hint" id="suggest-hint"></p>
-      </section>
-
       <section data-tab="access">
         <h3>API keys</h3>
         <div class="key-entry">
           <select id="key-provider" aria-label="API key provider"></select>
           <div class="key-input-wrap">
-            <input id="api-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false" aria-label="API key">
+            <input id="api-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false" aria-label="API key" aria-describedby="settings-error">
             <button type="button" id="key-toggle" aria-label="Show API key" title="Show API key">Show</button>
           </div>
-          <button type="button" id="key-add" disabled>Add</button>
+          <button type="button" id="key-add">Add</button>
         </div>
         <div class="configured-keys" id="configured-keys"></div>
         <p class="settings-error" id="settings-error" role="alert"></p>
@@ -321,19 +257,8 @@
 
       <section data-tab="general">
         <h3>While you write</h3>
-        <label class="settings-check">
-          <input type="checkbox" id="auto-review" checked>
-          <span>Check finished paragraphs automatically<small>Sends each finished paragraph to your model as you write.</small></span>
-        </label>
-        <label class="settings-check">
-          <input type="checkbox" id="auto-suggest" checked>
-          <span>Suggest continuations while typing<small>Switch both off to send your text only when you ask.</small></span>
-        </label>
-        <label class="settings-check">
-          <input type="checkbox" id="pills-margin">
-          <span>Actions in the margin<small>Experiment: Note and Discuss stand beside the selected line, Continue right after the caret, instead of floating over the text.</small></span>
-        </label>
-        <p class="settings-hint" id="suggest-shortcut">Cmd/Ctrl+Enter requests a continuation in the editor, even with automatic suggestions off. Tab accepts; Escape dismisses or cancels.</p>
+        <p class="settings-hint">Continuations appear while you type. Tab accepts; Escape dismisses. Cmd/Ctrl+Enter requests a continuation.</p>
+        <p class="settings-hint" id="suggest-shortcut">/ followed by a request and Enter previews text, also after existing text on the same line. Tab accepts, Escape dismisses or stops streaming, R regenerates.</p>
       </section>
 
       <section data-tab="general">

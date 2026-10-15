@@ -2,9 +2,9 @@
 
 ## 1. Product
 
-Stilura is a standalone local writing editor. It helps an author find generic prose, discuss a draft, and try alternative wording while keeping every document change under explicit user control. The name joins Latin *stilus* (the pen, the author's hand) and *litura* (the correction in a manuscript): writing as creating by cutting.
+Stilura is a standalone local writing editor. It helps an author continue a draft, ask about selected text, and try alternative wording while keeping every document change under explicit user control. The name joins Latin *stilus* (the pen, the author's hand) and *litura* (the correction in a manuscript): writing as creating by cutting.
 
-The product does not claim to determine whether text was written by AI. Its review identifies named writing patterns only.
+The editor does not run style checks, score prose or expose a review API.
 
 ### Product principles
 
@@ -18,167 +18,21 @@ The product does not claim to determine whether text was written by AI. Its revi
 
 ## 2. Interface
 
-```text
-+--------+------------------------------------------------------+
-| Files  | [sidebar]                Style 3  settings |
-| list   +------------------------------------------------------+
-| New    |                                                      |
-| Open…  |          WORKING DOCUMENT             | finding card |
-| Save…  |                                       |              |
-| History|          CodeMirror editor            | finding card |
-|        |          (never moves for a card)     |              |
-|        |      highlighted review findings      | [< 2 of 3 >] card |
-|        |                                                      |
-|        |          chat messages and replies                   |
-|        |          [Review draft] reviewing...                 |
-|        |          +-----------------------------------------+  |
-|        |          | attached-passage chip                  |  |
-|        |          | Ask anything...                        |  |
-|        |          +-----------------------------------------+  |
-+--------+------------------------------------------------------+
-```
+A persistent footer below the editor shows `/ generate text`, `Tab accept` and `R regenerate`. It overlays a paper-to-transparent gradient at the bottom, lets pointer input through and describes the editor to assistive technology.
 
-The current product has one working-document pane and a file sidebar. There is no separate context pane.
+The working document stays central. Selecting text offers a floating `Change` action above the passage; Cmd/Ctrl+K opens the same request field. Actions do not dock in the margin. Spelling uses red underlines; an active passage uses a blue wash. Loading replaces overlapping marks with a neutral skeleton, and replacement previews hide other highlights only within their own range.
 
-### Header
+Settings contain model and access configuration, appearance and update checks. General explains writing shortcuts; continuations are always enabled and have no toggle. Stored `wa-autosuggest`, `wa-autoreview` and `wa-pills` preferences are ignored.
 
-One row, and nothing in it spends a model call. Everything about the file lives in the sidebar behind the sidebar toggle, and the local score sits at the far end. The header is the frame the draft is read in — it carries no file name and no status line of its own.
-
-- Sidebar toggle opening the file sidebar: the list of Markdown and text files next to the draft, a filter, and `New`, `Open a file…`, `Save as new…`, `History`. Opening a listed file switches the single active document onto it — the click is the intent, and saves go to the open file from then on. Each file keeps its own browser copy, chat and findings, which return when it is opened again.
-- Save trouble — a save error, or disk writes waiting on an unresolved divergence — is named where the writer is already reading. Routine saves are silent.
-- Local style signals, labelled `Style` with a count of marked passages, when the draft is predominantly Latin script. Hidden otherwise.
-- Settings button.
-
-The selected model is named in settings, not in the header: it is chosen rarely and read never.
-
-Actions that spend a model call are not here: they live with the assistant, above the composer. There is no word count and no assistant-visibility toggle.
-
-### Rail
-
-The rail floats in the margin the centred text column already leaves empty, so the draft sits exactly where it sat before any card existed. It appears when that margin can hold a 300-pixel card and a gutter — measured from the text column's own padding, not assumed at a breakpoint. The rail spans the document inside the editor scroller, so cards move with the text instead of being repositioned on every scroll event.
-
-- A remark about a place in the draft lives there: the focused finding card, with its rewrite options opening inside it while they are being tried on. Without a rail the focused card lives in the panel instead.
-- Only one card stands in the rail at a time. The marks in the draft are the overview and the navigation: clicking one focuses its card, and `F8` and `Shift+F8` step through them in document order. The focused card names its place (`2 of 5`) with `‹` `›` controls.
-- A card names the problem, why it is one, and the editing direction after an arrow. Hovering it lights the passage it belongs to; the open card gets a firmer border, no color. The dismiss control appears on hover and on keyboard focus.
-- The card is positioned against the passage it anchors to; a card whose passage has scrolled out of view is hidden with its mark. A kept option re-anchors the card to the new text so the `Undo` stays beside what it would put back.
-- In a narrower window there is no rail and the focused card shows in the panel instead. Crossing that width moves it; nothing is rebuilt or lost.
-- Only the card takes clicks. The empty margin around it still belongs to the editor.
-
-The panel keeps what is about the draft as a whole: typed messages, replies, `Review draft`, review status, and the composer.
-
-### Editor
-
-- Plain-text CodeMirror 6 editor with line wrapping and history.
-- iA Writer Duo for document text; system UI font for controls.
-- Warm paper canvas and header; chat blocks are white cards on it, without shadows.
-- System light/dark theme.
-- Draft saved to browser local storage after every edit.
-- The placeholder of an empty draft carries the only instructions in the product: how to open a file, how to rewrite a passage, and what `Review draft` sends where.
-- The editor reserves the measured height of the floating panel, so the caret,
-  the line being typed, and any continuation panel scroll above it instead of
-  disappearing behind the cards.
-
-### Composer
-
-- Fixed near the bottom center of the window.
-- Grows upward as messages, findings, and alternatives appear.
-- A backdrop fades the draft out behind the panel so cards read as floating above the document rather than as part of it.
-- A send button sits at the right of the field and is disabled while the field is empty. While the model is working on something the writer asked for, it is that work: the arrow gives way to a ring turning around a stop square, and pressing it stops the request. There is no separate stop control — the status and the way out are the button they just pressed. Background work — a continuation, a paragraph checked while typing — never appears there: the writer did not press send for it, and finding the arrow replaced by a spinner on every pause would make the composer feel taken away.
-- A row of actions sits between the stream and the field: `Review draft` and one line of review status truncated to the leftover width. The rewrite strip joins that row only when the rail is not in the layout.
-- There is no findings list. The marks in the draft are the navigation: clicking one opens its card, and `F8` and `Shift+F8` step through them in document order.
-- An attached passage is named by a small chip, not quoted: the passage itself stays highlighted in the draft.
-- One field, no mode control. What the message does is decided by what is attached: a passage the writer selected is a rewrite target, a finding is something to ask about, and nothing attached is a conversation about the draft. The placeholder says which of the three is active. Typing `/` opens the command menu — icon, name, and one line of description per row, filtered as the writer types; `↑` `↓` move, `Enter`/`Tab` runs, `Esc` closes.
-- `Enter` sends; `Shift+Enter` inserts a newline.
-- `Escape` cancels an active request or detaches the current selection.
-- Idle the whole chat is one pill, after Symbioen's DynamicIsland: a compact `Ask anything` (`Conversation • N` with a restored history) morphing into the full panel with a rise-and-unblur on the same ease as everything else. The pill opens both the field and the stream. A single control closes what the assistant is showing and opens it again: a `×` badge straddling the panel's top corner while open, `Conversation` over a closed one — and closing an empty, unstarted chat folds the whole island back into the pill. One press puts away both the turns and the finding cards standing in the rail — two `×` in two places for one idea is two presses to get a clean screen. `Escape` in an empty composer and clicking away from an unstarted chat fold it back too; a scroll never does.
-- Closing is a view, not an edit. The turns stay in memory and in storage, applied options stay with their `Undo`, and the findings and their marks stay in the draft — clicking a mark builds its card again. Remark cards and undecided option groups are put away. Anything new arriving opens the stream by itself, so a reply never lands somewhere the writer cannot see; merely moving cards between the rail and the stream on resize never opens it. There is no control that discards the conversation; replacing the document does that, and the server only ever reads the last 20 turns.
-- A failed model call is one short sentence naming the cause — a rejected key, a rate limit, an overloaded provider — and one button doing something about it. The sentence never carries the remedy as a second clause: `Try again` is the remedy. Where retrying cannot help there is no retry, and a key problem offers `Open settings` instead. The provider's payload goes to the tooltip and the console, where it is there for a bug report and nowhere else.
+Conversation island, file sidebar controls and notes UI are temporarily hidden. Their stored document state remains available. The editor does not display style scores, findings, a review button or `/slop`, and F8 has no review action.
 
 ## 3. Writing workflows
 
-### 3.1 Local style signals
+### 3.4 Selection requests
 
-The browser marks passages using:
+`Change` or Cmd/Ctrl+K opens one field beside the selected passage. The author writes a request in their own words: ask a question, request a replacement, or ask for synonyms. Enter sends; Shift+Enter adds a line. The model answers locally or proposes replacements according to that request. Only the field is visible: no buttons, captions or status instructions. Answers and errors appear in that field; typing starts a new request. There are no action modes. Replacements appear as faint inline previews: Up/Down choose, Tab accepts, Escape dismisses, R regenerates. Acceptance is one isolated undo event. The exact range follows local and remote edits elsewhere; editing it cancels the request and preview. Unaccepted results are transient.
 
-- known English AI-tell words and phrases;
-- sentence-length variation;
-- moving lexical diversity;
-- repeated three-word sequences.
-
-The header shows a count of marked passages — a number the writer can trace back to their own text — never a blended formula. The control is hidden for predominantly non-Latin text because the word lists are English-specific. The underlying heuristic is never sent to the model and is not an authorship probability; it quietly also ranks rewrite options best-first.
-
-Clicking it opens a card naming each marked tell as it appears in the draft with its reason inline, plus rhythm notes only for structural axes that read badly. To rewrite a phrase, click its mark in the draft for the context and rewrite actions. A number the writer cannot trace back to their own text is only something to argue with.
-
-### 3.2 Automatic review
-
-On by default. 1.5 seconds after the last edit the client takes up to three blank-line-delimited paragraphs that:
-
-- are at least 25 characters long;
-- end in sentence punctuation, unless more text follows them;
-- do not contain the caret;
-- have not already been checked with the same neighbours and model.
-
-There is no local prefilter: a paragraph is judged by the model or not at all, in whatever language it is written.
-
-The full document is included as context, but the server instructs the model to return findings only for the submitted target paragraphs. Automatic review runs one request at a time, and the `Review draft` control shows that a background check is in flight.
-
-The text already in the file when it is opened counts as checked. Opening a draft spends nothing; auditing what is already written is what `Review draft` is for, and a paragraph the writer touches is checked as soon as they finish it.
-
-Automatic review and continuation suggestions are separate settings, both on by default. With both off, only actions the writer starts spend a model call. The settings are remembered.
-
-### 3.3 Full-document review
-
-The `Review draft` action clears current findings and audits the entire non-empty document. It runs a global pass for levels 1–4 and a local pass for levels 5–7 plus generic prose in parallel. It merges contained duplicate quotes of the same code and suppresses a level-6 finding whose quote contains or is contained by a level-3 finding's quote, then returns at most eight findings with:
-
-- `code`: internal diagnostic level (`level-1` through `level-7`, or `generic-prose`); not shown in the interface;
-- `quote`: exact contiguous text from the draft;
-- `pattern`: name of the writing problem;
-- `reason`: why the quote is a strong example;
-- `fix`: a short editing direction, not a rewrite.
-
-The prompt caps these at four words for `pattern` and twelve each for `reason` and `fix`: the card is read at a glance beside the draft, and a paragraph of explanation there is not read at all.
-
-Each returned quote is anchored to a non-overlapping occurrence in the current document. Findings appear as a quiet amber band with a hairline under it — a remark to weigh, neither a spell-checker's error to clear nor a blue selection to act on — and move with edits outside their ranges. Editing inside a range removes its mark. The attached passage keeps a blue mark of its own: a tint for a plain selection, an underline over a finding's band, so the remark and the working attachment never read alike.
-
-A finding card carries a dismiss control. Dismissing removes the mark, the card, any alternatives requested for it, and cancels an in-flight request, so the counter only reports findings the author has not rejected.
-
-Structural findings use the same marks and finding cards as prose findings. They cover
-problems such as a broken opening promise, a buried point, an abrupt
-old-to-new transition, or a dropped key term. The review treats constant-topic,
-linking, super-theme, and preview-and-develop progressions as alternatives rather than a
-single mandatory paragraph template.
-
-### 3.4 Finding and selection rewrites
-
-A passage can be attached to the composer in three ways, all explicit:
-
-- the bubble's `Discuss` on a review mark, a style mark, or a text selection;
-- press `Cmd/Ctrl+K` with a selection;
-- the `Options` / rewrite action on a finding card or in the bubble.
-
-Clicking a mark never attaches: reading a remark arms nothing. A click opens the finding's card (or the style mark's reason bubble) and places the caret where it was clicked, leaving the keyboard in the editor, so a marked sentence stays as editable as any other text. A real selection wins over the mark underneath it.
-
-An attached passage is marked in the draft with a tinted highlight that survives the editor losing focus, and moves with edits like a review mark. A finding already carries its own mark, so attaching one keeps that mark's look rather than laying the selection tint over it — the tracking is the same either way, only a plain selection needs the tint to show anything at all. The composer chip names what is attached: `Finding: <pattern>` or the selected text. The placeholder says what the next message will do with it.
-
-Editing inside the attached passage ends the attachment and cancels an in-flight rewrite: the author has taken the sentence over, and alternatives generated for the old wording no longer apply.
-
-Clicking any finding shows its card and offers a bubble with `Discuss` and `Suggest rewrites`. It makes no model request: the card carries a single `Options` control, and reading the remark and fixing the sentence by hand is a complete outcome. Clicking the same mark again returns to its card rather than repeating the remark.
-
-The bubble is placed inside the writing pane and below the header, never over the sidebar or the fixed header band: a toolbar a chrome layer covers is a toolbar that looks present and swallows the click meant for it. It is anchored to the words it was raised on: a scroll, the panel opening under it or a window resize carries it along with them, and it hides while they are scrolled out of the pane. Only an edit, which may remove those words, takes it away.
-
-There is one replacement scope, and it is the quoted passage. The tint in the draft and the range a rewrite would replace are the same span, so a finding never silently rewrites more than it marked, and the card asks for nothing before it can be used. A structural finding names a problem with the paragraph around its quote; its rewrite still replaces the quote, and the whole document goes to the model as context. A change that has to move material between paragraphs is a conversation: typing in the composer with a finding attached opens one.
-
-For an ordinary selection, the next composer message becomes the rewrite instruction.
-
-The server returns exactly three strings. For a finding they open as a stack of option cards inside its own card, beside the passage they would replace; for an ordinary selection they open as a stack in the chat stream. Clicking a card replaces only the attached range in a single redraw; the new passage flashes briefly so the eye lands on the change, and the remaining cards then retire. Only one undecided group stays up: fresh options retire earlier undecided ones, while applied ones keep their Undo. The group carries a refresh-icon `Try again` control that discards the three and re-requests them with the same instruction and the same attached passage.
-
-The client ranks what the model already produced best-first by the resulting whole-document local score, shown nowhere. The score is never fed to the model. The hover-to-preview hint shows once, until the first applied option; the Try again control always stays.
-
-While the options are up the attached passage stays highlighted in the draft, and hovering or focusing a card previews that option where it will live — substituted into the paragraph with the sentences around it, on a plain white sheet with no red/green diff. Moving between cards keeps the preview across a short delay, so the gaps between cards don't flicker it. The document itself is untouched while the writer is choosing, so nothing is autosaved, no finding is re-anchored, and undo stays clean until the writer keeps one. `Enter` or `Space` on a focused card applies it; `Escape` dismisses the hover preview. Clicking into the draft only drops the hover preview — the cards stay, because choosing is a click on a card.
-
-A coloured word-level diff (added/removed runs animated in reading order, via `wordDiff`) is deliberately not on this path. It is kept in the tree as a noted option for another place (e.g. history compare), where showing what changed word by word is the job.
-
-Keeping an option leaves only that option — the other cards step aside — with a single `Undo` on the kept card itself, with no timer: it stays good until the passage changes under it. `Undo` puts back exactly what was replaced and only while it is still there to put back; keeping also takes a History snapshot, which is the longer way back. A kept finding option stays in its card beside the changed passage; a kept selection option stays in the stream history, and choosing it closes the chat stream. Closing discards remark cards and undecided option groups but keeps applied ones: kept finding options move into the stream so their `Undo` survives the close. Nothing commits on a timer.
+Loading uses the shared text skeleton. Existing highlights and Markdown marks do not show through it. Suggestion previews and regeneration retain the same tracked range; the original draft stays unsaved until acceptance.
 
 ### 3.5 Draft chat
 
@@ -186,9 +40,9 @@ When no passage is attached, composer messages open a conversation about the who
 
 Replies stream through Server-Sent Events and are rendered with a small, HTML-escaped Markdown subset: paragraphs, headings, emphasis, links, lists, inline code, and fenced code blocks.
 
-Chat replies cannot directly modify the document.
+After a new reply finishes streaming, one verified replacement updates the draft immediately and shows Undo in its chat card. Multiple suggestions remain explicit choices. Interrupted, ambiguous, stale or read-only responses do not change the draft. Automatic application preserves keyboard focus and maps the editor selection through the edit. Undo restores only that passage and is invalidated by subsequent edits inside it; changes elsewhere remain intact. Restoring conversation history never applies suggestions again.
 
-The conversation survives a reload. A message sent with a finding attached carries that finding's context to the model but is shown to the writer as what they typed.
+The conversation survives a reload.
 
 ### 3.6 Continuation suggestions
 
@@ -197,23 +51,22 @@ After 200 milliseconds without typing, a suggestion may be requested when:
 - the document contains at least 15 non-whitespace characters;
 - the selection is collapsed;
 - the caret is at the end of a paragraph or before a blank line;
-- the current line is not an `/idea` command.
 - the editor has focus, the page is visible, and composition is finished.
 
 Only typing (including composition) starts this timer. Paste, deletion, Undo, Redo, loading a document and accepting an AI edit cancel pending suggestions without requesting another one.
 
-A failed continuation says so in the notice; the next successful request clears its error. The model may return an empty continuation when the thought is finished or continuing would invent facts or the author's intent. Non-empty output is a single line of at most 15 words; one word or punctuation alone is allowed. The provider returns `NONE`, `TEXT: …` for new words or punctuation, or `WORD: …` for missing letters, so prose quotation marks do not need JSON escaping. The HTTP response still uses `{ suggestion: string }`. Invalid output is reported as an error and never inserted. Spacing is applied at the insertion boundary; repeated tails are removed only at word boundaries. A valid continuation appears in a block below the current line, is announced to assistive technology, and does not enter the document until accepted.
+A failed continuation says so in the notice; the next successful request clears its error. The model may return an empty continuation when the thought is finished or continuing would invent facts or the author's intent. Non-empty output is a single line of at most 15 words; one word or punctuation alone is allowed. The provider returns `NONE`, `TEXT: …` for new words or punctuation, or `WORD: …` for missing letters, so prose quotation marks do not need JSON escaping. Case differences, a text code fence and whitespace after the label are normalized without another model call. Other format failures get one corrective request naming the validation error, using the same model, grounding rules, cancellation signal and shared 30-second deadline. Empty output and `NONE` are successful abstentions. Provider/key/quota errors do not trigger format recovery. After two invalid answers, the route reports `SUGGESTION_FORMAT`; invalid text never becomes a suggestion. Logs record the requested model (or default), attempt and output length, without draft or answer content. HTTP and the evaluation runner share this recovery path. The HTTP response still uses `{ suggestion: string }`. Spacing is applied at the insertion boundary; repeated tails are removed only at Unicode token boundaries before the length cap, including overlaps longer than 60 characters and repeated text after the cursor. Complete copied passages elsewhere in the draft are suppressed; short reused phrases remain allowed. A valid continuation appears in a block below the current line, is announced to assistive technology, and does not enter the document until accepted.
 
 - `Tab`: insert the suggestion at its original cursor position.
 - `Escape`: dismiss it and cancel pending work, even before an answer arrives.
-- `Cmd/Ctrl+Enter`: request a continuation explicitly, including when automatic suggestions are off. This permits short non-empty drafts and reports when there is nothing useful to suggest.
+- `Cmd/Ctrl+Enter`: request a continuation explicitly, without waiting for the timer. This permits short non-empty drafts and reports when there is nothing useful to suggest.
 - Typing, changing the selection, leaving the editor, hiding the page, changing the model or pausing saves: dismiss or invalidate the suggestion and cancel pending work. An answer is displayed only for the same document, full selection, model and active request with the editor still focused.
 
-### 3.7 `/idea` expansion
+### 3.7 Generate in the editor
 
-Typing `/idea <instruction>` on a line and pressing `Enter` streams the expansion into the assistant panel, then offers it as a single option card — the same cards as a rewrite, with one option and no `Try again`. The command line is replaced only if the writer keeps it. `/idea <instruction>` in the composer does the same at the caret: keeping the option inserts the passage there. An empty span is a valid replacement scope for this path only.
+Before the first generated words arrive, a 3×3 Drive pixel loader appears with a shimmering Writing label and elapsed time. Regeneration shows Rewriting beside the previous candidate until the first new text arrives. The clock uses wall time, stays out of live announcements and stops when the widget disappears. Reduced motion freezes the grid and label while the clock continues.
 
-If the request fails or is stopped, whatever arrived stays in the panel as text and the command line is untouched.
+At the end of a new or existing line, `/<request>` + Enter sends the request and surrounding prose to the selected default model via `POST /write`. A slash at the start of a line or after whitespace starts the request. Existing prose before it is preserved; only the request is highlighted. Inline previews stay in the same text flow. URLs and word separators are not commands. The caret must be at the line's end with no selection. Partial output appears as a faint ghost suggestion over the command, without buttons; it is not saved as draft text. A completed, nonempty answer keeps the ghost suggestion appearance. With a collapsed caret in the request range, Tab accepts, Escape dismisses and R regenerates; these keys leave proposals elsewhere alone. Repeated R presses while regeneration is running are consumed without modifying the request; composition input is never intercepted. Acceptance replaces only the tracked command range in one isolated undo event, preserving focus, selection and concurrent changes elsewhere. Reject discards the preview and shows the original request. Regeneration uses the original request, previous candidate and current document context; failed or stopped regeneration restores the previous candidate. A new slash request waits until the current candidate is accepted or rejected. Unaccepted previews are transient: reloading preserves the original request. Local and remote transactions map that range; edits touching it invalidate generation even if identical text is restored. Escape, document switches, read-only state, paused saves and interrupted/failed/empty streams preserve the request; initial failures discard the preview. Exact context echoes are removed before review. A copied-context or unchanged-regeneration response gets one corrective attempt within the original deadline. A replacement SSE event resets the preview, so attempts never concatenate. The old candidate remains visible while a regeneration waits for its first token. Only one foreground model request runs at a time. Ordinary prose does not trigger generation. The empty editor has no placeholder.
 
 ### 3.8 Model and access settings
 
@@ -224,45 +77,42 @@ The settings dialog:
 - offers provider and model as searchable comboboxes: a trigger naming the current choice, and a popover holding a search box and the matching rows, each naming one model. Typing still matches a model's id as well as its name — the writer who knows the id finds the row, and the row still reads as a name. Six hundred models do not fit a `select`, and a native `datalist` cannot stand in — its popup never reaches the top layer above a modal dialog, and a field already holding an answer filters the writer's typing against it. The popover API still supplies the top layer, light dismiss and `Escape`; `↑` `↓` walk the list and `Enter` takes the highlighted row;
 - lists authenticated providers and their available models;
 - exposes only thinking levels supported by the selected model;
-- offers a separate suggestion model as provider and model comboboxes, with no
-  reasoning control: continuations always spend the least reasoning the model
-  allows. It defaults to the cheapest authenticated model that both ranks
-  well and switches reasoning off (currently GPT-6 Luna first), falls back to
-  the default model when none of those is authenticated, and re-resolves when
-  the catalog changes. Review, rewrite, chat, and /idea always use the default
-  model above, never the suggestion one;
+- uses the same selected provider and model for every writing action; continuations use the least reasoning that model allows;
 - offers ChatGPT Plus/Pro sign-in (Codex OAuth) next to API keys.
   Claude subscriptions are deliberately not offered — Anthropic restricts
   them to Claude Code and claude.ai;
 - saves the active provider/model/thinking selection to local storage;
 - adds and removes Pi API-key credentials;
 - does not offer removal for credentials supplied by environment variables;
-- switches automatic review and continuation suggestions on or off, both on by default;
 - switches the npm update check on or off, on by default.
 
 All settings take effect immediately; there is no Save button.
 
-When no model is selected, the review, rewrite, chat, and manual-continuation actions re-check Pi status once, then report the missing setup in the notice and open this dialog instead of failing silently. Automatic review and continuation suggestions stay silent and make no request.
+When no model is selected, explicit writing actions re-check Pi status once, then report the missing setup and open this dialog. Automatic continuations stay silent and make no request.
 
 ### 3.9 Margin notes
 
-The writer's own remarks on the draft. Three scopes, one rule: a selected passage anchors by quote with a paragraph fallback, a paragraph anchors by itself, the whole draft anchors nowhere. Select a passage and press `Note` in the bubble; hover the empty margin beside a paragraph for its `+`; select all and press `Note` for the draft. A card opens beside the line (in the rail on wide windows, in the chat stream on narrow ones — the same rail the findings once used, now only for notes). Creating, editing, and deleting a note spends no model call.
+Saved user notes are also work items for external agents using the live HTTP session. States: queued, working, review, done, reverted, blocked. `work_next` exclusively claims an item for five minutes; replay by the same agent returns its claim, and server restart requeues interrupted jobs. `work_finish` checks that claim and its original revision, restricts edits to the claimed target, and persists an attempt alongside the text before acknowledgement. It never marks an applied result done. Invalidated or expired work cannot overwrite a newer task.
+
+The writer accepts an applied result, safely reverts its ranges, or regenerates from the current passage. Text edits inside a result disable its revert; edits elsewhere map its positions. Completed notes remain collapsed. Notes retain ten attempts and fifty feedback messages; document backups cover older text. Rough prose alone is not a trigger.
+
+The writer's own remarks on the draft. Three scopes: a passage anchors by quote and saved paragraph text, a paragraph note anchors by its paragraph text and offset, and a document note anchors nowhere. Local edits map anchors through CodeMirror changes; insertions above a note do not change its target. Missing or ambiguous anchors remain visible as drifted, and automatic work refuses edits against them. Select a passage and press `Note` in the bubble; hover the empty margin beside a paragraph for its `+`; select all and press `Note` for the draft. A card opens beside the line (in the rail on wide windows, in the chat stream on narrow ones — the same rail the findings once used, now only for notes). Creating, editing, and deleting a note spends no model call. Note resolution preserves the note and hides its card immediately in connected editors.
 
 - A passage note anchors to its paragraph with a quote snapshot: found verbatim, the mark stands on the quote; reworded, the mark falls back to the paragraph and the card carries a "text changed" badge; the paragraph gone, the card waits in the stream. A line note (the `+`, empty quote) never drifts — it keeps its paragraph and the offset of the line pressed, draws no mark, and the card stands on that line; the passage note's card stands on its quote's first line, not its paragraph's top. A document note carries no mark and pins at the rail top. Blue marks for notes — amber stays the model's.
 - Clicking a note's mark focuses its card and arms nothing. Deleting offers `Undo`: a faint `×` always stands beside the note, `Delete`/`Backspace` on a focused card works too, and clearing the text deletes. Empty notes don't linger: leaving a fresh note empty removes it silently, clearing a note deletes it with `Undo`. The `+` is not offered beside a line a note's card already covers, so a second card is never stacked on the first.
-- Notes travel with chat and rewrite requests as `WRITER'S MARGIN NOTES` context, labeled by scope (passage, paragraph, whole draft). Suggestions and review stay note-free: suggestions fire on every pause, and review must judge the prose unbiased.
+- Notes travel with chat and rewrite requests as `WRITER'S MARGIN NOTES` context, labeled by scope (passage, paragraph, whole draft). Suggestions stay note-free because they fire on every pause.
 
 ### 3.10 Positioning brief (lite)
 
 Four questions about audience and goal — reader, goal, awareness, scope — from the positioning-brief skill. Typing `/brief` in the composer (or picking it from the command menu) starts the interview: one question at a time in the chat stream, each with three options to pick or a free-typed answer. `Escape` pauses it; partial answers are kept and `/brief` resumes. A finished brief shows a summary card with per-row `Edit`; typing `/brief` with a finished brief reopens the summary.
 
-Two nudges, each at most once per document as a passing notice: `/idea` on a draft under ~200 characters with no brief, and a full review that returns a `level-1-whole-essay` or `level-2-introduction` finding (a weak opening is the symptom of a missing brief). Both offer `Answer 4 questions` and never block the requested action. Creating, editing, and pausing the interview spends no model call.
+A nudge, at most once per document as a passing notice: a full review that returns a `level-1-whole-essay` or `level-2-introduction` finding (a weak opening is the symptom of a missing brief). It offers `Answer 4 questions` and never blocks the requested action. Creating, editing, and pausing the interview spends no model call.
 
-Answers travel with chat, rewrite, and idea requests as `POSITIONING BRIEF` context. Review and suggestions stay brief-free, for the same reason as notes.
+Answers travel with chat, rewrite, and idea requests as `POSITIONING BRIEF` context. Continuations receive the writing brief separately from optional context.
 
 ## 4. State and privacy
 
-Document-specific browser keys use the prefix `litura:<id>:` — kept from the previous name, since renaming it would strand existing browser drafts — where `id` is the SHA-256 hash of the canonical draft path returned by the server. In the table below, document keys are relative to that prefix. Model and background-action settings remain shared within the browser origin.
+Document-specific browser keys use the prefix `stilura:<id>:` where `id` is the SHA-256 hash of the canonical draft path returned by the server. In the table below, document keys are relative to that prefix. Model and background-action settings remain shared within the browser origin.
 
 In the desktop app these keys also persist as atomic files in the application data directory's `editor-state` folder, independent of the HTTP port. Native close, folder changes, and update installation wait for the editor's draft and state writes to finish. Browser-only runs keep using local storage. Partial brief answers are saved after each answer. Opening a different document starts a fresh Undo history.
 
@@ -271,26 +121,23 @@ In the desktop app these keys also persist as atomic files in the application da
 | Working document | `wa-working` and `wa-working:<tabId>` in local storage; tab ID in session storage | Until browser storage is cleared |
 | Working document mirror | the active file (starts as `DRAFT_FILE`, follows the sidebar) | Until the file is deleted |
 | Agent selection | `localStorage["wa-agent"]` | Until browser storage is cleared |
-| Suggestion model | `localStorage["wa-suggest"]`, auto-defaulted to the cheapest capable model | Until browser storage is cleared |
 | Chat history | `wa-chat`, last 20 turns | Until document replacement or browser storage is cleared |
-| Findings | `wa-findings`, with the reviewed document text | Replaced by a successful full review; cleared on document replacement |
 | Margin notes | `wa-notes`, each with paragraph anchor and quote snapshot | Until note deletion or document replacement |
 | Positioning brief | `wa-brief`, four answers plus a nudged flag | Until document replacement or browser storage is cleared |
-| Dismissed findings | `dismissed`, last 100, tied to exact document text | Until document replacement or browser storage is cleared |
-| Disk history | `<draft>.litura-history` (name kept from the previous product name); latest 20 returned to the UI | No automatic deletion |
+| Disk history | `<draft>.stilura-history`; latest 20 returned to the UI | No automatic deletion |
 | Browser checkpoints | `snapshots`, last 10; other tabs' working copies also appear in History | Checkpoints rotate; working copies remain until browser storage is cleared |
-| Automatic review setting | `localStorage["wa-autoreview"]`, on unless set to `off` | Until browser storage is cleared |
-| Continuation-suggestion setting | `localStorage["wa-autosuggest"]`, on unless set to `off` | Until browser storage is cleared |
 | Update-check setting | `localStorage["wa-updatecheck"]`, on unless set to `off` | Until browser storage is cleared |
 | Last seen published version | `localStorage["wa-update"]` as `{ latest, at }`, reused for 24 hours | Until browser storage is cleared |
-| Checked paragraphs | Browser memory, keyed by text, neighbours and model | Until reload or a full review reset |
 | API credentials | Pi credential storage or environment | Managed by Pi |
 
-Each edit updates the browser working copy and schedules a disk save after 800 milliseconds. Saves run one at a time. Each request includes the last known file revision; a stale revision returns `409` without overwriting the file. The server keeps the previous disk text, writes a temporary file, flushes it, rechecks the revision, and renames the temporary file over the draft. A lock coordinates saves between Stilura processes; external editors do not participate in that lock.
+Each edit updates the browser working copy immediately. CodeMirror collaboration batches outgoing changes every 75 milliseconds. A server session orders and persists changes, then broadcasts them over SSE. Incoming changes preserve selections, map note anchors and stay outside personal undo. The HTTP session client discovers the same authority through `<file>.stilura-session`; a live but unreachable owner blocks disk fallback. Without a live owner, the client uses revision-checked disk writes.
 
-At startup, the editor waits for the server to identify and read the draft. It restores this tab's working copy when available, otherwise the document's shared browser copy, otherwise the disk text. An empty browser copy is distinct from a missing one. Legacy unscoped browser text is offered for export, not silently imported into another workspace.
+Agent patches map through intervening edits in other ranges. A changed target fails with a conflict; incoming agent edits overlapping unsent user input leave the local copy intact and show the recovery banner. External file changes reset the session. Reconnect replays missed updates; server restart or expired history with pending local work requires explicit recovery. The server retains up to 2,000 operations or 8 MB in memory; the draft itself is durable before acknowledgement. Writer history snapshots are spaced at least ten seconds apart; agent edits each make a backup.
 
-If browser and disk differ at startup, or the disk revision changes when the window regains focus or visibility, Stilura never opens a modal. When the browser copy is untouched since the last confirmed save it takes the disk copy silently; when only one side moved there is nothing to decide. Only two genuinely diverged copies raise a slim banner above the draft — `Load disk`, `Keep mine`, and a `What changed` word diff — while the draft stays editable and only disk writes wait. Choosing a copy resumes revision-checked saving; another external change can raise the banner again. Nothing is merged automatically.
+Shared notes persist in `<file>.stilura-notes.json`, with per-note versions and deduplicated operations. Existing browser notes migrate when a document opens. Resolution broadcasts immediately and remains monotonic. The Markdown file and notes sidecar together form the durable document.
+At startup, the editor waits for the server to identify and read the draft. It restores this tab's working copy when available, otherwise the document's shared browser copy, otherwise the disk text. An empty browser copy is distinct from a missing one. Unscoped browser text is not imported into another workspace.
+
+If browser and disk differ at startup, or the disk revision changes when the window regains focus or visibility, Stilura never opens a modal. When the browser copy is untouched since the last confirmed save it takes the disk copy silently; when only one side moved there is nothing to decide. Only two genuinely diverged copies raise a slim banner above the draft — `Load disk`, `Keep mine`, and a `What changed` word diff — while the draft stays editable and only disk writes wait. Choosing a copy resumes revision-checked saving; another external change can raise the banner again. During a live session, edits in separate ranges merge automatically; the banner handles divergent snapshots.
 
 Save errors remain visible and pause autosave until the writer retries. A failed request does not advance the recorded disk revision. The browser warns before leaving while a save is in flight or the working text differs from the last confirmed disk copy.
 
@@ -298,9 +145,9 @@ Findings are restored only when their stored document text exactly matches the l
 
 `Cmd/Ctrl+S` requests an immediate disk save, respecting any paused conflict or error. `Export a copy` downloads the current text using the workspace draft's filename. `Open a file…` and drag-and-drop accept `.md`, `.markdown` and `.txt` files up to 1 MiB and replace the active document's contents without switching files. Opening a sidebar file switches the active document instead and opens hard-wrapped prose flowing: lone newlines inside a paragraph are Markdown soft breaks, so wrapped lines are joined back into paragraphs while blank-line breaks, lists, headings, quotes, fences and tables keep theirs. `New`, import and restore never ask first: the replaced text goes to History, and the notice offers `Undo` for a few seconds.
 
-Everything the app reports outside the conversation — save and load trouble, model errors, confirmations with `Undo` — takes over the conversation island, one at a time, the way an iPhone alert takes over the island: while one is up the composer, the pill and the recipes row step aside for it, buttons and all. Either input or notice, never both — summoning the composer dismisses a passing notice, a sticky problem keeps the input covered until its action or `×`, and a notice never covers a focused field (it parks until blur). Passing notices fade after eight seconds; the pointer resting on one holds it. Background progress (`Suggesting…`) shows in the pill itself while the island is folded. A chat answer never shows the raw edit list: a response that drops the `<litura-edits>` tags (wire format, name kept) still yields edit cards.
+Everything the app reports outside the conversation — save and load trouble, model errors, confirmations with `Undo` — takes over the conversation island, one at a time, the way an iPhone alert takes over the island: while one is up the composer, the pill and the recipes row step aside for it, buttons and all. Either input or notice, never both — summoning the composer dismisses a passing notice, a sticky problem keeps the input covered until its action or `×`, and a notice never covers a focused field (it parks until blur). Passing notices fade after eight seconds; the pointer resting on one holds it. Background progress (`Suggesting…`) shows in the pill itself while the island is folded. A chat answer never shows the raw edit list: a response that drops the `<stilura-edits>` tags (wire format, name kept) still yields edit cards.
 
-Every model-backed action sends the current full document to the selected provider. Rewrite and review requests additionally send the relevant selection or target passages.
+Every model-backed action sends the current full document to the selected provider. Rewrite requests additionally send the relevant selection.
 
 ## 5. Technical architecture
 
@@ -309,13 +156,13 @@ Every model-backed action sends the current full document to the selected provid
 - **Frontend:** vanilla JavaScript and CodeMirror 6.
 - **Bundling:** esbuild produces an IIFE bundle.
 - **Model runtime:** `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`.
-- **Streaming:** Server-Sent Events for `/idea` and `/chat`.
-- **Non-streaming:** JSON for status, credentials, review, rewrite, and suggestions.
+- **Streaming:** Server-Sent Events for `/write`, `/idea` and `/chat`. For `/write`, `text` appends to the preview, `replace` replaces its entire buffer, and only `[DONE]` completes the candidate.
+- **Non-streaming:** JSON for status, credentials, rewrite, and suggestions.
 - **Desktop shell:** Tauri 2, a window and a menu around the same server.
 
 ### Desktop shell
 
-The desktop app is a packaging of this server, not a second implementation. The Rust shell picks the writing folder, starts the server, points a window at it, and owns updates; documents, review, and model access stay where they already are. No Tauri JavaScript API reaches the page — the webview loads `http://127.0.0.1:<port>` like any browser would, which is why `src/app.js` is identical in both builds.
+The desktop app is a packaging of this server, not a second implementation. The Rust shell picks the writing folder, starts the server, points a window at it, and owns updates; documents, generation, and model access stay where they already are. No Tauri JavaScript API reaches the page — the webview loads `http://127.0.0.1:<port>` like any browser would, which is why `src/app.js` is identical in both builds.
 
 The server is a Tauri sidecar: an official Node binary, fetched and checksummed at build time by `scripts/fetch-node.mjs`, running `dist/server.mjs` — `index.js` and its dependencies bundled into one file by `scripts/build-server.mjs`. The writer installs no runtime of their own.
 
@@ -341,12 +188,9 @@ stilura/
 |- SPEC.md              product and technical behavior
 |- index.js             build step, HTTP server, routes, and prompts
 |- pi.js                Pi discovery, credentials, model resolution, requests
-|- review-prompt.js     shared review taxonomy and production prompt
-|- review-model.js      model request, response parsing, and bounded retries
-|- review.js            local metrics and review-response helpers
+|- review.js            selection, sentence and continuation helpers
 |- markdown.js          safe minimal Markdown renderer for chat
 |- selfcheck.js         assertion-based checks
-|- deepcheck.js         model-backed essay and paragraph checks
 |- style.md             writing constraints injected into model prompts
 |- plugin.json          webview plugin manifest (/write, port 3000)
 |- scripts/
@@ -376,7 +220,9 @@ All bodies and non-streaming responses are JSON unless noted.
 |---|---|---|
 | `GET` | `/` | Application HTML |
 | `GET` | `/style.css`, `/app.js`, `/fonts/*` | Static assets |
-| `GET` | `/draft` | `{ text, path, id, exists, revision }`; a missing file has empty text and revision `missing` |
+| `GET` | `/draft` | Current snapshot: text, identity, opaque revision, epoch, version and shared notes; missing files have empty text |
+| `GET` | `/draft/live` | Snapshot; `since` + `epoch` returns changes, with `events=1` streams updates/resets over SSE |
+| `POST` | `/draft/live` | `action`: `push`, `patch`, `write`, `notes`, `work_next`, `work_finish`, `work`, `note_suggest`; operations against the shared document |
 | `PUT` | `/draft` | Save `{ text, revision }`; returns `{ saved: true, text, path, id, exists, revision }`, or `409` with `{ error, current }` when the revision differs |
 | `POST` | `/draft/open` | Switch the active document to workspace file `{ name }` (basename, Markdown or text); further `/draft` reads and writes target it. Returns the same shape as `GET /draft` |
 | `GET` | `/draft/history` | `{ snapshots }`, latest 20 disk backups with `text`, `at` and `revision` |
@@ -386,9 +232,10 @@ All bodies and non-streaming responses are JSON unless noted.
 | `GET` | `/api/agent/status` | Providers, models, auth status, and default selection |
 | `POST` | `/api/agent/credentials` | Save a provider API key through Pi |
 | `DELETE` | `/api/agent/credentials` | Remove a stored provider credential |
-| `POST` | `/review` | Return up to eight writing-pattern findings |
 | `POST` | `/rewrite` | Return three replacement variants |
+| `POST` | `/ask` | Answer a passage request or propose verified replacements |
 | `POST` | `/suggest` | Return a short continuation |
+| `POST` | `/write` | Stream text to replace an editor request over SSE |
 | `POST` | `/idea` | Stream an idea expansion over SSE |
 | `POST` | `/chat` | Stream a draft conversation over SSE |
 
@@ -412,9 +259,10 @@ If omitted, the server tries the `PI_PROVIDER` and `PI_MODEL` environment values
 
 | Route | Fields |
 |---|---|
-| `/review` | `document`, optional `target`, optional `context`, `agent` |
-| `/rewrite` | `document`, `selected`, optional `instruction`, optional `context`, `agent` |
+| `/rewrite` | `document`, `selected`, `from`, optional `instruction`, optional `context`, `agent` |
+| `/ask` | `document`, `selected`, `from`, `instruction`, `agent` |
 | `/suggest` | `document`, optional `cursor`, optional `context`, `agent` |
+| `/write` | `document`, `from`, `cursor` (end of request), `instruction`, optional `previous`, `context`, `agent` |
 | `/idea` | `document`, `idea`, optional `context`, `agent` |
 | `/chat` | `document`, `messages`, optional `selection`, `agent` |
 
@@ -430,31 +278,17 @@ data: [DONE]
 
 An SSE error is emitted as `{"error":"..."}` when headers have already been sent.
 
-### MCP server
-
-`mcp-server.mjs` exposes the same operations as seven stdio tools for agent
-hosts (Codex CLI, Claude Code): `draft_read`, `draft_write`, `review`,
-`rewrite`, `suggest`, `chat`, `idea`. Prompts are shared with the HTTP routes
-through `tasks.js` — `index.js` cannot be imported (it listens on import), so
-anything both entry points need lives there. Document arguments default to the
-live draft; only `draft_write` modifies anything, under the same
-revision guard as `PUT /draft`. Per-call `agent` overrides take
-`{ provider, model, thinkingLevel }`; omitted, the server resolves the model
-exactly like the HTTP routes. `npm run test:mcp` drives the handshake, tool
-list, draft read/write, and the revision guard over raw JSON-RPC without
-model calls.
-
 ## 7. Prompt and style handling
 
-`style.md` is read for every request and prepended to the task prompt. It includes shared reader-orientation rules for opening promises, point placement, old-to-new flow, key-term continuity, and problem resolution. Its prose diagnostics also cover vague attribution, mind-like agency assigned to abstractions, stacked hedging, and manufactured emphasis. A shared `NO_SLOP` instruction is added to prose-generating routes so the assistant does not intentionally produce patterns that review would immediately flag.
+`style.md` is read for every request and prepended to the task prompt. It includes shared reader-orientation rules for opening promises, point placement, old-to-new flow, key-term continuity, and problem resolution. Its prose diagnostics also cover vague attribution, mind-like agency assigned to abstractions, stacked hedging, and manufactured emphasis. A shared `NO_SLOP` instruction keeps generated text specific and grounded.
 
 If `style.md` is missing, the server logs one warning and continues without it.
 
-Review detects problems but does not rewrite. Rewrite, suggestion, idea, and chat prompts have separate output contracts and token limits. Continuations use the shared builder in `suggestions.js`, with explicit abstention and word-joining rules. The production path keeps the full style guide and document; reduced prompts and local context are evaluation-only experiments.
+Rewrite, suggestion, idea, and chat prompts have separate output contracts and token limits. Continuations use the shared builder in `suggestions.js`, with explicit abstention and word-joining rules. The production path keeps the full style guide and document; reduced prompts and local context are evaluation-only experiments.
 
 The rewrite prompt leads with the selection, then the instruction, then the containing sentence with the selection replaced by a `___` slot, and only then the full document with the selection marked. A variant longer than three times the selection is treated as a whole-document rewrite: the request is repeated once with the scope restated. Unparseable answers are retried up to three attempts in total.
 
-Each review pass validates diagnostic codes against its assigned levels and checks exact quotes against the audited source. Invalid responses are retried, up to three attempts with a 90-second timeout per attempt. Invalid finding objects are errors, not empty reviews.
+Saved document formats use `stilura:` browser keys, `.stilura-history`, `.stilura-notes.json`, `.stilura-session`, `.stilura-lock` and `<stilura-edits>` chat envelopes. Existing document files and storage entries migrate when opened. Original storage entries remain available for recovery; existing current entries take precedence. Migration refuses an active old editor or conflicting old/current document files. Old `LITURA_*` environment variables, the previous desktop bundle directories and unscoped draft recovery are no longer supported.
 
 ## 8. Environment
 
@@ -471,8 +305,6 @@ Each review pass validates diagnostic codes against its assigned levels and chec
 | `STILURA_SIDECAR` | Set by the desktop shell: ready line, no browser, exit with stdin, updates handled by the shell | unset |
 | `STILURA_ROOT` | Directory holding `public/`, `package.json`, and `style.md` | the server's own directory |
 | `STILURA_NODE_VERSION` | Node runtime the desktop build ships | `v24.21.0` |
-
-Every `STILURA_*` variable also honors its old `LITURA_*` spelling (`STILURA_*` wins when both are set), so setups from before the rename keep working.
 
 ## 9. Distribution and updates
 
@@ -499,7 +331,7 @@ A release is a tag. `npm version <patch|minor|major>` refuses a dirty tree, bump
 | Draft | `wa-working` and `DRAFT_FILE` are never cleared by the app |
 | Style guide | `STYLE_FILE` is only ever read; the bundled `style.md` is a fallback, not a template that gets written |
 | Model selection and API keys | `wa-agent`; credentials stay in Pi's own store |
-| Findings and chat | Dropped when `STORAGE_SCHEMA` in `src/app.js` is bumped, which happens only when their stored shape changes |
+| Chat | Dropped when `STORAGE_SCHEMA` in `src/app.js` is bumped, which happens only when their stored shape changes |
 
 `index.html`, `style.css`, and `app.js` are served `no-cache` so an open tab picks up the new bundle on reload instead of running a stale one against a new API. Fonts are immutable.
 
@@ -508,18 +340,13 @@ A release is a tag. `npm version <patch|minor|major>` refuses a dirty tree, bump
 ```bash
 npm run build
 npm run check
-npm run check:deep
 ```
 
-`npm run check` validates server syntax, rebuilds the browser bundle, exercises Markdown escaping and rendering, checks style metrics and review anchoring, and verifies that Pi status has a consistent shape.
-
-`npm run check:deep` sends synthetic failures and clean controls through the configured Pi model and the exact production review prompts. It covers the seven reader-structure levels, exact quote anchoring, targeted-review scope, all four valid paragraph progressions, and paired positive/control cases for selected generic prose diagnostics. Use `DEEP_CASE=name` to run matching cases and `DEEP_RUNS=3` to measure repeatability. The command makes model requests and is therefore kept out of the fast check.
+`npm run check` validates server syntax, rebuilds the browser bundle, exercises Markdown escaping and rendering, checks selection scope, spelling and continuations, and verifies that Pi status has a consistent shape.
 
 `npm run smoke:desktop` runs a built bundle — the `.app` on macOS, the binary beside its resources elsewhere — against a disposable folder and a moved `HOME`, so it never meets the writer's own config or draft. It asserts the three things only a packaged build can get wrong: the app starts and prints its port, the server inside it serves the seeded draft from the folder it was given, and killing the shell releases the port. It needs a display; a headless Linux runner puts `xvfb-run -a` in front. `.github/workflows/desktop.yml` runs it after every platform's build.
 
 The UI itself needs neither: the page in the desktop window is the same page the server gives a browser, so `npm run test:browser` — the real routes against a fake provider — covers it, and adding `?shell=desktop` to that URL shows the desktop layout. What has no automated coverage is the window: the native dialogs, the menu, and the updater's own code.
-
-The model checks are regression tests, not an independent accuracy benchmark. Set `DEEP_REPORT=results.json` to save individual findings and failures. See [review-evaluation.md](docs/review-evaluation.md) for source provenance, development results, limitations, and the manual browser smoke check. There is no automated browser end-to-end suite.
 
 ## 11. Current boundaries
 
@@ -530,3 +357,13 @@ Stilura currently supports one browser-local plain-text document. It does not in
 - document history or versioning beyond CodeMirror's current-session undo stack;
 - accounts, collaboration, or cloud sync;
 - a language-specific local score outside English/Latin-script heuristics.
+
+## 12. Follow-up work
+
+- [ ] Clarify where documents and margin notes live and how they are stored.
+  Map the writing folder, desktop `editor-state`, browser storage and agent
+  configuration. Explain how notes attach to a document and what happens when
+  files are moved or renamed. Define how the app and agents find the same
+  document and notes, and how users locate, back up and restore both.
+  Trigger: Claude read the wrong draft without `DRAFT_FILE`; margin notes
+  required a separate `STILURA_STATE_DIR` connection.
