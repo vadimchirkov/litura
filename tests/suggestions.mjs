@@ -1,3 +1,4 @@
+import * as writingRules from '../extension/writing-rules.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -116,6 +117,7 @@ function harness(text = 'A sufficiently long draft') {
   const view = { hasFocus: true, composing: false };
   const suggestStatus = { dataset: {}, textContent: '' };
   const context = vm.createContext({
+    ...writingRules,
     EditorState, StateField, StateEffect, EditorView, Decoration, WidgetType,
     workView: view, document: { hidden: false }, suggestStatus,
     loadingDocument: false, savePaused: false, queueMicrotask,

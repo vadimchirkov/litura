@@ -29,3 +29,9 @@ npm-debug.log*
 
 # Local project plans.
 /plans/
+/extension/PLAN.md
+
+# Private MCP connections.
+/mcp.json
+/mcp.local.json
+/.stilura/

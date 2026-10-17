@@ -38,6 +38,44 @@ DRAFT_FILE=./article.md STYLE_FILE=./style.md npx stilura
 
 Model requests send draft text to your selected provider.
 
+### Optional MCP connections
+
+Inline slash requests (`/your request`, then Enter) can use external tools over
+Streamable HTTP. Configure connections separately in
+`~/.config/stilura/mcp.json`, outside the repository:
+
+```json
+{
+  "mcpServers": {
+    "notes": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" },
+      "tools": ["search"],
+      "instructions": "Use mcp_notes_search to find relevant source material before writing."
+    }
+  }
+}
+```
+
+Set `tools` to the remote tool names you want the model to use; omitting it
+exposes all tools from that server. Names are prefixed with `mcp_<server>_`
+(hyphens in server names become underscores). Configuring a small list keeps
+model context small. Server-specific instructions belong in this local
+configuration, not in the app's source.
+
+Restrict the file to your account (`chmod 600 ~/.config/stilura/mcp.json`).
+`STILURA_MCP_CONFIG` overrides its path. Set `"enabled": false` to disable a
+connection. Without a configuration, generation works without external tools.
+Configuration is read for each slash request; connections and tool catalogs are
+reused. Catalogs refresh after server notifications or connection failures.
+Failed calls are not retried automatically, since a write may already have
+reached its destination. Generation correction also stops after tool use to avoid
+repeating external writes. Tool results are sent to the selected model provider.
+
+Chat, autocomplete and passage rewrites do not use MCP. Local `mcp.json`,
+`mcp.local.json` and `.stilura/` are ignored by Git; the published package
+contains only the generic client, never your connection configuration.
+
 ## Development
 
 ```bash

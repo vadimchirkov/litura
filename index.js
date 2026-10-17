@@ -13,6 +13,7 @@ import fs    from 'fs';
 import path  from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { cancelOAuth, completeText, getAgentStatus, getOAuthStatus, removeProviderApiKey, saveProviderApiKey, startOAuth, streamText, submitOAuthCode } from './pi.js';
 import { buildSystemPrompt, requestRewrite, readStyle, NO_SLOP, STYLE_FILE } from './tasks.js';
 import { insertionText, markSelection } from './review.js';
@@ -97,6 +98,10 @@ const desktop = SIDECAR && process.env.STILURA_STATE_DIR ? desktopBridge(process
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const PUBLIC = path.join(ROOT, 'public');
+const extensionToken = randomBytes(32).toString('hex');
+const extensionRoutes = new Map([
+  ['/api/agent/status', 'GET'], ['/rewrite', 'POST'], ['/ask', 'POST'], ['/write', 'POST'], ['/suggest', 'POST'],
+]);
 
 // Draft and style live in the folder Stilura was started from, not inside the
 // install directory — `npx stilura` in a notes folder edits that folder. The
@@ -261,8 +266,31 @@ async function handleRequest(req, res) {
   const host = req.headers.host;
   const port = server.address()?.port;
   if (![ `127.0.0.1:${port}`, `localhost:${port}` ].includes(host)) return sendJson(res, 403, { error: 'Invalid local host' });
-  if (req.headers.origin && req.headers.origin !== `http://${host}`) return sendJson(res, 403, { error: 'Cross-origin requests are not allowed' });
-  if (req.headers['sec-fetch-site'] === 'cross-site') return sendJson(res, 403, { error: 'Cross-site requests are not allowed' });
+  const url = new URL(req.url, 'http://localhost');
+  const extensionOrigin = /^chrome-extension:\/\/[a-p]{32}$/.test(req.headers.origin ?? '');
+  const extensionCredential = req.headers['x-stilura-extension'];
+  if (extensionOrigin || extensionCredential !== undefined) {
+    if (req.headers.origin && !extensionOrigin) return sendJson(res, 403, { error: 'Invalid extension origin' });
+    const method = extensionRoutes.get(url.pathname);
+    if (!method || url.search) return sendJson(res, 403, { error: 'This route is not available to extensions' });
+    if (extensionOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    if (req.method === 'OPTIONS' && extensionOrigin) {
+      const headers = (req.headers['access-control-request-headers'] ?? '').toLowerCase().split(',').map(value => value.trim()).filter(Boolean);
+      if (req.headers['access-control-request-method'] !== method || headers.some(value => !['content-type', 'x-stilura-extension'].includes(value))) return sendJson(res, 403, { error: 'Invalid extension preflight' });
+      res.writeHead(204, { 'Access-Control-Allow-Methods': method, 'Access-Control-Allow-Headers': 'Content-Type, X-Stilura-Extension' });
+      return res.end();
+    }
+    const credential = Buffer.from(extensionCredential ?? '');
+    if (credential.length !== extensionToken.length || !timingSafeEqual(credential, Buffer.from(extensionToken))) return sendJson(res, 403, { error: 'Reconnect Stilura from the extension settings.' });
+    if (req.method !== method) return sendJson(res, 405, { error: 'Method not allowed' });
+  } else {
+    if (req.headers.origin && req.headers.origin !== `http://${host}`) return sendJson(res, 403, { error: 'Cross-origin requests are not allowed' });
+    if (req.headers['sec-fetch-site'] === 'cross-site') return sendJson(res, 403, { error: 'Cross-site requests are not allowed' });
+  }
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) return sendJson(res, 405, { error: 'Method not allowed' });
   if (req.method !== 'GET' && req.headers['content-type']?.split(';')[0].trim() !== 'application/json') return sendJson(res, 415, { error: 'Use application/json' });
   const cancellation = new AbortController();
@@ -270,7 +298,16 @@ async function handleRequest(req, res) {
   const signal = AbortSignal.any([cancellation.signal, AbortSignal.timeout(120_000)]);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
-  const url = new URL(req.url, `http://localhost`);
+  // Chat is paused, including requests from older cached clients.
+  if (url.pathname === '/chat') return sendJson(res, 410, { error: 'Chat is temporarily disabled.' });
+  if (req.method === 'GET' && url.pathname === '/extension') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; connect-src 'self'; frame-ancestors 'none'" });
+    return res.end('<!doctype html><html lang="en"><meta charset="utf-8"><title>Connect Stilura</title><h1>Connecting Stilura to Chrome</h1><p>This tab closes when the extension connects. Your documents stay in Stilura.</p></html>');
+  }
+  if (req.method === 'GET' && url.pathname === '/api/extension/connection') {
+    res.setHeader('Cache-Control', 'no-store');
+    return sendJson(res, 200, { token: extensionToken });
+  }
   if (url.pathname.startsWith('/api/desktop/')) {
     if (desktop) return desktop(req, res, url);
     return sendJson(res, 404, { error: 'Not a desktop session' });
@@ -609,9 +646,15 @@ async function handleRequest(req, res) {
         const fingerprint = text => (text.match(/[\p{L}\p{N}\p{M}_]+/gu) ?? [text.trim()]).join(' ').toLowerCase();
         for (let attempt = 0; attempt < (writing ? 2 : 1); attempt++) {
           signal.throwIfAborted();
-          let answer = '';
+          let answer = '', usedTools = false;
           await streamText({
             systemPrompt: system, userPrompt: prompt, selection: body.agent, signal,
+            mcp: writing,
+            onReset: () => {
+              usedTools = true;
+              answer = '';
+              res.write(`data: ${JSON.stringify({ replace: '' })}\n\n`);
+            },
             onText: text => { answer += text; res.write(`data: ${JSON.stringify({ text })}\n\n`); },
           });
           signal.throwIfAborted();
@@ -623,7 +666,7 @@ async function handleRequest(req, res) {
             if (text !== answer) res.write(`data: ${JSON.stringify({ replace: text })}\n\n`);
             break;
           }
-          if (attempt === 1) throw new Error(problem);
+          if (attempt === 1 || usedTools) throw new Error(problem);
           // Reset the same preview before one corrective attempt; never append two answers.
           res.write(`data: ${JSON.stringify({ replace: '' })}\n\n`);
           prompt = `${user}\n\nDISCARDED ANSWER:\n${answer}\n\nCORRECTION: ${problem} Rewrite it with a different opening and sentence structure. Return only a new passage for the insertion, without repeating either side or the previous suggestion.`;

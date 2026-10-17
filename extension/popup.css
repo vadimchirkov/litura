@@ -1,0 +1,17 @@
+:root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; color: #242823; background: #fafbf8; }
+body { margin: 0; min-width: 350px; max-width: 480px; }
+main { padding: 22px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: -.6px; }
+h1 span { font-size: 13px; font-weight: 400; color: #62695e; letter-spacing: 0; }
+p { margin: 8px 0 18px; }
+label { display: block; margin: 12px 0 6px; font-weight: 550; }
+.row { display: flex; gap: 8px; }
+input[type=url], select { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid #a9b1a3; border-radius: 7px; padding: 9px; font: inherit; background: #fff; color: inherit; }
+button { border: 0; border-radius: 7px; background: #294c36; color: white; padding: 9px 13px; font: inherit; cursor: pointer; }
+button:disabled { opacity: .65; cursor: wait; }
+:focus-visible { outline: 2px solid #356dcb; outline-offset: 3px; }
+.switch { display: flex; align-items: center; gap: 8px; }
+.switch input { accent-color: #294c36; width: 17px; height: 17px; }
+#status { min-height: 42px; margin-top: 10px; color: #475842; overflow-wrap: anywhere; }
+.help { font-size: 12px; color: #62695e; margin: 18px 0 0; }
+@media (prefers-color-scheme: dark) { :root { background: #20251f; color: #f1f3ee; } input[type=url], select { background: #30372e; } .help, h1 span, #status { color: #bbc7b5; } button { background: #b6d4b8; color: #18241a; } }

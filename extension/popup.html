@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stilura settings</title>
+<link rel="stylesheet" href="popup.css">
+<main>
+  <h1>Stilura <span>for Chrome</span></h1>
+  <p>Rewrite, generate and keep writing in text fields.</p>
+  <form id="connection">
+    <label for="server">Local app address</label>
+    <div class="row"><input id="server" type="url" value="http://127.0.0.1:3000" required aria-describedby="status"><button id="connect">Connect</button></div>
+  </form>
+  <p id="status" role="status">Start the local Stilura app, then connect.</p>
+  <label class="switch"><input id="enabled" type="checkbox" checked> Enable Stilura</label>
+  <label class="switch"><input id="suggestions" type="checkbox" checked> Suggest continuations after typing</label>
+  <label for="model">Model</label>
+  <select id="model"><option value="null">App default</option></select>
+  <p class="help">Select text and describe the change. Type <strong>/instructions</strong>, then <strong>Enter</strong> to generate. <strong>⌘/Ctrl + Enter</strong> also works and requests a continuation without a selection. <strong>Tab</strong> accepts, <strong>R</strong> or <strong>Alt + Enter</strong> regenerates, <strong>↑/↓</strong> switches variants, <strong>Esc</strong> dismisses.</p>
+  <p class="help">Text from the active field goes to your configured model. Password fields and fields marked for payment details are excluded. Reconnect after restarting the app.</p>
+</main>
+<script type="module" src="popup.js"></script>
+</html>

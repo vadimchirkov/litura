@@ -1,3 +1,4 @@
+import * as writingRules from '../extension/writing-rules.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -12,6 +13,7 @@ function setup(beforeDone = async () => {}) {
   const jobs = new Set(), notices = [], requests = [], snapshots = [];
   const view = { composing: false };
   const context = vm.createContext({
+    ...writingRules,
     EditorState, StateField, StateEffect, EditorView, Decoration, WidgetType, isolateHistory,
     AbortController, documentKey: 'draft', loadingDocument: false, savePaused: false, jobs,
     clearGhostFx: StateEffect.define(), cancelSuggestion() {},
@@ -19,6 +21,7 @@ function setup(beforeDone = async () => {}) {
     finishJob: job => jobs.delete(job), ensureAgent: async () => true,
     currentAgent: () => ({ provider: 'fixture', model: 'test' }), combinedContext: () => 'Author context',
     saveSnapshot: label => snapshots.push(label), notify: text => notices.push(text),
+    notifyProblem: problem => notices.push(problem.say),
     modelError: error => ({ say: error.message }),
     fetch: async (url, options) => { requests.push({ url, body: JSON.parse(options.body), signal: options.signal }); return { ok: true }; },
     async *sseChunks() {

@@ -34,6 +34,7 @@ const modelServer = createServer(async (req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   const content = body.includes('inline writing assistant')
     ? body.includes('FORMAT_STAYS_BAD') ? 'Unlabeled answer' : body.includes('FORMAT CORRECTION') ? 'TEXT: and continued' : 'Unlabeled answer'
+    : body.includes('Help with the SELECTED TEXT') ? '<stilura-edits>' + JSON.stringify([{ quote: 'quiet', replacement: 'peaceful', label: 'Synonym' }]) + '</stilura-edits>'
     : JSON.stringify(['A clearer passage.', 'A sharper passage.', 'A shorter passage.']);
   const chunk = { id: 'test', object: 'chat.completion.chunk', created: 0, model: 'model', choices: [{ index: 0, delta: { content }, finish_reason: null }] };
   res.write(`data: ${JSON.stringify(chunk)}\n\n`);
@@ -65,6 +66,39 @@ try {
   });
   const rewriteInput = { document: 'A quiet room. Another quiet room.', selected: 'quiet', from: 2,
     instruction: 'Use a simpler word.', context: 'For a young reader.' };
+  const extensionOrigin = 'chrome-extension://' + 'a'.repeat(32);
+  const connection = await fetch(endpoint + '/api/extension/connection');
+  assert.equal(connection.headers.get('cache-control'), 'no-store');
+  const { token } = await connection.json();
+  assert.match(token, /^[a-f0-9]{64}$/);
+  const extensionHeaders = { Origin: extensionOrigin, 'X-Stilura-Extension': token, 'Content-Type': 'application/json' };
+  for (const route of ['/api/extension/connection', '/draft', '/files', '/api/agent/credentials', '/api/desktop/storage']) {
+    assert.equal((await fetch(endpoint + route, { headers: extensionHeaders })).status, 403, route);
+  }
+  assert.equal((await fetch(endpoint + '/api/extension/connection', { headers: { Origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await fetch(endpoint + '/api/extension/connection', { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
+  assert.equal((await fetch(endpoint + '/api/agent/status', { headers: { Origin: extensionOrigin } })).status, 403);
+  assert.equal((await fetch(endpoint + '/api/agent/status', { headers: { ...extensionHeaders, 'X-Stilura-Extension': 'bad' } })).status, 403);
+  assert.equal((await fetch(endpoint + '/api/agent/status', { headers: { ...extensionHeaders, Origin: 'https://evil.example' } })).status, 403);
+  const preflight = await fetch(endpoint + '/rewrite', { method: 'OPTIONS', headers: {
+    Origin: extensionOrigin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,x-stilura-extension',
+  } });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), extensionOrigin);
+  assert.equal((await fetch(endpoint + '/rewrite', { method: 'OPTIONS', headers: {
+    Origin: extensionOrigin, 'Access-Control-Request-Method': 'DELETE',
+  } })).status, 403);
+  assert.equal((await fetch(endpoint + '/api/agent/status?unexpected=1', { headers: extensionHeaders })).status, 403);
+  assert.equal((await fetch(endpoint + '/rewrite', { headers: extensionHeaders })).status, 405);
+  assert.equal((await fetch(endpoint + '/api/agent/status', { headers: extensionHeaders })).status, 200);
+  const extensionRewrite = await fetch(endpoint + '/rewrite', { method: 'POST', headers: extensionHeaders, body: JSON.stringify(rewriteInput) });
+  assert.equal(extensionRewrite.status, 200);
+  assert.equal((await extensionRewrite.json()).variants.length, 3);
+  const extensionAsk = await fetch(endpoint + '/ask', { method: 'POST', headers: extensionHeaders, body: JSON.stringify(rewriteInput) });
+  assert.equal(extensionAsk.status, 200);
+  assert.deepEqual((await extensionAsk.json()).variants, ['peaceful']);
+  assert.equal((await fetch(endpoint + '/ask', { method: 'POST', headers: extensionHeaders,
+    body: JSON.stringify({ ...rewriteInput, from: 0 }) })).status, 400);
   const httpRewrite = await fetch(endpoint + '/rewrite', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rewriteInput),
   });
@@ -87,7 +121,7 @@ try {
   assert.equal(invalidBody.attempts, 2);
   assert.equal(requests.length - beforeSuggestions, 2);
 
-  console.log('HTTP task checks passed: patch validation, rewrite prompts and bounded suggestion recovery with a local model stub.');
+  console.log('HTTP task checks passed: patch validation, rewrite prompts, extension authentication/route isolation and bounded suggestion recovery with a local model stub.');
 } finally {
   clearTimeout(timeout);
   httpChild?.kill();

@@ -1,5 +1,6 @@
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai';
+import { connectMcp } from './mcp.js';
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 // Named models first. A router picks a different model per request, so the same
@@ -313,16 +314,37 @@ export async function completeText({ systemPrompt, userPrompt, selection, maxTok
   return text;
 }
 
-export async function streamText({ systemPrompt, userPrompt, messages, selection, maxTokens = 2000, signal, onText }) {
+export async function streamText({ systemPrompt, userPrompt, messages, selection, maxTokens = 2000, signal, onText, mcp = false, onReset = () => {} }) {
   const resolved = await resolveModel(selection);
-  const stream = resolved.rt.streamSimple(
-    resolved.model,
-    request(systemPrompt, userPrompt, messages),
-    options(resolved.selection, maxTokens, signal),
-  );
-  for await (const event of stream) {
-    if (event.type === 'text_delta') onText(event.delta);
-    if (event.type === 'error') throw new Error(event.error.errorMessage ?? 'Pi request failed');
-    if (event.type === 'done' && event.reason === 'length') throw new Error('Model output was truncated. Try a smaller passage.');
+  const connection = mcp ? await connectMcp(signal) : null;
+  const context = request(connection ? `${systemPrompt}\n\n${connection.instructions}` : systemPrompt, userPrompt, messages);
+  if (connection) context.tools = connection.tools;
+  for (let step = 0; step < 12; step++) {
+    signal?.throwIfAborted();
+    const stream = resolved.rt.streamSimple(resolved.model, context, options(resolved.selection, maxTokens, signal));
+    let answer;
+    for await (const event of stream) {
+      if (event.type === 'text_delta') onText(event.delta);
+      if (event.type === 'error') throw new Error(event.error.errorMessage ?? 'Pi request failed');
+      if (event.type === 'done') {
+        if (event.reason === 'length') throw new Error('Model output was truncated. Try a smaller passage.');
+        answer = event.message;
+      }
+    }
+    if (!answer) throw new Error('Model stream ended without a response.');
+    const calls = answer.content.filter(block => block.type === 'toolCall');
+    if (!calls.length) return;
+    if (!connection) throw new Error('Model requested an unavailable tool.');
+    if (step === 11) throw new Error('MCP tool limit reached. Try a narrower request.');
+    if (calls.length > 12) throw new Error('Too many MCP calls in one step. Try a narrower request.');
+    // Tool preambles may contain draft-edit markup; only the final answer is actionable.
+    onReset();
+    context.messages.push(answer);
+    for (const call of calls) {
+      signal?.throwIfAborted();
+      const result = await connection.call(call.name, call.arguments);
+      context.messages.push({ role: 'toolResult', toolCallId: call.id, toolName: call.name,
+        ...result, timestamp: Date.now() });
+    }
   }
 }

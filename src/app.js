@@ -1,3 +1,4 @@
+import { SUGGEST_DELAY, SUGGEST_MIN, paragraphEnd, slashCommand, ghostRemainder, distinctVariants } from '../extension/writing-rules.js';
 // src/app.js — Stilura frontend (CodeMirror 6)
 
 import {
@@ -148,6 +149,7 @@ let noticeSticky = false;
 // notice replaces a parked one, like shown ones do) and flushes on blur.
 let pendingNotice = null;
 function notify(text, { action = null, label = 'Undo', sticky = false, detail = '', key = '', icon = 'info', tone = '' } = {}) {
+  if (tone === 'error') sticky = true;
   if (!text) {
     clearTimeout(noticeTimer);
     editFeedback.hidden = true;
@@ -987,9 +989,7 @@ oauthCancelEl.addEventListener('click', async () => {
   } catch (error) { settingsError.textContent = error.message; }
 });
 
-// A failure here is only reported when the writer asks for something:
-// `ensureAgent()` retries the call and names the missing setup then.
-refreshAgent().catch(error => console.error('[pi]', error.message));
+refreshAgent().catch(error => notifyProblem({ say: 'Could not load models.', act: 'retry', detail: error.message }, refreshAgent));
 
 // ─── Ghost text ─────────────────────────────────────────────────────────────────
 //
@@ -1036,7 +1036,8 @@ const ghostField = StateField.define({
       const pos = val.pos + (typed ? typed.length : 0);
       const head = tr.newSelection.main;
       if (typed && val.text.startsWith(typed) && head.empty && head.head === pos) {
-        return typed === val.text ? null : { text: val.text.slice(typed.length), pos };
+        const remaining = ghostRemainder(val.text, typed);
+        return remaining ? { text: remaining, pos } : null;
       }
       return null;
     }
@@ -1209,19 +1210,13 @@ let suggestVersion = 0;
 // and burns the quota it is waiting on. Automatic requests rest for a minute.
 let suggestPausedUntil = 0;
 
-const SUGGEST_DELAY = 200;   // ms after last keystroke — feels instant, still debounces bursts
-const SUGGEST_MIN   = 15;   // minimum doc length before suggesting
-
 // Suggest only where the writer is actually writing forward: caret collapsed
 // at the end of a line with nothing but blank space after it. Editing mid-text
 // is what produced the off-topic continuations — the model never saw the tail.
 function atParagraphEnd(state) {
   const sel = state.selection.main;
   if (!sel.empty) return false;
-  const line = state.doc.lineAt(sel.head);
-  if (sel.head !== line.to) return false;
-  if (line.number === state.doc.lines) return true;
-  return state.doc.line(line.number + 1).text.trim() === '';
+  return paragraphEnd(state.doc.toString(), sel.head);
 }
 
 function cancelSuggestion() {
@@ -1395,12 +1390,25 @@ class GenerationWidget extends WidgetType {
     if (this.value.text) {
       const text = document.createElement(this.value.inline ? 'span' : 'div');
       text.className = 'cm-suggest';
-      text.textContent = this.value.text;
+      // Keep the final empty line measurable while a stream ends with a newline.
+      text.textContent = this.value.text + (this.value.text.endsWith('\n') ? '\u200b' : '');
       wrap.append(text);
     }
     return wrap;
   }
   destroy() { clearInterval(this.timer); }
+  coordsAt(dom) {
+    const text = dom.querySelector('.cm-suggest')?.firstChild;
+    if (!text || this.value.previousText != null) {
+      const rect = dom.getBoundingClientRect();
+      return { left: rect.left, right: rect.left, top: rect.top, bottom: rect.top };
+    }
+    // A replacement's box spans the whole preview; the caret belongs to its final text line.
+    const range = document.createRange();
+    range.setStart(text, text.length);
+    range.collapse(true);
+    return range.getBoundingClientRect();
+  }
   get lineBreaks() { return this.value.inline ? (this.value.text.match(/\n/g) ?? []).length : 0; }
   ignoreEvent() { return false; }
 }
@@ -1423,11 +1431,7 @@ const generationField = StateField.define({
 
 function slashRequest(state) {
   const line = state.doc.lineAt(state.selection.main.head);
-  const match = /(?:^|\s)\/(?!\/)(.*)$/u.exec(line.text);
-  if (!match) return null;
-  const from = line.from + match.index + match[0].indexOf('/');
-  return { from, to: line.to, text: state.doc.sliceString(from, line.to), instruction: match[1].trim(),
-    inline: !!state.doc.sliceString(line.from, from).trim() };
+  return slashCommand(line.text, line.from);
 }
 
 const hiddenSlash = Decoration.replace({});
@@ -1529,7 +1533,10 @@ async function generateFromLine(view, line, instruction) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: job.signal,
       body: JSON.stringify({ document, from: line.from, cursor: line.to, instruction, previous: previousText ?? undefined, agent: currentAgent(), context: combinedContext() || undefined }),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
     let answer = '';
     for await (const chunk of sseChunks(res)) {
       if (!current()) { job.abort(); return; }
@@ -1542,7 +1549,10 @@ async function generateFromLine(view, line, instruction) {
     view.dispatch({ effects: [setGenerationFx.of({ ...view.state.field(generationField), text: answer.trim(), previousText: null, phase: 'review' }),
       EditorView.announce.of('Suggestion ready. Tab accepts, Escape dismisses, R regenerates.')] });
   } catch (error) {
-    if (!job.signal.aborted) notify(`${/^The model repeated/.test(error.message) ? error.message : modelError(error).say} ${previousText === null ? 'Your request is unchanged; press Enter to retry.' : 'The previous suggestion is kept.'}`);
+    if (!job.signal.aborted) {
+      const problem = modelError(error);
+      notifyProblem({ ...problem, say: `${/^The model repeated/.test(error.message) ? error.message : problem.say} ${previousText === null ? 'Your request is unchanged; press Enter to retry.' : 'The previous suggestion is kept.'}` }, null, 'Try again', 'write-error');
+    }
   } finally {
     job.signal.removeEventListener('abort', clear);
     clear();
@@ -1680,13 +1690,7 @@ async function requestPassage(view, previous = null) {
       view.dispatch({ effects: setPassageFx.of({ ...live, answer: data.answer }) });
       return;
     }
-    if (!Array.isArray(data.variants) || data.variants.some(text => typeof text !== 'string' || !text.trim())) throw new Error('The model returned invalid replacements.');
-    const normalize = text => text.trim().replace(/\s+/g, ' ').toLowerCase();
-    const seen = new Set([normalize(target.quote), ...(previous ? [normalize(previous)] : [])]);
-    const variants = data.variants.map(text => text.trim()).filter(text => {
-      const key = normalize(text); if (seen.has(key)) return false; seen.add(key); return true;
-    });
-    if (!variants.length) throw new Error('The model returned no different replacements.');
+    const variants = distinctVariants(data.variants, target.quote, previous);
     if (view.state.doc.sliceString(live.from, live.to) !== live.quote) { notify('The passage changed while the model was working.'); return; }
     // A suggestion in place of the passage: Tab accepts, R regenerates, Escape dismisses.
     view.dispatch({ effects: [setGenerationFx.of({ from: live.from, to: live.to, quote: live.quote,
@@ -3646,10 +3650,8 @@ const editorTheme = EditorView.theme({
     fontSize:   '17px',
     lineHeight: '1.75',
     overflowY:  'auto',
-    // Reserved on both edges, always: a draft that grows past the window (a
-    // note, a longer paragraph) brings a scrollbar, and without the gutter
-    // that took 8px from the right and slid the centred column left.
-    scrollbarGutter: 'stable both-edges',
+    // Reserve scrollbar space without a left gutter, which offsets CM's cursor layer.
+    scrollbarGutter: 'stable',
   },
 
   // Editable content area — generous padding, centred like the old textarea
@@ -3670,7 +3672,7 @@ const editorTheme = EditorView.theme({
   // Cursor
   '.cm-cursor, .cm-dropCursor': {
     borderLeftColor: 'var(--accent)',
-    borderLeftWidth: '3px',
+    borderLeftWidth: '1.5px',
   },
 
   // Selection highlight
@@ -3907,7 +3909,7 @@ new ResizeObserver(() => layoutRail()).observe(workView.contentDOM);
 loadSpellDictionary().then(spell => {
   spellChecker = spell;
   workView.dispatch({ effects: refreshSpellFx.of(null) });
-}).catch(error => console.warn('[spell] dictionary unavailable —', error.message));
+}).catch(error => notifyProblem({ say: 'Spellcheck is unavailable.', detail: error.message }, null, 'Try again', 'spell-error'));
 
 // ─── Persist ───────────────────────────────────────────────────────────────────
 

@@ -2441,6 +2441,7 @@ html, body {
 @supports not (field-sizing: content) { .passage-input { width: 240px; } }
 /* Focused editor: file navigation and conversation chrome are paused. */
 #sidebar, #sidebar-toggle, #sidebar-toggle-side, #sidebar-scrim,
+#chat:not(.has-notice), #chat::before, #chat .chat-stream,
 #chat .chat-pill, #chat .chat-composer, #chat .chat-clear { display: none !important; }
 #chat { background: transparent; border: 0; box-shadow: none; backdrop-filter: none; }
 
